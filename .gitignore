@@ -6,3 +6,7 @@
 RedMaster_DaisySeed64MB/DaisySeed/build/
 RedMaster_DaisySeed64MB/DaisySeed/*.log
 RedMaster_DaisySeed64MB/DaisySeed/build_*.txt
+
+# Binarios grandes (evitar advertencia GitHub 50 MB)
+.tools/caddy/caddy.exe
+**/*.exe
