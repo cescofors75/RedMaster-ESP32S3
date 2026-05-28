@@ -1,0 +1,77 @@
+diff --git a/DaisySeed/main.cpp b/DaisySeed/main.cpp
+index bd11f8b..f8a8fa0 100644
+--- a/DaisySeed/main.cpp
++++ b/DaisySeed/main.cpp
+@@ -6561,41 +6561,58 @@ static void ProcessCommand()
+                     uint8_t note = padTo303Midi[slot];
+                     bool accent = (slot % 4 == 0) || (velocity > 0.85f);
+                     bool slide = (slot % 4 == 3);
++                    ReleasePadMelodicNote(slot);
+                     acid303.NoteOn(note, accent, slide);
++                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_303, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_WTOSC: {
++                    uint8_t slot = (uint8_t)(instrument & 0x0F);
+                     uint8_t note = (instrument < 16) ? trackWtNote[instrument] : 60;
++                    ReleasePadMelodicNote(slot);
+                     wtOsc.NoteOn(note, velocity);
++                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_WTOSC, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_SH101: {               /* I1 */
++                    uint8_t slot = (uint8_t)(instrument & 0x0F);
+                     uint8_t note = (instrument < 16) ? trackSH101Note[instrument] : 60;
++                    ReleasePadMelodicNote(slot);
+                     synthSH101.NoteOn(note, velocity);
++                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_SH101, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_FM2OP: {               /* I2 */
++                    uint8_t slot = (uint8_t)(instrument & 0x0F);
+                     uint8_t note = (instrument < 16) ? trackFM2OpNote[instrument] : 60;
++                    ReleasePadMelodicNote(slot);
+                     synthFM2Op.NoteOn(note, velocity);
++                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_FM2OP, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_PHYS: {
++                    uint8_t slot = (uint8_t)(instrument & 0x0F);
+                     uint8_t note = (instrument < 16) ? trackWtNote[instrument] : 60;
+                     float freq = 440.f * powf(2.f, (note - 69) / 12.f);
++                    ReleasePadMelodicNote(slot);
+                     physModal.SetFreq(freq);
+                     physString.SetFreq(freq);
+                     physModal.SetAccent(velocity);
+                     physString.SetAccent(velocity);
+                     physModalActive = true;
+                     physStringActive = true;
++                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_PHYS, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_NOISE: {
++                    uint8_t slot = (uint8_t)(instrument & 0x0F);
+                     uint8_t note = (instrument < 16) ? trackWtNote[instrument] : 60;
+                     float freq = 440.f * powf(2.f, (note - 69) / 12.f);
++                    ReleasePadMelodicNote(slot);
+                     noisePart.SetFreq(freq);
+                     noisePart.SetDensity(0.5f + velocity * 0.5f);
+                     noisePartActive = true;
++                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_NOISE, note, hw.system.GetNow());
+                     break;
+                 }
+             }
+@@ -6716,7 +6733,13 @@ static void ProcessCommand()
+             uint8_t note = p[0];
+             bool accent = (p[1] != 0);
+             bool slide  = (p[2] != 0);
++            /* Legacy 303-only trigger from web/SPI without explicit NoteOff.
++             * Use a fixed slot (0) for auto-release — 303 is mono so the
++             * slot identity doesn't matter; NoteOff kills the single voice
++             * regardless. */
++            ReleasePadMelodicNote(0);
+             acid303.NoteOn(note, accent, slide);
++            SchedulePadMelodicAutoOff(0, SYNTH_ENGINE_303, note, hw.system.GetNow());
+         }
+         break;
+ 

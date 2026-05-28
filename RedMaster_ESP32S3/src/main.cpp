@@ -121,6 +121,53 @@ static bool   gSeqMelodicHeld[16] = {false};
 static int8_t gSeqMelodicHeldEngine[16] = {-1, -1, -1, -1, -1, -1, -1, -1,
                                            -1, -1, -1, -1, -1, -1, -1, -1};
 
+/* ─────────────────────────────────────────────────────────────────────────
+ *  Pad-trigger auto note-off (web UI / MIDI / live pad taps).
+ *  triggerPadWithLED() fires CMD_SYNTH_NOTE_ON_EX for engines >= 4
+ *  (WT/SH101/FM2/PHYS/NOISE) but the call site never schedules the
+ *  matching NoteOff. On the polyphonic WT this stacks voices on every tap;
+ *  on the mono engines (SH101/FM2) the release tail of the previous voice
+ *  bleeds into the new attack — what shows up as "se solapan / patrulla de
+ *  caballos". We mirror the per-track release the sequencer callback
+ *  already does, but for live triggers.
+ * ─────────────────────────────────────────────────────────────────────── */
+static uint32_t gPadTrigOffAtMs[16]   = {0};
+static int8_t   gPadTrigOffEngine[16] = {-1, -1, -1, -1, -1, -1, -1, -1,
+                                          -1, -1, -1, -1, -1, -1, -1, -1};
+static uint8_t  gPadTrigOffNote[16]   = {0};
+static const uint32_t kPadTrigAutoOffMs = 220;
+
+static void releasePadTriggerNote(int track) {
+    if (track < 0 || track >= 16) return;
+    int8_t eng = gPadTrigOffEngine[track];
+    uint8_t note = gPadTrigOffNote[track];
+    gPadTrigOffAtMs[track]   = 0;
+    gPadTrigOffEngine[track] = -1;
+    if (eng < 0) return;
+    if (eng == 3) {
+        spiMaster.synth303NoteOff();
+    } else if (eng >= 4 && eng <= 8) {
+        spiMaster.synthNoteOff((uint8_t)eng, (uint8_t)track, note);
+    }
+}
+
+static void schedulePadTriggerAutoOff(int track, int8_t engine, uint8_t note) {
+    if (track < 0 || track >= 16) return;
+    gPadTrigOffEngine[track] = engine;
+    gPadTrigOffNote[track]   = note;
+    gPadTrigOffAtMs[track]   = millis() + kPadTrigAutoOffMs;
+}
+
+static void drainPadTriggerAutoOff() {
+    uint32_t now = millis();
+    for (int t = 0; t < 16; t++) {
+        if (!gPadTrigOffAtMs[t]) continue;
+        if ((int32_t)(now - gPadTrigOffAtMs[t]) >= 0) {
+            releasePadTriggerNote(t);
+        }
+    }
+}
+
 void releaseSequencerMelodicHolds() {
     for (int track = 0; track < 16; track++) {
         if (!gSeqMelodicHeld[track]) continue;
@@ -442,10 +489,21 @@ void triggerPadWithLED(int track, uint8_t velocity) {
         uint8_t synthVelocity = (uint8_t)constrain((int)roundf(scaled * 127.0f), 1, 127);
         if (engine == 3) {
             uint8_t midiNote = PAD_303_NOTES[track];
+            // Cancel any previous voice on this pad so rapid taps don't
+            // bleed release tails into the new attack.
+            if (gPadTrigOffAtMs[track]) releasePadTriggerNote(track);
             spiMaster.synth303NoteOn(midiNote, false, false);
+            schedulePadTriggerAutoOff(track, 3, midiNote);
         } else if (engine >= 4) {
             uint8_t midiNote = PAD_303_NOTES[track];
+            // Same protection for WT/SH101/FM2/PHYS/NOISE — the
+            // CMD_SYNTH_NOTE_ON_EX handler on Daisy never auto-releases,
+            // so we must release the previous voice ourselves and arm
+            // an off for this one. Without this, WT's poly voices stack
+            // forever and the mono engines bleed release tails.
+            if (gPadTrigOffAtMs[track]) releasePadTriggerNote(track);
             spiMaster.synthNoteOnEx((uint8_t)engine, midiNote, synthVelocity, false, false);
+            schedulePadTriggerAutoOff(track, engine, midiNote);
         } else {
             spiMaster.synthTrigger((uint8_t)engine, (uint8_t)track, synthVelocity);
         }
@@ -1366,5 +1424,6 @@ void setup() {
 
 void loop() {
     esp_task_wdt_reset();   // feed TWDT every iteration
+    drainPadTriggerAutoOff(); // release expired pad-trigger voices
     vTaskDelay(pdMS_TO_TICKS(100)); // loop() no hace nada crítico
 }

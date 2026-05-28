@@ -1621,6 +1621,23 @@ static WavetableOsc wtOsc;
 static SH101::Synth synthSH101;  /* I1: Roland SH-101 */
 static FM2Op::Synth synthFM2Op;  /* I2: FM 2-op Yamaha */
 
+/* ────────────────────────────────────────────────────────────────────────
+ *  Melodic-pad auto-release.
+ *  CMD_TRIGGER_LIVE / CMD_TRIGGER_SEQ / DsqFireStep dispatch a NoteOn for
+ *  melodic engines (303/WT/SH101/FM2/PHYS/NOISE) but never send a NoteOff.
+ *  Without a release the polyphonic engine (WT) stacks voices forever on
+ *  rapid retriggers, and the mono engines bleed their previous release tail
+ *  into the new attack — what users hear as "se generan y no cortan".
+ *  We track the last note triggered per pad and release it either when the
+ *  pad fires again (cuts the previous voice cleanly) or after a short
+ *  timeout (default 220 ms, drained once per audio block).
+ * ──────────────────────────────────────────────────────────────────────── */
+static uint32_t s_padAutoOffAtMs[16]   = {0};
+static int8_t   s_padAutoOffEngine[16] = {-1,-1,-1,-1,-1,-1,-1,-1,
+                                          -1,-1,-1,-1,-1,-1,-1,-1};
+static uint8_t  s_padAutoOffNote[16]   = {0};
+static constexpr uint32_t kPadAutoOffMs = 220;
+
 /* Physical Modeling engine — DaisySP ModalVoice + StringVoice */
 static ModalVoice  physModal;
 static StringVoice physString;
@@ -2633,6 +2650,47 @@ static void ReleaseSynthEngineState(uint8_t engine)
             break;
         default:
             break;
+    }
+}
+
+/* Release the note previously triggered on this pad (if any). Per-note for
+ * the polyphonic WT, full NoteOff for the mono engines. Clears the auto-off
+ * slot. Safe to call when nothing is pending. */
+static void ReleasePadMelodicNote(uint8_t pad) {
+    if (pad >= 16) return;
+    int8_t eng   = s_padAutoOffEngine[pad];
+    uint8_t note = s_padAutoOffNote[pad];
+    s_padAutoOffAtMs[pad]   = 0;
+    s_padAutoOffEngine[pad] = -1;
+    switch(eng){
+        case SYNTH_ENGINE_303:    acid303.NoteOff();      break;
+        case SYNTH_ENGINE_WTOSC:  wtOsc.NoteOff(note);    break;
+        case SYNTH_ENGINE_SH101:  synthSH101.NoteOff();   break;
+        case SYNTH_ENGINE_FM2OP:  synthFM2Op.NoteOff();   break;
+        case SYNTH_ENGINE_PHYS:   physModalActive = false; physStringActive = false; break;
+        case SYNTH_ENGINE_NOISE:  noisePartActive = false; break;
+        default: break;
+    }
+}
+
+/* Record a melodic-pad trigger so it gets auto-released later. Callers must
+ * have invoked ReleasePadMelodicNote(pad) BEFORE the new NoteOn — otherwise
+ * mono engines would release their fresh voice instead of the stale one. */
+static inline void SchedulePadMelodicAutoOff(uint8_t pad, int8_t engine, uint8_t note, uint32_t now_ms) {
+    if (pad >= 16) return;
+    s_padAutoOffEngine[pad] = engine;
+    s_padAutoOffNote[pad]   = note;
+    s_padAutoOffAtMs[pad]   = now_ms + kPadAutoOffMs;
+}
+
+/* Drain any expired melodic-pad notes. Called once per audio block; the
+ * 1–3 ms granularity is inaudible. */
+static inline void DrainPadMelodicAutoOff(uint32_t now_ms) {
+    for (int p = 0; p < 16; p++) {
+        if (!s_padAutoOffAtMs[p]) continue;
+        if ((int32_t)(now_ms - s_padAutoOffAtMs[p]) >= 0) {
+            ReleasePadMelodicNote((uint8_t)p);
+        }
     }
 }
 
@@ -3917,6 +3975,34 @@ static void DsqFireStep() {
             TriggerPad((uint8_t)t, s.velocity, 100, 0, maxS, seqVolume);
         } else {
             /* ── SYNTH ENGINE TRACK (808/909/505/303) ── */
+            /* Per-step param locks for synth engines.
+             * All voices of one synth engine are summed inside <engine>.Process()
+             * and routed through a single shared track (the lowest-indexed track
+             * bound to the engine — see engTrk[] in AudioCallback). Apply the
+             * step locks to that shared route track so cutoff sweeps, reverb
+             * automations and per-step volume bring dynamics back to programmed
+             * patterns. Without this, every hit on a synthesised drum lands
+             * identical and the groove turns into the "machine-gun / patrulla
+             * de caballos" the operator complained about. */
+            int8_t routeTrk = -1;
+            for(int rt = 0; rt < DSQ_TRACKS; rt++){
+                if(dsqTrackEngine[rt] == eng){ routeTrk = (int8_t)rt; break; }
+            }
+            if(routeTrk >= 0){
+                int rt = routeTrk;
+                if(s.cutoffEn && trkFilterType[rt] && trkFxRouted[rt]){
+                    float f = clampF((float)s.cutoffHz, 20.f, 20000.f);
+                    trkFilter[rt].SetType(trkFilterType[rt], f, trkFilterQ[rt], (float)SAMPLE_RATE);
+                    if(trkFilterType[rt] == FTYPE_RESONANT)
+                        trkFilter2[rt].SetType(FTYPE_RESONANT, f, trkFilterQ[rt], (float)SAMPLE_RATE);
+                    trkFilterCut[rt] = f;
+                }
+                if(s.reverbEn)
+                    trackReverbSend[rt] = clampF(s.reverbSend / 100.0f, 0.f, 1.f);
+                if(s.volEn)
+                    trackGain[rt] = VolumeByteToGain(s.volume);
+            }
+
             switch(eng){
                 case SYNTH_ENGINE_808:
                     if(t < 16) synth808.Trigger(padTo808[t], vel);
@@ -3931,39 +4017,53 @@ static void DsqFireStep() {
                     uint8_t note   = (t < 16) ? padTo303Midi[t] : 48;
                     bool    accent = (vel > 0.85f);
                     bool    slide  = false;
+                    ReleasePadMelodicNote((uint8_t)t);
                     acid303.NoteOn(note, accent, slide);
+                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_303, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_WTOSC: {
                     uint8_t note = (t < 16) ? trackWtNote[t] : 60;
+                    ReleasePadMelodicNote((uint8_t)t);
                     wtOsc.NoteOn(note, vel);
+                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_WTOSC, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_SH101: {             /* I1 */
                     uint8_t note = (t < 16) ? trackSH101Note[t] : 60;
+                    ReleasePadMelodicNote((uint8_t)t);
                     synthSH101.NoteOn(note, vel);
+                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_SH101, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_FM2OP: {             /* I2 */
                     uint8_t note = (t < 16) ? trackFM2OpNote[t] : 60;
+                    ReleasePadMelodicNote((uint8_t)t);
                     synthFM2Op.NoteOn(note, vel);
+                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_FM2OP, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_PHYS: {
-                    float freq = 440.f * powf(2.f, ((t < 16 ? trackWtNote[t] : 60) - 69) / 12.f);
+                    uint8_t note = (t < 16) ? trackWtNote[t] : 60;
+                    float freq = 440.f * powf(2.f, (note - 69) / 12.f);
+                    ReleasePadMelodicNote((uint8_t)t);
                     physModal.SetFreq(freq);
                     physString.SetFreq(freq);
                     physModal.SetAccent(vel);
                     physString.SetAccent(vel);
                     physModalActive = true;
                     physStringActive = true;
+                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_PHYS, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_NOISE: {
-                    float freq = 440.f * powf(2.f, ((t < 16 ? trackWtNote[t] : 60) - 69) / 12.f);
+                    uint8_t note = (t < 16) ? trackWtNote[t] : 60;
+                    float freq = 440.f * powf(2.f, (note - 69) / 12.f);
+                    ReleasePadMelodicNote((uint8_t)t);
                     noisePart.SetFreq(freq);
                     noisePart.SetDensity(0.5f + vel * 0.5f);
                     noisePartActive = true;
+                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_NOISE, note, hw.system.GetNow());
                     break;
                 }
             }
@@ -4018,6 +4118,11 @@ void AudioCallback(AudioHandle::InputBuffer  /*in*/,
         audioLoadMeter.OnBlockEnd();
         return;
     }
+
+    /* Auto-release expired melodic-pad voices triggered without an explicit
+     * note-off (CMD_TRIGGER_LIVE / SEQ / DsqFireStep). Drained once per block
+     * so release granularity ≈ 1–3 ms — inaudible. */
+    DrainPadMelodicAutoOff(hw.system.GetNow());
 
     /* ── Kit loading: output silence to avoid SDRAM bus contention / data races ── */
     if(kitMuteActive){
@@ -4478,28 +4583,80 @@ void AudioCallback(AudioHandle::InputBuffer  /*in*/,
             if(pk > trackPeak[t]) trackPeak[t] = pk;
         };
 
+        /* ─── Drum engines: per-pad FX routing ───────────────────────────
+         * Each TR8xx instrument used to be summed inside <kit>.Process() and
+         * routed through a single shared track. That meant every drum slot
+         * (kick, snare, OH, ride, …) shared one filter / compressor / echo
+         * chain, so e.g. heavy comp on the BD also crushed the OH.
+         *
+         * Now each kit exposes ProcessSplit(outs[]) — same DSP, but per-slot
+         * outputs. We then walk dsqTrackEngine[] and synthTobus() each slot
+         * through the track its pad sits on (padTo909[dt] -> instrument).
+         * BD, OH, RS, CP can finally carry independent FX.
+         *
+         * CPU note: this calls synthTobus() once per *bound* track of the
+         * engine instead of once total. With 4-6 pads on 909 the cost is
+         * fine; on every-pad-909 setups the existing CPU shedding (line
+         * ~4033, audioFxShed at >86% load) drops chorus/flanger/comp as
+         * needed. */
         if ((synthActiveMask & (1 << SYNTH_ENGINE_808)) && synth808.ActiveCount() > 0){
             DSP_PROF_SCOPE(SYNTH_808);
-            float s = sanitizeF(synth808.Process()) * kDrumBusHeadroom;
+            float outs808[TR808::INST_COUNT];
+            synth808.ProcessSplit(outs808);
             DSP_PROF_END(SYNTH_808);
             DSP_PROF_SCOPE(SYNTH_ROUTING);
-            synthTobus(s, engTrk[SYNTH_ENGINE_808]);
+            if (engTrk[SYNTH_ENGINE_808] >= 0) {
+                for (int dt = 0; dt < DSQ_TRACKS && dt < 16; dt++) {
+                    if (dsqTrackEngine[dt] != SYNTH_ENGINE_808) continue;
+                    uint8_t inst = padTo808[dt];
+                    if (inst >= TR808::INST_COUNT) continue;
+                    synthTobus(sanitizeF(outs808[inst]) * kDrumBusHeadroom, dt);
+                }
+            } else {
+                float s = 0.0f;
+                for (int i = 0; i < TR808::INST_COUNT; i++) s += outs808[i];
+                synthTobus(sanitizeF(s) * kDrumBusHeadroom, -1);
+            }
             DSP_PROF_END(SYNTH_ROUTING);
         }
         if ((synthActiveMask & (1 << SYNTH_ENGINE_909)) && synth909.ActiveCount() > 0){
             DSP_PROF_SCOPE(SYNTH_909);
-            float s = sanitizeF(synth909.Process()) * kDrumBusHeadroom;
+            float outs909[TR909::INST_COUNT];
+            synth909.ProcessSplit(outs909);
             DSP_PROF_END(SYNTH_909);
             DSP_PROF_SCOPE(SYNTH_ROUTING);
-            synthTobus(s, engTrk[SYNTH_ENGINE_909]);
+            if (engTrk[SYNTH_ENGINE_909] >= 0) {
+                for (int dt = 0; dt < DSQ_TRACKS && dt < 16; dt++) {
+                    if (dsqTrackEngine[dt] != SYNTH_ENGINE_909) continue;
+                    uint8_t inst = padTo909[dt];
+                    if (inst >= TR909::INST_COUNT) continue;
+                    synthTobus(sanitizeF(outs909[inst]) * kDrumBusHeadroom, dt);
+                }
+            } else {
+                float s = 0.0f;
+                for (int i = 0; i < TR909::INST_COUNT; i++) s += outs909[i];
+                synthTobus(sanitizeF(s) * kDrumBusHeadroom, -1);
+            }
             DSP_PROF_END(SYNTH_ROUTING);
         }
         if (kEnableSynth505 && (synthActiveMask & (1 << SYNTH_ENGINE_505)) && synth505.ActiveCount() > 0){
             DSP_PROF_SCOPE(SYNTH_505);
-            float s = sanitizeF(synth505.Process()) * kDrumBusHeadroom;
+            float outs505[TR505::INST_COUNT];
+            synth505.ProcessSplit(outs505);
             DSP_PROF_END(SYNTH_505);
             DSP_PROF_SCOPE(SYNTH_ROUTING);
-            synthTobus(s, engTrk[SYNTH_ENGINE_505]);
+            if (engTrk[SYNTH_ENGINE_505] >= 0) {
+                for (int dt = 0; dt < DSQ_TRACKS && dt < 16; dt++) {
+                    if (dsqTrackEngine[dt] != SYNTH_ENGINE_505) continue;
+                    uint8_t inst = padTo505[dt];
+                    if (inst >= TR505::INST_COUNT) continue;
+                    synthTobus(sanitizeF(outs505[inst]) * kDrumBusHeadroom, dt);
+                }
+            } else {
+                float s = 0.0f;
+                for (int i = 0; i < TR505::INST_COUNT; i++) s += outs505[i];
+                synthTobus(sanitizeF(s) * kDrumBusHeadroom, -1);
+            }
             DSP_PROF_END(SYNTH_ROUTING);
         }
         if ((synthActiveMask & (1 << SYNTH_ENGINE_303)) && acid303.IsActive()){
@@ -4884,39 +5041,53 @@ static void ProcessCommand()
                     case SYNTH_ENGINE_303: {
                         uint8_t note = (pad < 16) ? padTo303Midi[pad] : 48;
                         bool    acc  = (fvel > 0.85f);
+                        ReleasePadMelodicNote(pad);
                         acid303.NoteOn(note, acc, false);
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_303, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_WTOSC: {
                         uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
+                        ReleasePadMelodicNote(pad);
                         wtOsc.NoteOn(note, fvel);
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_WTOSC, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_SH101: {           /* I1 */
                         uint8_t note = (pad < 16) ? trackSH101Note[pad] : 60;
+                        ReleasePadMelodicNote(pad);
                         synthSH101.NoteOn(note, fvel);
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_SH101, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_FM2OP: {           /* I2 */
                         uint8_t note = (pad < 16) ? trackFM2OpNote[pad] : 60;
+                        ReleasePadMelodicNote(pad);
                         synthFM2Op.NoteOn(note, fvel);
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_FM2OP, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_PHYS: {
-                        float freq = 440.f * powf(2.f, ((pad < 16 ? trackWtNote[pad] : 60) - 69) / 12.f);
+                        uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
+                        float freq = 440.f * powf(2.f, (note - 69) / 12.f);
+                        ReleasePadMelodicNote(pad);
                         physModal.SetFreq(freq);
                         physString.SetFreq(freq);
                         physModal.SetAccent(fvel);
                         physString.SetAccent(fvel);
                         physModalActive = true;
                         physStringActive = true;
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_PHYS, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_NOISE: {
-                        float freq = 440.f * powf(2.f, ((pad < 16 ? trackWtNote[pad] : 60) - 69) / 12.f);
+                        uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
+                        float freq = 440.f * powf(2.f, (note - 69) / 12.f);
+                        ReleasePadMelodicNote(pad);
                         noisePart.SetFreq(freq);
                         noisePart.SetDensity(0.5f + fvel * 0.5f);
                         noisePartActive = true;
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_NOISE, note, hw.system.GetNow());
                         break;
                     }
                 }
@@ -4958,39 +5129,53 @@ static void ProcessCommand()
                     case SYNTH_ENGINE_303: {
                         uint8_t note = (pad < 16) ? padTo303Midi[pad] : 48;
                         bool    acc  = (fvel > 0.85f);
+                        ReleasePadMelodicNote(pad);
                         acid303.NoteOn(note, acc, false);
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_303, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_WTOSC: {
                         uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
+                        ReleasePadMelodicNote(pad);
                         wtOsc.NoteOn(note, fvel);
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_WTOSC, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_SH101: {
                         uint8_t note = (pad < 16) ? trackSH101Note[pad] : 60;
+                        ReleasePadMelodicNote(pad);
                         synthSH101.NoteOn(note, fvel);
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_SH101, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_FM2OP: {
                         uint8_t note = (pad < 16) ? trackFM2OpNote[pad] : 60;
+                        ReleasePadMelodicNote(pad);
                         synthFM2Op.NoteOn(note, fvel);
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_FM2OP, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_PHYS: {
-                        float freq = 440.f * powf(2.f, ((pad < 16 ? trackWtNote[pad] : 60) - 69) / 12.f);
+                        uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
+                        float freq = 440.f * powf(2.f, (note - 69) / 12.f);
+                        ReleasePadMelodicNote(pad);
                         physModal.SetFreq(freq);
                         physString.SetFreq(freq);
                         physModal.SetAccent(fvel);
                         physString.SetAccent(fvel);
                         physModalActive = true;
                         physStringActive = true;
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_PHYS, note, hw.system.GetNow());
                         break;
                     }
                     case SYNTH_ENGINE_NOISE: {
-                        float freq = 440.f * powf(2.f, ((pad < 16 ? trackWtNote[pad] : 60) - 69) / 12.f);
+                        uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
+                        float freq = 440.f * powf(2.f, (note - 69) / 12.f);
+                        ReleasePadMelodicNote(pad);
                         noisePart.SetFreq(freq);
                         noisePart.SetDensity(0.5f + fvel * 0.5f);
                         noisePartActive = true;
+                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_NOISE, note, hw.system.GetNow());
                         break;
                     }
                 }
@@ -6376,41 +6561,58 @@ static void ProcessCommand()
                     uint8_t note = padTo303Midi[slot];
                     bool accent = (slot % 4 == 0) || (velocity > 0.85f);
                     bool slide = (slot % 4 == 3);
+                    ReleasePadMelodicNote(slot);
                     acid303.NoteOn(note, accent, slide);
+                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_303, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_WTOSC: {
+                    uint8_t slot = (uint8_t)(instrument & 0x0F);
                     uint8_t note = (instrument < 16) ? trackWtNote[instrument] : 60;
+                    ReleasePadMelodicNote(slot);
                     wtOsc.NoteOn(note, velocity);
+                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_WTOSC, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_SH101: {               /* I1 */
+                    uint8_t slot = (uint8_t)(instrument & 0x0F);
                     uint8_t note = (instrument < 16) ? trackSH101Note[instrument] : 60;
+                    ReleasePadMelodicNote(slot);
                     synthSH101.NoteOn(note, velocity);
+                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_SH101, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_FM2OP: {               /* I2 */
+                    uint8_t slot = (uint8_t)(instrument & 0x0F);
                     uint8_t note = (instrument < 16) ? trackFM2OpNote[instrument] : 60;
+                    ReleasePadMelodicNote(slot);
                     synthFM2Op.NoteOn(note, velocity);
+                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_FM2OP, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_PHYS: {
+                    uint8_t slot = (uint8_t)(instrument & 0x0F);
                     uint8_t note = (instrument < 16) ? trackWtNote[instrument] : 60;
                     float freq = 440.f * powf(2.f, (note - 69) / 12.f);
+                    ReleasePadMelodicNote(slot);
                     physModal.SetFreq(freq);
                     physString.SetFreq(freq);
                     physModal.SetAccent(velocity);
                     physString.SetAccent(velocity);
                     physModalActive = true;
                     physStringActive = true;
+                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_PHYS, note, hw.system.GetNow());
                     break;
                 }
                 case SYNTH_ENGINE_NOISE: {
+                    uint8_t slot = (uint8_t)(instrument & 0x0F);
                     uint8_t note = (instrument < 16) ? trackWtNote[instrument] : 60;
                     float freq = 440.f * powf(2.f, (note - 69) / 12.f);
+                    ReleasePadMelodicNote(slot);
                     noisePart.SetFreq(freq);
                     noisePart.SetDensity(0.5f + velocity * 0.5f);
                     noisePartActive = true;
+                    SchedulePadMelodicAutoOff(slot, SYNTH_ENGINE_NOISE, note, hw.system.GetNow());
                     break;
                 }
             }
@@ -6531,7 +6733,13 @@ static void ProcessCommand()
             uint8_t note = p[0];
             bool accent = (p[1] != 0);
             bool slide  = (p[2] != 0);
+            /* Legacy 303-only trigger from web/SPI without explicit NoteOff.
+             * Use a fixed slot (0) for auto-release — 303 is mono so the
+             * slot identity doesn't matter; NoteOff kills the single voice
+             * regardless. */
+            ReleasePadMelodicNote(0);
             acid303.NoteOn(note, accent, slide);
+            SchedulePadMelodicAutoOff(0, SYNTH_ENGINE_303, note, hw.system.GetNow());
         }
         break;
 

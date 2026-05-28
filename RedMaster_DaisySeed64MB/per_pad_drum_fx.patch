@@ -1,0 +1,209 @@
+diff --git a/DaisySeed/main.cpp b/DaisySeed/main.cpp
+index 2312c7c..2ad89e6 100644
+--- a/DaisySeed/main.cpp
++++ b/DaisySeed/main.cpp
+@@ -4478,28 +4478,80 @@ void AudioCallback(AudioHandle::InputBuffer  /*in*/,
+             if(pk > trackPeak[t]) trackPeak[t] = pk;
+         };
+ 
++        /* ─── Drum engines: per-pad FX routing ───────────────────────────
++         * Each TR8xx instrument used to be summed inside <kit>.Process() and
++         * routed through a single shared track. That meant every drum slot
++         * (kick, snare, OH, ride, …) shared one filter / compressor / echo
++         * chain, so e.g. heavy comp on the BD also crushed the OH.
++         *
++         * Now each kit exposes ProcessSplit(outs[]) — same DSP, but per-slot
++         * outputs. We then walk dsqTrackEngine[] and synthTobus() each slot
++         * through the track its pad sits on (padTo909[dt] -> instrument).
++         * BD, OH, RS, CP can finally carry independent FX.
++         *
++         * CPU note: this calls synthTobus() once per *bound* track of the
++         * engine instead of once total. With 4-6 pads on 909 the cost is
++         * fine; on every-pad-909 setups the existing CPU shedding (line
++         * ~4033, audioFxShed at >86% load) drops chorus/flanger/comp as
++         * needed. */
+         if ((synthActiveMask & (1 << SYNTH_ENGINE_808)) && synth808.ActiveCount() > 0){
+             DSP_PROF_SCOPE(SYNTH_808);
+-            float s = sanitizeF(synth808.Process()) * kDrumBusHeadroom;
++            float outs808[TR808::INST_COUNT];
++            synth808.ProcessSplit(outs808);
+             DSP_PROF_END(SYNTH_808);
+             DSP_PROF_SCOPE(SYNTH_ROUTING);
+-            synthTobus(s, engTrk[SYNTH_ENGINE_808]);
++            if (engTrk[SYNTH_ENGINE_808] >= 0) {
++                for (int dt = 0; dt < DSQ_TRACKS && dt < 16; dt++) {
++                    if (dsqTrackEngine[dt] != SYNTH_ENGINE_808) continue;
++                    uint8_t inst = padTo808[dt];
++                    if (inst >= TR808::INST_COUNT) continue;
++                    synthTobus(sanitizeF(outs808[inst]) * kDrumBusHeadroom, dt);
++                }
++            } else {
++                float s = 0.0f;
++                for (int i = 0; i < TR808::INST_COUNT; i++) s += outs808[i];
++                synthTobus(sanitizeF(s) * kDrumBusHeadroom, -1);
++            }
+             DSP_PROF_END(SYNTH_ROUTING);
+         }
+         if ((synthActiveMask & (1 << SYNTH_ENGINE_909)) && synth909.ActiveCount() > 0){
+             DSP_PROF_SCOPE(SYNTH_909);
+-            float s = sanitizeF(synth909.Process()) * kDrumBusHeadroom;
++            float outs909[TR909::INST_COUNT];
++            synth909.ProcessSplit(outs909);
+             DSP_PROF_END(SYNTH_909);
+             DSP_PROF_SCOPE(SYNTH_ROUTING);
+-            synthTobus(s, engTrk[SYNTH_ENGINE_909]);
++            if (engTrk[SYNTH_ENGINE_909] >= 0) {
++                for (int dt = 0; dt < DSQ_TRACKS && dt < 16; dt++) {
++                    if (dsqTrackEngine[dt] != SYNTH_ENGINE_909) continue;
++                    uint8_t inst = padTo909[dt];
++                    if (inst >= TR909::INST_COUNT) continue;
++                    synthTobus(sanitizeF(outs909[inst]) * kDrumBusHeadroom, dt);
++                }
++            } else {
++                float s = 0.0f;
++                for (int i = 0; i < TR909::INST_COUNT; i++) s += outs909[i];
++                synthTobus(sanitizeF(s) * kDrumBusHeadroom, -1);
++            }
+             DSP_PROF_END(SYNTH_ROUTING);
+         }
+         if (kEnableSynth505 && (synthActiveMask & (1 << SYNTH_ENGINE_505)) && synth505.ActiveCount() > 0){
+             DSP_PROF_SCOPE(SYNTH_505);
+-            float s = sanitizeF(synth505.Process()) * kDrumBusHeadroom;
++            float outs505[TR505::INST_COUNT];
++            synth505.ProcessSplit(outs505);
+             DSP_PROF_END(SYNTH_505);
+             DSP_PROF_SCOPE(SYNTH_ROUTING);
+-            synthTobus(s, engTrk[SYNTH_ENGINE_505]);
++            if (engTrk[SYNTH_ENGINE_505] >= 0) {
++                for (int dt = 0; dt < DSQ_TRACKS && dt < 16; dt++) {
++                    if (dsqTrackEngine[dt] != SYNTH_ENGINE_505) continue;
++                    uint8_t inst = padTo505[dt];
++                    if (inst >= TR505::INST_COUNT) continue;
++                    synthTobus(sanitizeF(outs505[inst]) * kDrumBusHeadroom, dt);
++                }
++            } else {
++                float s = 0.0f;
++                for (int i = 0; i < TR505::INST_COUNT; i++) s += outs505[i];
++                synthTobus(sanitizeF(s) * kDrumBusHeadroom, -1);
++            }
+             DSP_PROF_END(SYNTH_ROUTING);
+         }
+         if ((synthActiveMask & (1 << SYNTH_ENGINE_303)) && acid303.IsActive()){
+diff --git a/DaisySeed/synth/tr505.h b/DaisySeed/synth/tr505.h
+index 4f576fd..7846a8d 100644
+--- a/DaisySeed/synth/tr505.h
++++ b/DaisySeed/synth/tr505.h
+@@ -1276,6 +1276,34 @@ public:
+         return mix;
+     }
+ 
++    /* -- Per-instrument render --
++     * Same DSP as Process() but writes each slot's contribution into outs[]
++     * instead of summing internally. Skips the master soft limiter so each
++     * drum slot can be routed through its own per-pad FX chain. */
++    void ProcessSplit(float* outs) {
++        auto step = [&](uint8_t id, auto& inst) {
++            outs[id] = (!chanMute_[id] && inst.IsActive())
++                       ? inst.Process() * chanVol_[id] * masterVol_
++                       : 0.0f;
++        };
++        step(INST_KICK,    kick);
++        step(INST_SNARE,   snare);
++        step(INST_CLAP,    clap);
++        step(INST_HIHAT_C, hihatC);
++        step(INST_HIHAT_O, hihatO);
++        step(INST_LOW_TOM, lowTom);
++        step(INST_MID_TOM, midTom);
++        step(INST_HI_TOM,  hiTom);
++        step(INST_COWBELL, cowbell);
++        step(INST_CYMBAL,  cymbal);
++        step(INST_RIMSHOT, rimshot);
++        step(INST_SHAKER,  shaker);
++        step(INST_CLAVE,   clave);
++        step(INST_HI_PERC, hiPerc);
++        step(INST_MID_PERC, midPerc);
++        step(INST_LOW_PERC, lowPerc);
++    }
++
+     /* Ajusta el lofi de TODOS los instrumentos simultaneamente
+      * Este es el control mas importante de la identidad 505 */
+     void SetLoFi(float l) {
+diff --git a/DaisySeed/synth/tr808.h b/DaisySeed/synth/tr808.h
+index bbe3497..d8f8630 100644
+--- a/DaisySeed/synth/tr808.h
++++ b/DaisySeed/synth/tr808.h
+@@ -1108,6 +1108,34 @@ public:
+         return mix;
+     }
+ 
++    /* -- Per-instrument render --
++     * Same DSP as Process() but writes each slot's contribution into outs[]
++     * instead of summing internally. Skips the master soft limiter so each
++     * drum slot can be routed through its own per-pad FX chain. */
++    void ProcessSplit(float* outs) {
++        auto step = [&](uint8_t id, auto& inst) {
++            outs[id] = (!chanMute_[id] && inst.IsActive())
++                       ? inst.Process() * chanVol_[id] * masterVol_
++                       : 0.0f;
++        };
++        step(INST_KICK,      kick);
++        step(INST_SNARE,     snare);
++        step(INST_CLAP,      clap);
++        step(INST_HIHAT_C,   hihatC);
++        step(INST_HIHAT_O,   hihatO);
++        step(INST_LOW_TOM,   lowTom);
++        step(INST_MID_TOM,   midTom);
++        step(INST_HI_TOM,    hiTom);
++        step(INST_LOW_CONGA, lowConga);
++        step(INST_MID_CONGA, midConga);
++        step(INST_HI_CONGA,  hiConga);
++        step(INST_CLAVES,    claves);
++        step(INST_MARACAS,   maracas);
++        step(INST_RIMSHOT,   rimshot);
++        step(INST_COWBELL,   cowbell);
++        step(INST_CYMBAL,    cymbal);
++    }
++
+     /* -- Mixer -- */
+     void  SetVolume(uint8_t i, float v) {
+         if (i < INST_COUNT) chanVol_[i] = Clamp(v, 0.0f, 2.0f);
+diff --git a/DaisySeed/synth/tr909.h b/DaisySeed/synth/tr909.h
+index 2b7f2d5..c3bbc0b 100644
+--- a/DaisySeed/synth/tr909.h
++++ b/DaisySeed/synth/tr909.h
+@@ -1155,6 +1155,35 @@ public:
+         return mix;
+     }
+ 
++    /* -- Per-instrument render --
++     * Same DSP as Process() but writes each slot's contribution into outs[]
++     * instead of summing internally. Skips the master soft limiter (the
++     * per-pad track chain and the master bus limiter take over). Used by the
++     * host when each drum slot is routed through its own track FX chain. */
++    void ProcessSplit(float* outs) {
++        auto step = [&](uint8_t id, auto& inst) {
++            outs[id] = (!chanMute_[id] && inst.IsActive())
++                       ? inst.Process() * chanVol_[id] * masterVol_
++                       : 0.0f;
++        };
++        step(INST_KICK,    kick);
++        step(INST_SNARE,   snare);
++        step(INST_CLAP,    clap);
++        step(INST_HIHAT_C, hihatC);
++        step(INST_HIHAT_O, hihatO);
++        step(INST_LOW_TOM, lowTom);
++        step(INST_MID_TOM, midTom);
++        step(INST_HI_TOM,  hiTom);
++        step(INST_RIDE,    ride);
++        step(INST_CRASH,   crash);
++        step(INST_RIMSHOT, rimshot);
++        step(INST_SHAKER,  shaker);
++        step(INST_CLAVE,   clave);
++        step(INST_HI_PERC, hiPerc);
++        step(INST_MID_PERC, midPerc);
++        step(INST_LOW_PERC, lowPerc);
++    }
++
+     /* -- Mixer -- */
+     void  SetVolume(uint8_t i, float v) {
+         if (i < INST_COUNT) chanVol_[i] = Clamp(v, 0.0f, 2.0f);

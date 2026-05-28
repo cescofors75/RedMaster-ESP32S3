@@ -1,5 +1,6 @@
 param(
-    [switch]$SkipSamples
+    [switch]$SkipSamples,
+    [switch]$DemoBells
 )
 
 $ErrorActionPreference = 'Continue'
@@ -7,7 +8,8 @@ $repoRoot = $PSScriptRoot
 $root   = Join-Path $repoRoot 'DaisySeed'
 $dfu    = 'C:\Espressif\tools\dfu-util\0.11\dfu-util-0.11-win64\dfu-util.exe'
 $boot   = Join-Path $root 'libdaisy\core\dsy_bootloader_v6_4-intdfu-2000ms.bin'
-$fw     = Join-Path $root 'build\DrumMachine.bin'
+$fwName = if ($DemoBells) { 'DemoBells.bin' } else { 'DrumMachine.bin' }
+$fw     = Join-Path $root "build\$fwName"
 $wavblob= Join-Path $root 'build\samples.bin'
 $gccBin = 'C:\ST\STM32CubeIDE_2.0.0\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712\tools\bin'
 $makeBin= 'C:\ST\STM32CubeIDE_2.0.0\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.make.win32_2.2.0.202409170845\tools\bin'

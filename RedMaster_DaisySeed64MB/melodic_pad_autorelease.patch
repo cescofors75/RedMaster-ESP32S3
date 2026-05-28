@@ -1,0 +1,256 @@
+diff --git a/DaisySeed/main.cpp b/DaisySeed/main.cpp
+index 2312c7c..ab980b6 100644
+--- a/DaisySeed/main.cpp
++++ b/DaisySeed/main.cpp
+@@ -1621,6 +1621,23 @@ static WavetableOsc wtOsc;
+ static SH101::Synth synthSH101;  /* I1: Roland SH-101 */
+ static FM2Op::Synth synthFM2Op;  /* I2: FM 2-op Yamaha */
+ 
++/* ────────────────────────────────────────────────────────────────────────
++ *  Melodic-pad auto-release.
++ *  CMD_TRIGGER_LIVE / CMD_TRIGGER_SEQ / DsqFireStep dispatch a NoteOn for
++ *  melodic engines (303/WT/SH101/FM2/PHYS/NOISE) but never send a NoteOff.
++ *  Without a release the polyphonic engine (WT) stacks voices forever on
++ *  rapid retriggers, and the mono engines bleed their previous release tail
++ *  into the new attack — what users hear as "se generan y no cortan".
++ *  We track the last note triggered per pad and release it either when the
++ *  pad fires again (cuts the previous voice cleanly) or after a short
++ *  timeout (default 220 ms, drained once per audio block).
++ * ──────────────────────────────────────────────────────────────────────── */
++static uint32_t s_padAutoOffAtMs[16]   = {0};
++static int8_t   s_padAutoOffEngine[16] = {-1,-1,-1,-1,-1,-1,-1,-1,
++                                          -1,-1,-1,-1,-1,-1,-1,-1};
++static uint8_t  s_padAutoOffNote[16]   = {0};
++static constexpr uint32_t kPadAutoOffMs = 220;
++
+ /* Physical Modeling engine — DaisySP ModalVoice + StringVoice */
+ static ModalVoice  physModal;
+ static StringVoice physString;
+@@ -2636,6 +2653,47 @@ static void ReleaseSynthEngineState(uint8_t engine)
+     }
+ }
+ 
++/* Release the note previously triggered on this pad (if any). Per-note for
++ * the polyphonic WT, full NoteOff for the mono engines. Clears the auto-off
++ * slot. Safe to call when nothing is pending. */
++static void ReleasePadMelodicNote(uint8_t pad) {
++    if (pad >= 16) return;
++    int8_t eng   = s_padAutoOffEngine[pad];
++    uint8_t note = s_padAutoOffNote[pad];
++    s_padAutoOffAtMs[pad]   = 0;
++    s_padAutoOffEngine[pad] = -1;
++    switch(eng){
++        case SYNTH_ENGINE_303:    acid303.NoteOff();      break;
++        case SYNTH_ENGINE_WTOSC:  wtOsc.NoteOff(note);    break;
++        case SYNTH_ENGINE_SH101:  synthSH101.NoteOff();   break;
++        case SYNTH_ENGINE_FM2OP:  synthFM2Op.NoteOff();   break;
++        case SYNTH_ENGINE_PHYS:   physModalActive = false; physStringActive = false; break;
++        case SYNTH_ENGINE_NOISE:  noisePartActive = false; break;
++        default: break;
++    }
++}
++
++/* Record a melodic-pad trigger so it gets auto-released later. Callers must
++ * have invoked ReleasePadMelodicNote(pad) BEFORE the new NoteOn — otherwise
++ * mono engines would release their fresh voice instead of the stale one. */
++static inline void SchedulePadMelodicAutoOff(uint8_t pad, int8_t engine, uint8_t note, uint32_t now_ms) {
++    if (pad >= 16) return;
++    s_padAutoOffEngine[pad] = engine;
++    s_padAutoOffNote[pad]   = note;
++    s_padAutoOffAtMs[pad]   = now_ms + kPadAutoOffMs;
++}
++
++/* Drain any expired melodic-pad notes. Called once per audio block; the
++ * 1–3 ms granularity is inaudible. */
++static inline void DrainPadMelodicAutoOff(uint32_t now_ms) {
++    for (int p = 0; p < 16; p++) {
++        if (!s_padAutoOffAtMs[p]) continue;
++        if ((int32_t)(now_ms - s_padAutoOffAtMs[p]) >= 0) {
++            ReleasePadMelodicNote((uint8_t)p);
++        }
++    }
++}
++
+ static void ApplyWtModState()
+ {
+     wtOsc.SetFilter(wtFilterCutoffState, wtFilterQState);
+@@ -3931,39 +3989,53 @@ static void DsqFireStep() {
+                     uint8_t note   = (t < 16) ? padTo303Midi[t] : 48;
+                     bool    accent = (vel > 0.85f);
+                     bool    slide  = false;
++                    ReleasePadMelodicNote((uint8_t)t);
+                     acid303.NoteOn(note, accent, slide);
++                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_303, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_WTOSC: {
+                     uint8_t note = (t < 16) ? trackWtNote[t] : 60;
++                    ReleasePadMelodicNote((uint8_t)t);
+                     wtOsc.NoteOn(note, vel);
++                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_WTOSC, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_SH101: {             /* I1 */
+                     uint8_t note = (t < 16) ? trackSH101Note[t] : 60;
++                    ReleasePadMelodicNote((uint8_t)t);
+                     synthSH101.NoteOn(note, vel);
++                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_SH101, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_FM2OP: {             /* I2 */
+                     uint8_t note = (t < 16) ? trackFM2OpNote[t] : 60;
++                    ReleasePadMelodicNote((uint8_t)t);
+                     synthFM2Op.NoteOn(note, vel);
++                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_FM2OP, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_PHYS: {
+-                    float freq = 440.f * powf(2.f, ((t < 16 ? trackWtNote[t] : 60) - 69) / 12.f);
++                    uint8_t note = (t < 16) ? trackWtNote[t] : 60;
++                    float freq = 440.f * powf(2.f, (note - 69) / 12.f);
++                    ReleasePadMelodicNote((uint8_t)t);
+                     physModal.SetFreq(freq);
+                     physString.SetFreq(freq);
+                     physModal.SetAccent(vel);
+                     physString.SetAccent(vel);
+                     physModalActive = true;
+                     physStringActive = true;
++                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_PHYS, note, hw.system.GetNow());
+                     break;
+                 }
+                 case SYNTH_ENGINE_NOISE: {
+-                    float freq = 440.f * powf(2.f, ((t < 16 ? trackWtNote[t] : 60) - 69) / 12.f);
++                    uint8_t note = (t < 16) ? trackWtNote[t] : 60;
++                    float freq = 440.f * powf(2.f, (note - 69) / 12.f);
++                    ReleasePadMelodicNote((uint8_t)t);
+                     noisePart.SetFreq(freq);
+                     noisePart.SetDensity(0.5f + vel * 0.5f);
+                     noisePartActive = true;
++                    SchedulePadMelodicAutoOff((uint8_t)t, SYNTH_ENGINE_NOISE, note, hw.system.GetNow());
+                     break;
+                 }
+             }
+@@ -4019,6 +4091,11 @@ void AudioCallback(AudioHandle::InputBuffer  /*in*/,
+         return;
+     }
+ 
++    /* Auto-release expired melodic-pad voices triggered without an explicit
++     * note-off (CMD_TRIGGER_LIVE / SEQ / DsqFireStep). Drained once per block
++     * so release granularity ≈ 1–3 ms — inaudible. */
++    DrainPadMelodicAutoOff(hw.system.GetNow());
++
+     /* ── Kit loading: output silence to avoid SDRAM bus contention / data races ── */
+     if(kitMuteActive){
+         DSP_PROF_END(CALLBACK);
+@@ -4884,39 +4961,53 @@ static void ProcessCommand()
+                     case SYNTH_ENGINE_303: {
+                         uint8_t note = (pad < 16) ? padTo303Midi[pad] : 48;
+                         bool    acc  = (fvel > 0.85f);
++                        ReleasePadMelodicNote(pad);
+                         acid303.NoteOn(note, acc, false);
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_303, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_WTOSC: {
+                         uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
++                        ReleasePadMelodicNote(pad);
+                         wtOsc.NoteOn(note, fvel);
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_WTOSC, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_SH101: {           /* I1 */
+                         uint8_t note = (pad < 16) ? trackSH101Note[pad] : 60;
++                        ReleasePadMelodicNote(pad);
+                         synthSH101.NoteOn(note, fvel);
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_SH101, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_FM2OP: {           /* I2 */
+                         uint8_t note = (pad < 16) ? trackFM2OpNote[pad] : 60;
++                        ReleasePadMelodicNote(pad);
+                         synthFM2Op.NoteOn(note, fvel);
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_FM2OP, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_PHYS: {
+-                        float freq = 440.f * powf(2.f, ((pad < 16 ? trackWtNote[pad] : 60) - 69) / 12.f);
++                        uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
++                        float freq = 440.f * powf(2.f, (note - 69) / 12.f);
++                        ReleasePadMelodicNote(pad);
+                         physModal.SetFreq(freq);
+                         physString.SetFreq(freq);
+                         physModal.SetAccent(fvel);
+                         physString.SetAccent(fvel);
+                         physModalActive = true;
+                         physStringActive = true;
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_PHYS, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_NOISE: {
+-                        float freq = 440.f * powf(2.f, ((pad < 16 ? trackWtNote[pad] : 60) - 69) / 12.f);
++                        uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
++                        float freq = 440.f * powf(2.f, (note - 69) / 12.f);
++                        ReleasePadMelodicNote(pad);
+                         noisePart.SetFreq(freq);
+                         noisePart.SetDensity(0.5f + fvel * 0.5f);
+                         noisePartActive = true;
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_NOISE, note, hw.system.GetNow());
+                         break;
+                     }
+                 }
+@@ -4958,39 +5049,53 @@ static void ProcessCommand()
+                     case SYNTH_ENGINE_303: {
+                         uint8_t note = (pad < 16) ? padTo303Midi[pad] : 48;
+                         bool    acc  = (fvel > 0.85f);
++                        ReleasePadMelodicNote(pad);
+                         acid303.NoteOn(note, acc, false);
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_303, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_WTOSC: {
+                         uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
++                        ReleasePadMelodicNote(pad);
+                         wtOsc.NoteOn(note, fvel);
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_WTOSC, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_SH101: {
+                         uint8_t note = (pad < 16) ? trackSH101Note[pad] : 60;
++                        ReleasePadMelodicNote(pad);
+                         synthSH101.NoteOn(note, fvel);
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_SH101, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_FM2OP: {
+                         uint8_t note = (pad < 16) ? trackFM2OpNote[pad] : 60;
++                        ReleasePadMelodicNote(pad);
+                         synthFM2Op.NoteOn(note, fvel);
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_FM2OP, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_PHYS: {
+-                        float freq = 440.f * powf(2.f, ((pad < 16 ? trackWtNote[pad] : 60) - 69) / 12.f);
++                        uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
++                        float freq = 440.f * powf(2.f, (note - 69) / 12.f);
++                        ReleasePadMelodicNote(pad);
+                         physModal.SetFreq(freq);
+                         physString.SetFreq(freq);
+                         physModal.SetAccent(fvel);
+                         physString.SetAccent(fvel);
+                         physModalActive = true;
+                         physStringActive = true;
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_PHYS, note, hw.system.GetNow());
+                         break;
+                     }
+                     case SYNTH_ENGINE_NOISE: {
+-                        float freq = 440.f * powf(2.f, ((pad < 16 ? trackWtNote[pad] : 60) - 69) / 12.f);
++                        uint8_t note = (pad < 16) ? trackWtNote[pad] : 60;
++                        float freq = 440.f * powf(2.f, (note - 69) / 12.f);
++                        ReleasePadMelodicNote(pad);
+                         noisePart.SetFreq(freq);
+                         noisePart.SetDensity(0.5f + fvel * 0.5f);
+                         noisePartActive = true;
++                        SchedulePadMelodicAutoOff(pad, SYNTH_ENGINE_NOISE, note, hw.system.GetNow());
+                         break;
+                     }
+                 }

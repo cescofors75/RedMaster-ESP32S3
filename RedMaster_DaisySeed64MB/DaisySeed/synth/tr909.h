@@ -1155,6 +1155,35 @@ public:
         return mix;
     }
 
+    /* -- Per-instrument render --
+     * Same DSP as Process() but writes each slot's contribution into outs[]
+     * instead of summing internally. Skips the master soft limiter (the
+     * per-pad track chain and the master bus limiter take over). Used by the
+     * host when each drum slot is routed through its own track FX chain. */
+    void ProcessSplit(float* outs) {
+        auto step = [&](uint8_t id, auto& inst) {
+            outs[id] = (!chanMute_[id] && inst.IsActive())
+                       ? inst.Process() * chanVol_[id] * masterVol_
+                       : 0.0f;
+        };
+        step(INST_KICK,    kick);
+        step(INST_SNARE,   snare);
+        step(INST_CLAP,    clap);
+        step(INST_HIHAT_C, hihatC);
+        step(INST_HIHAT_O, hihatO);
+        step(INST_LOW_TOM, lowTom);
+        step(INST_MID_TOM, midTom);
+        step(INST_HI_TOM,  hiTom);
+        step(INST_RIDE,    ride);
+        step(INST_CRASH,   crash);
+        step(INST_RIMSHOT, rimshot);
+        step(INST_SHAKER,  shaker);
+        step(INST_CLAVE,   clave);
+        step(INST_HI_PERC, hiPerc);
+        step(INST_MID_PERC, midPerc);
+        step(INST_LOW_PERC, lowPerc);
+    }
+
     /* -- Mixer -- */
     void  SetVolume(uint8_t i, float v) {
         if (i < INST_COUNT) chanVol_[i] = Clamp(v, 0.0f, 2.0f);

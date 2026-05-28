@@ -82,6 +82,25 @@
 			}
 		},
 		{
+			"label": "PlatformIO: Flash Daisy (DemoBells)",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/RedMaster_DaisySeed64MB/flash_daisy.ps1",
+				"-DemoBells",
+				"-SkipSamples"
+			],
+			"problemMatcher": [],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
 			"label": "PlatformIO: Flash Daisy (SkipSamples)",
 			"type": "shell",
 			"command": "pwsh.exe",
@@ -107,6 +126,24 @@
 				"-NoProfile",
 				"-ExecutionPolicy", "Bypass",
 				"-File", "${workspaceFolder}/RedMaster_DaisySeed64MB/build_daisy.ps1"
+			],
+			"problemMatcher": [],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "PlatformIO: Build Daisy (DemoBells)",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/RedMaster_DaisySeed64MB/build_daisy.ps1",
+				"-DemoBells"
 			],
 			"problemMatcher": [],
 			"group": "build",

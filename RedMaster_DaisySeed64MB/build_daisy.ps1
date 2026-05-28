@@ -5,7 +5,8 @@ param(
     [switch]$Clean,
     [switch]$VerboseBuild,
     [switch]$StressReport,
-    [int]$StressSeconds = 18
+    [int]$StressSeconds = 18,
+    [switch]$DemoBells
 )
 
 $ErrorActionPreference = 'Stop'
@@ -90,6 +91,7 @@ try {
 
     $makeArgs = @()
     if($VerboseBuild) { $makeArgs += 'VERBOSE=1' }
+    if($DemoBells)    { $makeArgs += 'DEMO_BELLS=1' }
     if($StressReport) {
         $makeArgs += 'RED808_STARTUP_STRESS_REPORT=1'
         $makeArgs += "RED808_STARTUP_STRESS_SECONDS=$StressSeconds"
