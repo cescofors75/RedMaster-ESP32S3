@@ -1,5 +1,6 @@
 param(
-    [switch]$SkipSamples
+    [switch]$SkipSamples,
+    [switch]$DemoBells
 )
 
 $ErrorActionPreference = 'Continue'
@@ -7,7 +8,16 @@ $repoRoot = $PSScriptRoot
 $root   = Join-Path $repoRoot 'DaisySeed'
 $dfu    = 'C:\Espressif\tools\dfu-util\0.11\dfu-util-0.11-win64\dfu-util.exe'
 $boot   = Join-Path $root 'libdaisy\core\dsy_bootloader_v6_4-intdfu-2000ms.bin'
-$fw     = Join-Path $root 'build\DrumMachine.bin'
+
+# ── Selección de firmware ──
+# -DemoBells → build/DemoBells.bin (síntesis pura, sin samples)
+# por defecto → build/DrumMachine.bin (+ samples.bin)
+if($DemoBells) {
+    $fw          = Join-Path $root 'build\DemoBells.bin'
+    $SkipSamples = $true   # la demo no usa samples
+} else {
+    $fw          = Join-Path $root 'build\DrumMachine.bin'
+}
 $wavblob= Join-Path $root 'build\samples.bin'
 $gccBin = 'C:\ST\STM32CubeIDE_2.0.0\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.13.3.rel1.win32_1.0.100.202509120712\tools\bin'
 $makeBin= 'C:\ST\STM32CubeIDE_2.0.0\STM32CubeIDE\plugins\com.st.stm32cube.ide.mcu.externaltools.make.win32_2.2.0.202409170845\tools\bin'
@@ -40,8 +50,20 @@ function Invoke-PythonScript {
 
 "=== FLASH DAISY $(Get-Date -Format s) ===" | Out-File -FilePath $log -Encoding utf8
 
+# ── Verificar que el firmware existe ANTES de pedir DFU ──
+if(-not (Test-Path $fw)) {
+    Write-Host "No existe $fw" -ForegroundColor Red
+    if($DemoBells) {
+        Write-Host 'Compila la demo primero: build_daisy.ps1 -DemoBells' -ForegroundColor Yellow
+    } else {
+        Write-Host 'Compila el firmware primero: build_daisy.ps1' -ForegroundColor Yellow
+    }
+    'RESULT=NO_FIRMWARE' | Tee-Object -FilePath $log -Append
+    exit 1
+}
+
 # ── Pre-generar samples.bin ANTES de entrar en DFU (evita timeout) ──
-if(-not (Test-Path $wavblob)) {
+if((-not $SkipSamples) -and (-not (Test-Path $wavblob))) {
     Write-Host 'Generando samples.bin con pack_wavs.py (antes de DFU)...' -ForegroundColor Yellow
     $genResult = Invoke-PythonScript 'pack_wavs.py' 2>&1 | Tee-Object -FilePath $log -Append | Out-String
     if(Test-Path $wavblob) {

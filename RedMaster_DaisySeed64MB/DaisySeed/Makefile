@@ -3,9 +3,17 @@
 #  16-Pad Sampler + FX + SPI Slave + Synth Engines (808/909/505/303)
 # ══════════════════════════════════════════════════════════════════
 
+# ── Selección de firmware ──
+#   make                 → DrumMachine (firmware principal)
+#   make DEMO_BELLS=1    → DemoBells   (demo standalone FM bells + reverb)
+DEMO_BELLS ?= 0
+ifeq ($(DEMO_BELLS),1)
+TARGET = DemoBells
+CPP_SOURCES = demo_bells.cpp syscalls.cpp
+else
 TARGET = DrumMachine
-
 CPP_SOURCES = main.cpp syscalls.cpp
+endif
 
 # Include path for synth headers + DaisySP-LGPL
 C_INCLUDES += -I.
@@ -28,7 +36,6 @@ RED808_STARTUP_STRESS_REPORT ?= 0
 RED808_STARTUP_STRESS_SECONDS ?= 18
 RED808_DSP_BLOCK_PROFILE ?= 1
 RED808_MEM_AUDIT ?= 0
-RED808_BOOT_PROGRESS_DIAG ?= 0
 C_DEFS += -DRED808_BOOT_DIAG_MINIMAL=$(RED808_BOOT_DIAG_MINIMAL)
 C_DEFS += -DRED808_AUDIO_DIAG_MINIMAL=$(RED808_AUDIO_DIAG_MINIMAL)
 C_DEFS += -DRED808_BOOT_PROGRESS_DIAG=$(RED808_BOOT_PROGRESS_DIAG)
@@ -41,7 +48,7 @@ C_DEFS += -DRED808_STARTUP_STRESS_REPORT=$(RED808_STARTUP_STRESS_REPORT)
 C_DEFS += -DRED808_STARTUP_STRESS_SECONDS=$(RED808_STARTUP_STRESS_SECONDS)
 C_DEFS += -DRED808_DSP_BLOCK_PROFILE=$(RED808_DSP_BLOCK_PROFILE)
 C_DEFS += -DRED808_MEM_AUDIT=$(RED808_MEM_AUDIT)
-C_DEFS += -DRED808_BOOT_PROGRESS_DIAG=$(RED808_BOOT_PROGRESS_DIAG)
+
 
 # ── Boot desde SRAM (requiere Daisy Bootloader) ──
 # El STM32H750 solo tiene 128K flash interna, insuficiente.
