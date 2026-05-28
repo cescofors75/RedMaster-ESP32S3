@@ -136,6 +136,24 @@
 			}
 		},
 		{
+			"label": "PlatformIO: Build Daisy (BootDiag)",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/RedMaster_DaisySeed64MB/build_daisy.ps1",
+				"-BootProgressDiag"
+			],
+			"problemMatcher": [],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
 			"label": "PlatformIO: Build Daisy (DemoBells)",
 			"type": "shell",
 			"command": "pwsh.exe",
