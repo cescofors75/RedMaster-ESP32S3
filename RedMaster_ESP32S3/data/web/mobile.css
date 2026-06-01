@@ -1,0 +1,222 @@
+/* =========================================================================
+   RED808 Mobile — UI mínima y táctil para tocar en el móvil.
+   Vistas: Pads, Piano, Sequencer (grid de puntos), Filtros.
+   Sin dependencias de app.js/style.css; reutiliza solo theme-vars.css.
+   ========================================================================= */
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--r808-bg-base);
+  color: var(--r808-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+}
+
+/* ---------- Top bar ---------- */
+.m-top {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--r808-bg-surface);
+  border-bottom: 1px solid var(--r808-border);
+}
+.m-brand { display: flex; align-items: center; gap: 8px; }
+.m-logo { font-weight: 700; letter-spacing: 1px; font-size: 17px; }
+.m-logo b { color: var(--r808-red-light); }
+.m-dot {
+  width: 11px; height: 11px; border-radius: 50%;
+  background: var(--r808-text-dim);
+  box-shadow: 0 0 6px rgba(0,0,0,.6);
+  transition: background .2s, box-shadow .2s;
+}
+.m-dot.on { background: var(--r808-accent-lime); box-shadow: 0 0 10px var(--r808-accent-lime); }
+
+.m-transport { display: flex; align-items: center; gap: 8px; }
+.m-play {
+  width: 46px; height: 46px; border-radius: 50%;
+  border: none; font-size: 18px; color: #fff;
+  background: var(--r808-red-dark);
+  box-shadow: 0 2px 8px rgba(0,0,0,.5);
+}
+.m-play.playing { background: var(--r808-accent-green); color: #042; }
+.m-bpm { display: flex; align-items: center; gap: 4px; }
+.m-bpm-btn {
+  width: 32px; height: 36px; border-radius: 8px; border: 1px solid var(--r808-border);
+  background: var(--r808-bg-elevated); color: var(--r808-text); font-size: 18px;
+}
+.m-bpm-val { min-width: 38px; text-align: center; font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 600; }
+.m-pattern {
+  height: 36px; border-radius: 8px; border: 1px solid var(--r808-border);
+  background: var(--r808-bg-elevated); color: var(--r808-text); font-size: 13px; padding: 0 6px;
+}
+
+/* ---------- Main / views ---------- */
+.m-main { flex: 1 1 auto; position: relative; overflow: hidden; }
+.m-view {
+  position: absolute; inset: 0;
+  display: none; flex-direction: column;
+  padding: 12px;
+  overflow: auto;
+}
+.m-view.is-active { display: flex; }
+
+/* ---------- Pads ---------- */
+.m-pads {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-auto-rows: 1fr;
+  gap: 8px;
+}
+.m-pad {
+  position: relative;
+  border: none; border-radius: 14px;
+  color: #fff; font-weight: 700; font-size: 15px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px;
+  background: var(--pad-c, #444);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12), 0 3px 8px rgba(0,0,0,.5);
+  transition: transform .04s, filter .08s;
+  text-shadow: 0 1px 2px rgba(0,0,0,.6);
+}
+.m-pad small { font-size: 10px; opacity: .8; font-weight: 500; }
+.m-pad.hit { transform: scale(.94); filter: brightness(1.6); }
+
+/* ---------- Piano ---------- */
+.m-piano-bar {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-bottom: 12px; font-size: 13px;
+}
+.m-piano-bar select {
+  height: 36px; border-radius: 8px; border: 1px solid var(--r808-border);
+  background: var(--r808-bg-elevated); color: var(--r808-text); margin-left: 6px;
+}
+.m-oct { display: flex; align-items: center; gap: 8px; }
+.m-oct button {
+  height: 36px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--r808-border);
+  background: var(--r808-bg-elevated); color: var(--r808-text); font-size: 14px;
+}
+.m-oct span { font-weight: 700; min-width: 16px; text-align: center; }
+
+.m-piano {
+  flex: 1 1 auto;
+  position: relative;
+  display: flex;
+  border-radius: 10px; overflow: hidden;
+  background: #000;
+}
+.m-key {
+  position: relative; flex: 1 1 0;
+  border-right: 1px solid #000;
+  background: linear-gradient(#fafafa, #d8d8d8);
+}
+.m-key:last-child { border-right: none; }
+.m-key.black {
+  position: absolute; top: 0; height: 60%;
+  width: 7%; z-index: 2;
+  background: linear-gradient(#333, #000);
+  border-radius: 0 0 4px 4px;
+  border: 1px solid #000;
+}
+.m-key.down { filter: brightness(1.0); background: var(--r808-accent-cyan); }
+.m-key.black.down { background: var(--r808-accent-purple); }
+
+/* ---------- Sequencer (dots) ---------- */
+.m-seq-tools {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px; gap: 8px;
+}
+.m-step-count { display: flex; gap: 6px; }
+.m-step-count button {
+  height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--r808-border);
+  background: var(--r808-bg-elevated); color: var(--r808-text); font-size: 13px;
+}
+.m-step-count button.active { background: var(--r808-red-dark); border-color: var(--r808-red-light); color: #fff; }
+.m-clear {
+  height: 34px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--r808-border);
+  background: var(--r808-bg-elevated); color: var(--r808-text-dim); font-size: 13px;
+}
+.m-seq-scroll { flex: 1 1 auto; overflow: auto; }
+.m-seq { display: flex; flex-direction: column; gap: 4px; min-width: max-content; }
+.m-seq-row { display: flex; align-items: center; gap: 4px; }
+.m-seq-label {
+  flex: 0 0 30px; font-size: 10px; font-weight: 700; color: var(--r808-text-dim);
+  text-align: right; padding-right: 4px;
+}
+.m-dot-cell {
+  width: 22px; height: 22px; flex: 0 0 22px;
+  border-radius: 50%;
+  background: rgba(255,255,255,.07);
+  border: 1px solid rgba(255,255,255,.06);
+  transition: transform .05s, background .08s, box-shadow .08s;
+}
+/* every 4th step slightly separated visually */
+.m-dot-cell.beat { background: rgba(255,255,255,.12); }
+.m-dot-cell.on {
+  background: var(--dot-c, var(--r808-red-light));
+  border-color: transparent;
+  box-shadow: 0 0 6px var(--dot-c, var(--r808-red-light));
+}
+.m-seq-col-playhead .m-dot-cell { box-shadow: 0 0 0 2px var(--r808-accent-cyan) inset; }
+.m-dot-cell.playhead {
+  outline: 2px solid var(--r808-accent-cyan);
+  outline-offset: -2px;
+}
+
+/* ---------- Filters / FX ---------- */
+.m-fx-track { flex: 0 0 auto; margin-bottom: 12px; font-size: 13px; }
+.m-fx-track select {
+  height: 38px; width: 100%; margin-top: 6px; border-radius: 8px;
+  border: 1px solid var(--r808-border); background: var(--r808-bg-elevated);
+  color: var(--r808-text); font-size: 14px; padding: 0 8px;
+}
+.m-filters {
+  flex: 0 0 auto;
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  margin-bottom: 16px;
+}
+.m-filter-btn {
+  border: 1px solid var(--r808-border); border-radius: 10px;
+  background: var(--r808-bg-elevated); color: var(--r808-text);
+  padding: 10px 4px; font-size: 11px; font-weight: 600;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.m-filter-btn .ico { font-size: 18px; }
+.m-filter-btn.active { background: var(--r808-red-dark); border-color: var(--r808-red-light); color: #fff; }
+.m-fx-sliders { flex: 0 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.m-slider { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--r808-text-dim); }
+.m-slider b { color: var(--r808-text); }
+.m-slider input[type=range] { width: 100%; height: 32px; accent-color: var(--r808-red-light); }
+
+/* ---------- Bottom nav ---------- */
+.m-nav {
+  flex: 0 0 auto;
+  display: flex;
+  background: var(--r808-bg-surface);
+  border-top: 1px solid var(--r808-border);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.m-tab {
+  flex: 1 1 0; border: none; background: transparent;
+  color: var(--r808-text-dim); font-size: 20px;
+  padding: 8px 0 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.m-tab span { font-size: 10px; font-weight: 600; }
+.m-tab.is-active { color: var(--r808-red-light); }
+.m-tab.is-active span { color: var(--r808-text); }

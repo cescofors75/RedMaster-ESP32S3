@@ -1159,7 +1159,21 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   server->on("/melody-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
     sendWebAsset(request, "/melody-editor.js", "application/javascript", "no-cache");
   });
-  
+
+  // Mobile page — UI mínima y táctil (pads, piano, sequencer de puntos, filtros)
+  server->on("/mobile", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache, no-store, must-revalidate");
+  });
+  server->on("/mobile.html", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache, no-store, must-revalidate");
+  });
+  server->on("/mobile.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.css", "text/css", "no-cache");
+  });
+  server->on("/mobile.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.js", "application/javascript", "no-cache");
+  });
+
   // Patchbay page
   server->on("/patchbay", HTTP_GET, [this](AsyncWebServerRequest *request){
     pageTransitionMs = millis();
