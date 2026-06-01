@@ -59,11 +59,11 @@
   // la resonancia. El cutoff lo controla el slider "Tono".
   const FX_PRESETS = [
     { id: 'off',    name: 'Normal',    emoji: '🎵', color: '#5b6472', type: 0,  cutoff: 4000, res: 1   },
-    { id: 'sub',    name: 'Submarino', emoji: '🌊', color: '#0a84ff', type: 1,  cutoff: 220,  res: 7   },
-    { id: 'bright', name: 'Brillante', emoji: '✨', color: '#ffcc00', type: 2,  cutoff: 2800, res: 3   },
-    { id: 'phone',  name: 'Teléfono',  emoji: '📞', color: '#ff9500', type: 3,  cutoff: 1400, res: 9   },
-    { id: 'robot',  name: 'Robot',     emoji: '🤖', color: '#34c759', type: 9,  cutoff: 900,  res: 16  },
-    { id: 'tunnel', name: 'Túnel',     emoji: '🕳️', color: '#bf5af2', type: 10, cutoff: 320,  res: 14  }
+    { id: 'sub',    name: 'Submarino', emoji: '🌊', color: '#0a84ff', type: 1,  cutoff: 350,  res: 6   },
+    { id: 'bright', name: 'Brillante', emoji: '✨', color: '#ffcc00', type: 2,  cutoff: 3500, res: 6   },
+    { id: 'phone',  name: 'Teléfono',  emoji: '📞', color: '#ff9500', type: 3,  cutoff: 1200, res: 8   },
+    { id: 'robot',  name: 'Robot',     emoji: '🤖', color: '#34c759', type: 9,  cutoff: 700,  res: 14  },
+    { id: 'tunnel', name: 'Túnel',     emoji: '🕳️', color: '#bf5af2', type: 14, cutoff: 800,  res: 4   }
   ];
   const STEP_COUNTS = [16, 32, 64];
   // Piano: una octava = 12 semitonos. Patrón de teclas negras.
@@ -277,9 +277,19 @@
         rollRate = r;
         document.querySelectorAll('#rollBar .m-roll-btn').forEach((x) =>
           x.classList.toggle('active', +x.dataset.rate === r));
+        applyRollArmed();
       });
       bar.appendChild(b);
     });
+    applyRollArmed();
+  }
+  // Refleja el estado del roll en los pads: si hay velocidad activa, los pads
+  // se "arman" visualmente (borde neón pulsante) y la etiqueta lo indica.
+  function applyRollArmed() {
+    const grid = $('padsGrid');
+    if (grid) grid.classList.toggle('roll-armed', rollRate !== 0);
+    const label = document.querySelector('.m-roll-label');
+    if (label) label.textContent = rollRate ? '🥁 Roll 1/' + rollRate : '🥁 Roll';
   }
   function initPads() {
     const grid = $('padsGrid');
@@ -392,8 +402,8 @@
         const note = oct * 12 + WHITE_OFFSETS[w];
         const key = document.createElement('div');
         key.className = 'm-key';
+        key.dataset.note = note;
         key.style.setProperty('--kc', currentPalette[(o * 7 + w) % 16]);
-        bindKey(key, note);
         row.appendChild(key);
       }
       for (let w = 0; w < 7; w++) {
@@ -401,30 +411,61 @@
         const note = oct * 12 + BLACK[w];
         const key = document.createElement('div');
         key.className = 'm-key black';
+        key.dataset.note = note;
         key.style.left = `calc(${(w + 1) * wPct}% - 3.5%)`;
-        bindKey(key, note);
         row.appendChild(key);
       }
       piano.appendChild(row);
     }
+    bindGlissando(piano);
   }
-  function bindKey(el, note) {
-    const down = (e) => {
+  // Notas que suenan actualmente (por nota MIDI), para el glissando.
+  const _activeNotes = new Set();
+  function noteOn(note) {
+    if (_activeNotes.has(note)) return;
+    _activeNotes.add(note);
+    send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: false });
+  }
+  function noteOff(note) {
+    if (!_activeNotes.has(note)) return;
+    _activeNotes.delete(note);
+    send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note });
+  }
+  function keyElFromPoint(x, y) {
+    const el = document.elementFromPoint(x, y);
+    if (el && el.classList && el.classList.contains('m-key')) return el;
+    return null;
+  }
+  // Permite tocar varias teclas a la vez y deslizar el dedo (glissando "tirirri").
+  function bindGlissando(piano) {
+    // Estado por dedo (pointerId): { el, note } o { el:null, note:null } si está fuera de teclas.
+    const fingerKey = new Map();
+    const stopNote = (st) => {
+      if (st && st.el) { st.el.classList.remove('down'); noteOff(st.note); }
+    };
+    const moveTo = (pid, x, y) => {
+      const el = keyElFromPoint(x, y);
+      const note = el ? +el.dataset.note : null;
+      const prev = fingerKey.get(pid);
+      if (prev && prev.note === note) return;       // misma tecla, nada que hacer
+      stopNote(prev);                                // soltar la anterior
+      if (el) { el.classList.add('down'); noteOn(note); }
+      fingerKey.set(pid, { el, note });
+    };
+    const release = (pid) => { stopNote(fingerKey.get(pid)); fingerKey.delete(pid); };
+    piano.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      el.classList.add('down');
-      send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: false });
-    };
-    const up = (e) => {
-      if (e) e.preventDefault();
-      el.classList.remove('down');
-      send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note });
-    };
-    el.addEventListener('touchstart', down, { passive: false });
-    el.addEventListener('touchend', up, { passive: false });
-    el.addEventListener('touchcancel', up, { passive: false });
-    el.addEventListener('mousedown', down);
-    el.addEventListener('mouseup', up);
-    el.addEventListener('mouseleave', (e) => { if (el.classList.contains('down')) up(e); });
+      try { piano.setPointerCapture(e.pointerId); } catch (_) {}
+      moveTo(e.pointerId, e.clientX, e.clientY);
+    });
+    piano.addEventListener('pointermove', (e) => {
+      if (!fingerKey.has(e.pointerId)) return;       // solo dedos ya pulsados
+      e.preventDefault();
+      moveTo(e.pointerId, e.clientX, e.clientY);
+    });
+    const end = (e) => release(e.pointerId);
+    piano.addEventListener('pointerup', end);
+    piano.addEventListener('pointercancel', end);
   }
 
   // =====================================================================
@@ -553,15 +594,13 @@
     renderFx();
     onTono(); // pinta la etiqueta inicial
   }
-  // Slider Tono 0..100 -> cutoff según preset (curva exponencial, más musical).
+  // Slider Tono 0..100 -> escala el cutoff base del preset (0.3x .. 3x).
   function tonoCutoff() {
     const p = FX_PRESETS.find((x) => x.id === activeFxPreset) || FX_PRESETS[0];
     if (p.type === 0) return 4000;
-    const v = parseFloat($('tono').value) / 100;
-    // Rango dinámico por preset: submarina baja frecuencia, brillante alta
-    const lo = p.type === 1 ? 80  : p.type === 10 ? 120 : 200;
-    const hi = p.type === 2 ? 12000 : p.type === 10 ? 2600 : 6000;
-    return Math.round(lo * Math.pow(hi / lo, v));
+    const v = parseFloat($('tono').value) / 100;   // 0..1
+    const factor = Math.pow(2, (v - 0.5) * 3.4);    // ~0.3x .. ~3.2x
+    return Math.round(Math.max(60, Math.min(16000, p.cutoff * factor)));
   }
   function applyKidFx(id) {
     activeFxPreset = id;
@@ -615,6 +654,7 @@
     $('themeBtn').addEventListener('click', openThemeSheet);
     $('sheetBackdrop').addEventListener('click', closeThemeSheet);
     $('sampleBackdrop').addEventListener('click', closeSampleSheet);
+    setupSampleUpload();
   }
   function applyTheme(id) {
     document.body.dataset.theme = id;
@@ -702,9 +742,111 @@
   }
 
   // =====================================================================
-  // Init
+  // Subir un sample (WAV/MP3) desde el dispositivo del usuario al pad
   // =====================================================================
-  function init() {
+  function setupSampleUpload() {
+    const btn = $('sampleUploadBtn');
+    const input = $('sampleFileInput');
+    if (!btn || !input) return;
+    btn.addEventListener('click', () => { if (sampleTargetPad >= 0) input.click(); });
+    input.addEventListener('change', async () => {
+      const file = input.files && input.files[0];
+      input.value = '';                 // permite re-subir el mismo archivo
+      if (!file || sampleTargetPad < 0) return;
+      await uploadSampleFile(file, sampleTargetPad);
+    });
+  }
+  function setUploadStatus(msg, kind) {
+    const el = $('sampleUploadStatus');
+    if (!el) return;
+    el.hidden = !msg;
+    el.textContent = msg || '';
+    el.className = 'm-upload-status' + (kind ? ' ' + kind : '');
+  }
+  async function uploadSampleFile(file, pad) {
+    try {
+      const isWav = /\.wav$/i.test(file.name) || file.type === 'audio/wav' || file.type === 'audio/x-wav';
+      let blob, name;
+      if (isWav && file.size <= 8 * 1024 * 1024) {
+        blob = file;
+        name = file.name;
+      } else {
+        setUploadStatus('Convirtiendo audio…', '');
+        const wav = await decodeToWav(file);
+        blob = wav;
+        name = file.name.replace(/\.[^.]+$/, '') + '.wav';
+        if (blob.size > 8 * 1024 * 1024) { setUploadStatus('Archivo muy grande tras convertir (máx 8MB)', 'err'); return; }
+      }
+      setUploadStatus('Subiendo… 0%', '');
+      await postSample(blob, name, pad);
+    } catch (err) {
+      setUploadStatus('Error: ' + (err && err.message ? err.message : err), 'err');
+    }
+  }
+  function postSample(blob, name, pad) {
+    return new Promise((resolve, reject) => {
+      const fd = new FormData();
+      fd.append('file', blob, name);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload?pad=' + pad);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) setUploadStatus('Subiendo… ' + Math.round((e.loaded / e.total) * 100) + '%', '');
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          setUploadStatus('✅ ' + name + ' cargado en pad ' + (pad + 1), 'ok');
+          triggerPad(pad);
+          setTimeout(() => { setUploadStatus('', ''); closeSampleSheet(); }, 1200);
+          resolve();
+        } else {
+          reject(new Error('HTTP ' + xhr.status));
+        }
+      };
+      xhr.onerror = () => reject(new Error('fallo de red'));
+      xhr.send(fd);
+    });
+  }
+  // Decodifica cualquier audio (MP3, etc.) y lo re-codifica a WAV PCM 16-bit.
+  async function decodeToWav(file) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) throw new Error('navegador sin Web Audio');
+    const ctx = new AC();
+    try {
+      const buf = await file.arrayBuffer();
+      const audio = await ctx.decodeAudioData(buf);
+      return encodeWav(audio);
+    } finally {
+      try { ctx.close(); } catch (_) {}
+    }
+  }
+  function encodeWav(audio) {
+    const numCh = Math.min(2, audio.numberOfChannels);
+    const sr = audio.sampleRate;
+    const len = audio.length;
+    const chans = [];
+    for (let c = 0; c < numCh; c++) chans.push(audio.getChannelData(c));
+    const bytesPerSample = 2;
+    const blockAlign = numCh * bytesPerSample;
+    const dataLen = len * blockAlign;
+    const buffer = new ArrayBuffer(44 + dataLen);
+    const view = new DataView(buffer);
+    const wstr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+    wstr(0, 'RIFF'); view.setUint32(4, 36 + dataLen, true); wstr(8, 'WAVE');
+    wstr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+    view.setUint16(22, numCh, true); view.setUint32(24, sr, true);
+    view.setUint32(28, sr * blockAlign, true); view.setUint16(32, blockAlign, true);
+    view.setUint16(34, 16, true);
+    wstr(36, 'data'); view.setUint32(40, dataLen, true);
+    let off = 44;
+    for (let i = 0; i < len; i++) {
+      for (let c = 0; c < numCh; c++) {
+        let s = Math.max(-1, Math.min(1, chans[c][i]));
+        view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        off += 2;
+      }
+    }
+    return new Blob([buffer], { type: 'audio/wav' });
+  }
     initTheme();
     initNav();
     initTransport();

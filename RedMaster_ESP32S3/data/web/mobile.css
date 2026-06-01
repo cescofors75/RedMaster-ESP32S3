@@ -140,6 +140,21 @@ body {
   0%   { filter: brightness(1.5) saturate(1.6); transform: scale(1.0); }
   100% { filter: brightness(2.4) saturate(2.0); transform: scale(.965); }
 }
+/* Modo roll armado (velocidad ≠ OFF): todos los pads muestran un borde
+   neón pulsante para indicar que al MANTENER pulsado harán redoble. */
+.m-pads.roll-armed .m-pad {
+  box-shadow:
+    inset 0 -4px 8px rgba(0,0,0,.5),
+    inset 0 1px 0 rgba(255,255,255,.18),
+    0 0 0 2px var(--pad-c),
+    0 0 12px var(--pad-c);
+  animation: m-roll-armed 1s ease-in-out infinite;
+}
+.m-pads.roll-armed .m-pad.rolling { animation: m-roll-pulse .12s steps(2) infinite; }
+@keyframes m-roll-armed {
+  0%, 100% { filter: brightness(1.0); }
+  50%      { filter: brightness(1.35) saturate(1.25); }
+}
 .m-pad {
   position: relative;
   border: none; border-radius: 14px;
@@ -197,11 +212,13 @@ body {
   display: flex;
   flex: 1 1 0;
   overflow: hidden;
+  touch-action: none;
 }
 .m-key {
   position: relative; flex: 1 1 0;
   border-right: 1px solid #000;
   background: linear-gradient(#fafafa, #d8d8d8);
+  touch-action: none;
 }
 .m-key:last-child { border-right: none; }
 .m-key.black {
@@ -262,15 +279,16 @@ body {
   flex: 0 0 24px; font-size: 9px; font-weight: 700; color: var(--r808-text-dim);
   text-align: right; padding-right: 2px;
 }
-/* Botones Mute / Solo por pista */
+/* Botones Mute / Solo por pista (grandes y claros) */
 .m-trk-btn {
-  flex: 0 0 16px; width: 16px; height: 16px; margin-right: 1px;
-  border-radius: 4px; border: 1px solid rgba(255,255,255,.12);
-  background: rgba(255,255,255,.05); color: var(--r808-text-dim);
-  font-size: 9px; font-weight: 800; line-height: 1; padding: 0;
+  flex: 0 0 22px; width: 22px; height: 20px; margin-right: 2px;
+  border-radius: 5px; border: 1px solid rgba(255,255,255,.28);
+  background: rgba(255,255,255,.08); color: var(--r808-text-dim);
+  font-size: 12px; font-weight: 900; line-height: 1; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-.m-trk-mute.on { background: #ff3b30; border-color: #ff6a5a; color: #fff; box-shadow: 0 0 6px #ff3b30; }
-.m-trk-solo.on { background: #ffcc00; border-color: #ffe066; color: #1a1300; box-shadow: 0 0 6px #ffcc00; }
+.m-trk-mute.on { background: #ff3b30; border-color: #ff8a7a; color: #fff; box-shadow: 0 0 8px #ff3b30; }
+.m-trk-solo.on { background: #ffcc00; border-color: #ffe066; color: #1a1300; box-shadow: 0 0 8px #ffcc00; }
 .m-dot-cell {
   width: 14px; height: 14px; flex: 0 0 14px;
   border-radius: 50%;
@@ -374,6 +392,20 @@ body {
 }
 
 /* ---------- Sample picker sheet ---------- */
+.m-upload-btn {
+  width: 100%; padding: 13px; margin-bottom: 10px;
+  border-radius: 10px; border: 1px dashed var(--r808-accent-cyan);
+  background: rgba(0,180,220,.10); color: var(--r808-text);
+  font-size: 14px; font-weight: 800;
+}
+.m-upload-btn:active { background: rgba(0,180,220,.22); }
+.m-upload-status {
+  margin-bottom: 10px; padding: 9px 12px; border-radius: 8px;
+  font-size: 13px; font-weight: 700; text-align: center;
+  background: var(--r808-bg-elevated); color: var(--r808-text);
+}
+.m-upload-status.ok  { background: #143d1a; color: #6cff8a; }
+.m-upload-status.err { background: #3d1414; color: #ff7a6a; }
 .m-fam-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .m-fam-chips button {
   padding: 6px 11px; border-radius: 8px; border: 1px solid var(--r808-border);
