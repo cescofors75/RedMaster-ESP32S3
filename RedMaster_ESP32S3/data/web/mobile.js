@@ -18,22 +18,24 @@
     '#ff3b30','#ff9500','#ffcc00','#34c759','#00e5ff','#0a84ff','#5e5ce6','#bf5af2',
     '#ff2d55','#ff6b3d','#a3d900','#30d158','#64d2ff','#5ac8fa','#af52de','#ff375f'
   ];
-  // Filtros simplificados (índice = tipo que espera el firmware).
-  const FILTERS = [
-    { i: 0, n: 'OFF',       e: '🚫' },
-    { i: 1, n: 'LOW PASS',  e: '🔥' },
-    { i: 2, n: 'HIGH PASS', e: '✨' },
-    { i: 3, n: 'BAND PASS', e: '📞' },
-    { i: 4, n: 'NOTCH',     e: '🕳️' },
-    { i: 6, n: 'PEAKING',   e: '⛰️' },
-    { i: 9, n: 'RESONANT',  e: '⚡' },
-    { i: 10,n: 'LADDER',    e: '🎚️' },
-    { i: 11,n: 'SVF LP',    e: '🌊' }
+  // Efectos "modo niño": presets con nombre divertido aplicados a TODAS las
+  // pistas a la vez. `type` es el filtro que espera el firmware (1..9), `res`
+  // la resonancia. El cutoff lo controla el slider "Tono".
+  const FX_PRESETS = [
+    { id: 'off',    name: 'Normal',    emoji: '🎵', color: '#5b6472', type: 0, res: 1 },
+    { id: 'sub',    name: 'Submarino', emoji: '🌊', color: '#0a84ff', type: 1, res: 3 },
+    { id: 'bright', name: 'Brillante', emoji: '✨', color: '#ffcc00', type: 2, res: 2 },
+    { id: 'phone',  name: 'Teléfono',  emoji: '📞', color: '#ff9500', type: 3, res: 5 },
+    { id: 'robot',  name: 'Robot',     emoji: '🤖', color: '#34c759', type: 9, res: 12 },
+    { id: 'tunnel', name: 'Túnel',     emoji: '🕳️', color: '#bf5af2', type: 4, res: 6 }
   ];
   const STEP_COUNTS = [16, 32, 64];
   // Piano: una octava = 12 semitonos. Patrón de teclas negras.
   const WHITE_OFFSETS = [0, 2, 4, 5, 7, 9, 11];
   const BLACK = { 0: 1, 1: 3, 3: 6, 4: 8, 5: 10 }; // posición blanca -> semitono negro
+  // Colores arcoíris para las 7 teclas blancas (modo niño).
+  const WHITE_COLORS = ['#ff4d4d', '#ff9f40', '#ffd633', '#4dd964', '#36c5f0', '#5b8def', '#b06bf0'];
+  const PIANO_ENGINE = 3; // motor fijo (sin selector técnico para el niño)
   // Temas visuales (re-pintan los tokens RED808 vía body[data-theme]).
   const THEMES = [
     { id: 'red',    name: 'RED808', color: '#ff3b30' },
@@ -52,9 +54,8 @@
   let bpm = 120;
   let stepCount = 16;
   let octave = 4;
-  let fxTrack = 0;
+  let activeFxPreset = 'off';
   const seqState = []; // seqState[track][step] = bool
-  const trackFilter = new Array(16).fill(0);
   for (let t = 0; t < 16; t++) seqState.push(new Array(64).fill(false));
 
   const $ = (id) => document.getElementById(id);
@@ -103,10 +104,6 @@
       if (d.step !== undefined) highlightPlayhead(d.step);
       if (d.playing !== undefined) setPlaying(!!d.playing, false);
       if (d.pattern !== undefined) setPatternSel(d.pattern, false);
-      if (Array.isArray(d.trackFilters)) {
-        d.trackFilters.forEach((ft, t) => { if (t < 16) trackFilter[t] = ft | 0; });
-        renderFilters();
-      }
       return;
     }
     if (type === 'pattern') {
@@ -205,7 +202,6 @@
   // Piano
   // =====================================================================
   function initPiano() {
-    $('pianoEngine').addEventListener('change', () => {});
     $('octUp').addEventListener('click', () => { octave = Math.min(7, octave + 1); $('octVal').textContent = octave; buildPiano(); });
     $('octDown').addEventListener('click', () => { octave = Math.max(1, octave - 1); $('octVal').textContent = octave; buildPiano(); });
     $('octVal').textContent = octave;
@@ -223,6 +219,7 @@
         const note = (octave + o) * 12 + semitone;
         const key = document.createElement('div');
         key.className = 'm-key';
+        key.style.setProperty('--kc', WHITE_COLORS[w]);
         bindKey(key, note);
         piano.appendChild(key);
       }
@@ -244,16 +241,15 @@
     }
   }
   function bindKey(el, note) {
-    const engine = () => parseInt($('pianoEngine').value, 10) || 3;
     const down = (e) => {
       e.preventDefault();
       el.classList.add('down');
-      send({ cmd: 'synthNoteOnEx', engine: engine(), note, velocity: 110, accent: false, slide: false });
+      send({ cmd: 'synthNoteOnEx', engine: PIANO_ENGINE, note, velocity: 110, accent: false, slide: false });
     };
     const up = (e) => {
       if (e) e.preventDefault();
       el.classList.remove('down');
-      send({ cmd: 'synthNoteOff', engine: engine(), track: 255, note });
+      send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note });
     };
     el.addEventListener('touchstart', down, { passive: false });
     el.addEventListener('touchend', up, { passive: false });
@@ -343,55 +339,52 @@
   // Filtros
   // =====================================================================
   function initFx() {
-    const sel = $('fxTrack');
-    TRACK_NAMES.forEach((n, i) => {
-      const o = document.createElement('option');
-      o.value = String(i); o.textContent = `${i + 1} · ${n}`; sel.appendChild(o);
-    });
-    sel.addEventListener('change', () => { fxTrack = parseInt(sel.value, 10) || 0; renderFilters(); });
-
-    const grid = $('filterGrid');
-    FILTERS.forEach((f) => {
+    const grid = $('fxPresets');
+    FX_PRESETS.forEach((p) => {
       const b = document.createElement('button');
-      b.className = 'm-filter-btn';
-      b.dataset.type = f.i;
-      b.innerHTML = `<span class="ico">${f.e}</span>${f.n}`;
-      b.addEventListener('click', () => applyFilter(f.i));
+      b.className = 'm-fx-preset';
+      b.dataset.id = p.id;
+      b.style.setProperty('--fx-c', p.color);
+      b.innerHTML = `<span class="fx-emoji">${p.emoji}</span>${p.name}`;
+      b.addEventListener('click', () => applyKidFx(p.id));
       grid.appendChild(b);
     });
-
-    $('cutoff').addEventListener('input', onFxSlider);
-    $('resonance').addEventListener('input', onFxSlider);
-    renderFilters();
+    $('tono').addEventListener('input', onTono);
+    renderFx();
+    onTono(); // pinta la etiqueta inicial
   }
-  function applyFilter(type) {
-    trackFilter[fxTrack] = type;
-    if (type === 0) {
-      send({ cmd: 'clearTrackFilter', track: fxTrack });
-    } else {
-      send({
-        cmd: 'setTrackFilter', track: fxTrack, type,
-        cutoff: parseFloat($('cutoff').value),
-        resonance: parseFloat($('resonance').value),
-        gain: 0
-      });
+  // Slider Tono 0..100 -> cutoff 120..9000 Hz (curva exponencial, más musical).
+  function tonoCutoff() {
+    const v = parseFloat($('tono').value) / 100;
+    return Math.round(120 * Math.pow(9000 / 120, v));
+  }
+  function applyKidFx(id) {
+    activeFxPreset = id;
+    const p = FX_PRESETS.find((x) => x.id === id) || FX_PRESETS[0];
+    const cutoff = tonoCutoff();
+    for (let t = 0; t < 16; t++) {
+      if (p.type === 0) {
+        send({ cmd: 'clearTrackFilter', track: t });
+      } else {
+        send({ cmd: 'setTrackFilter', track: t, type: p.type, cutoff, resonance: p.res, gain: 0 });
+      }
     }
-    renderFilters();
+    renderFx();
   }
-  function onFxSlider() {
-    const cutoff = parseFloat($('cutoff').value);
-    const res = parseFloat($('resonance').value);
-    $('cutoffVal').textContent = cutoff >= 1000 ? (cutoff / 1000).toFixed(1) + ' kHz' : cutoff + ' Hz';
-    $('resVal').textContent = res.toFixed(1);
-    const type = trackFilter[fxTrack];
-    if (type > 0) {
-      send({ cmd: 'setTrackFilter', track: fxTrack, type, cutoff, resonance: res, gain: 0 });
+  function onTono() {
+    const v = parseFloat($('tono').value);
+    $('tonoVal').textContent = v < 33 ? 'grave' : (v > 66 ? 'agudo' : 'medio');
+    const p = FX_PRESETS.find((x) => x.id === activeFxPreset);
+    if (p && p.type > 0) {
+      const cutoff = tonoCutoff();
+      for (let t = 0; t < 16; t++) {
+        send({ cmd: 'setTrackFilter', track: t, type: p.type, cutoff, resonance: p.res, gain: 0 });
+      }
     }
   }
-  function renderFilters() {
-    const active = trackFilter[fxTrack] | 0;
-    document.querySelectorAll('#filterGrid .m-filter-btn').forEach((b) =>
-      b.classList.toggle('active', parseInt(b.dataset.type, 10) === active));
+  function renderFx() {
+    document.querySelectorAll('#fxPresets .m-fx-preset').forEach((b) =>
+      b.classList.toggle('active', b.dataset.id === activeFxPreset));
   }
 
   // =====================================================================
@@ -435,7 +428,6 @@
     initPiano();
     initSeq();
     initFx();
-    onFxSlider();
     connect();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
