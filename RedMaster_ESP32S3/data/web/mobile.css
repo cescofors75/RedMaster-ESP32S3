@@ -24,16 +24,28 @@ body {
   padding-top: env(safe-area-inset-top);
 }
 
-/* ---------- Top bar ---------- */
+/* ---------- Top bar (two rows, fits iPhone 12 / 390px) ---------- */
 .m-top {
   flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 12px 8px;
+  background: var(--r808-bg-surface);
+  border-bottom: 1px solid var(--r808-border);
+}
+.m-top-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 12px;
-  background: var(--r808-bg-surface);
-  border-bottom: 1px solid var(--r808-border);
+}
+.m-top-row2 .m-transport { width: 100%; justify-content: space-between; }
+.m-top-row2 .m-pattern { flex: 1 1 auto; min-width: 0; }
+.m-theme-btn {
+  width: 40px; height: 40px; flex: 0 0 auto;
+  border-radius: 10px; border: 1px solid var(--r808-border);
+  background: var(--r808-bg-elevated); font-size: 20px; line-height: 1;
 }
 .m-brand { display: flex; align-items: center; gap: 8px; }
 .m-logo { font-weight: 700; letter-spacing: 1px; font-size: 17px; }
@@ -220,3 +232,55 @@ body {
 .m-tab span { font-size: 10px; font-weight: 600; }
 .m-tab.is-active { color: var(--r808-red-light); }
 .m-tab.is-active span { color: var(--r808-text); }
+
+/* ---------- Theme picker (bottom sheet) ---------- */
+.m-sheet-backdrop {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(0, 0, 0, .55);
+}
+.m-theme-sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  background: var(--r808-bg-surface);
+  border-top: 1px solid var(--r808-border);
+  border-radius: 18px 18px 0 0;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, .5);
+  animation: m-sheet-up .18s ease;
+}
+@keyframes m-sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.m-theme-sheet-head { font-weight: 700; font-size: 15px; margin-bottom: 14px; }
+.m-theme-options { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.m-theme-opt {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px; border-radius: 12px;
+  border: 1px solid var(--r808-border);
+  background: var(--r808-bg-elevated);
+  color: var(--r808-text); font-weight: 600; font-size: 14px;
+}
+.m-theme-opt.active {
+  border-color: var(--r808-red-light);
+  box-shadow: 0 0 0 2px var(--r808-red-light) inset;
+}
+.m-theme-swatch {
+  width: 22px; height: 22px; flex: 0 0 auto; border-radius: 50%;
+  background: var(--sw, #fff);
+  box-shadow: 0 0 8px var(--sw, #fff);
+}
+
+/* ---------- Visual themes (override RED808 tokens on <body>) ---------- */
+body[data-theme="neon"] {
+  --r808-red-primary: #00e5ff; --r808-red-dark: #0093a8; --r808-red-light: #34e3f0; --r808-red-glow: #7df0fb;
+  --r808-accent-cyan: #ff2d95; --r808-bg-base: #05080f; --r808-bg-surface: #0b1018;
+}
+body[data-theme="acid"] {
+  --r808-red-primary: #00ff88; --r808-red-dark: #08a85a; --r808-red-light: #4dffa6; --r808-red-glow: #9dffce;
+  --r808-accent-cyan: #ffe600; --r808-bg-base: #060b07; --r808-bg-surface: #0c130d;
+}
+body[data-theme="sunset"] {
+  --r808-red-primary: #ff7a18; --r808-red-dark: #c84e00; --r808-red-light: #ff9d4d; --r808-red-glow: #ffc18a;
+  --r808-accent-cyan: #ff3d7f; --r808-bg-base: #0f0a07; --r808-bg-surface: #17100b;
+}
+body[data-theme="violet"] {
+  --r808-red-primary: #bf5af2; --r808-red-dark: #8e2fc4; --r808-red-light: #d08bff; --r808-red-glow: #e3b8ff;
+  --r808-accent-cyan: #46e6c8; --r808-bg-base: #0a0710; --r808-bg-surface: #120d1c;
+}

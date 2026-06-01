@@ -15,18 +15,23 @@
 <body>
   <!-- Top transport bar -->
   <header class="m-top">
-    <div class="m-brand">
-      <span class="m-dot" id="connDot" title="Conexión"></span>
-      <span class="m-logo">RED<b>808</b></span>
-    </div>
-    <div class="m-transport">
-      <button class="m-play" id="playBtn" aria-label="Play/Stop">▶</button>
-      <div class="m-bpm">
-        <button class="m-bpm-btn" id="bpmDown">−</button>
-        <span class="m-bpm-val" id="bpmVal">120</span>
-        <button class="m-bpm-btn" id="bpmUp">+</button>
+    <div class="m-top-row m-top-row1">
+      <div class="m-brand">
+        <span class="m-dot" id="connDot" title="Conexión"></span>
+        <span class="m-logo">RED<b>808</b></span>
       </div>
-      <select class="m-pattern" id="patternSel" aria-label="Patrón"></select>
+      <button class="m-theme-btn" id="themeBtn" aria-label="Tema visual" title="Tema visual">🎨</button>
+    </div>
+    <div class="m-top-row m-top-row2">
+      <div class="m-transport">
+        <button class="m-play" id="playBtn" aria-label="Play/Stop">▶</button>
+        <div class="m-bpm">
+          <button class="m-bpm-btn" id="bpmDown">−</button>
+          <span class="m-bpm-val" id="bpmVal">120</span>
+          <button class="m-bpm-btn" id="bpmUp">+</button>
+        </div>
+        <select class="m-pattern" id="patternSel" aria-label="Patrón"></select>
+      </div>
     </div>
   </header>
 
@@ -88,6 +93,13 @@
       </div>
     </section>
   </main>
+
+  <!-- Theme picker (bottom sheet) -->
+  <div class="m-sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <div class="m-theme-sheet" id="themeSheet" hidden>
+    <div class="m-theme-sheet-head">🎨 Tema visual</div>
+    <div class="m-theme-options" id="themeOptions"></div>
+  </div>
 
   <!-- Bottom view switcher -->
   <nav class="m-nav">

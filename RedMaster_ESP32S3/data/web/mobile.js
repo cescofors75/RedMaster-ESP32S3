@@ -34,6 +34,15 @@
   // Piano: una octava = 12 semitonos. Patrón de teclas negras.
   const WHITE_OFFSETS = [0, 2, 4, 5, 7, 9, 11];
   const BLACK = { 0: 1, 1: 3, 3: 6, 4: 8, 5: 10 }; // posición blanca -> semitono negro
+  // Temas visuales (re-pintan los tokens RED808 vía body[data-theme]).
+  const THEMES = [
+    { id: 'red',    name: 'RED808', color: '#ff3b30' },
+    { id: 'neon',   name: 'Neon',   color: '#00e5ff' },
+    { id: 'acid',   name: 'Acid',   color: '#00ff88' },
+    { id: 'sunset', name: 'Sunset', color: '#ff7a18' },
+    { id: 'violet', name: 'Violet', color: '#bf5af2' }
+  ];
+  const THEME_KEY = 'r808_mobile_theme';
 
   // ---- Estado ----------------------------------------------------------
   let ws = null;
@@ -386,9 +395,40 @@
   }
 
   // =====================================================================
+  // Temas visuales
+  // =====================================================================
+  function initTheme() {
+    const opts = $('themeOptions');
+    THEMES.forEach((t) => {
+      const b = document.createElement('button');
+      b.className = 'm-theme-opt';
+      b.dataset.theme = t.id;
+      b.innerHTML = `<span class="m-theme-swatch" style="--sw:${t.color}"></span>${t.name}`;
+      b.addEventListener('click', () => { applyTheme(t.id); closeThemeSheet(); });
+      opts.appendChild(b);
+    });
+    let saved = 'red';
+    try { saved = localStorage.getItem(THEME_KEY) || 'red'; } catch (_) {}
+    if (!THEMES.some((t) => t.id === saved)) saved = 'red';
+    applyTheme(saved);
+
+    $('themeBtn').addEventListener('click', openThemeSheet);
+    $('sheetBackdrop').addEventListener('click', closeThemeSheet);
+  }
+  function applyTheme(id) {
+    document.body.dataset.theme = id;
+    try { localStorage.setItem(THEME_KEY, id); } catch (_) {}
+    document.querySelectorAll('#themeOptions .m-theme-opt').forEach((b) =>
+      b.classList.toggle('active', b.dataset.theme === id));
+  }
+  function openThemeSheet() { $('themeSheet').hidden = false; $('sheetBackdrop').hidden = false; }
+  function closeThemeSheet() { $('themeSheet').hidden = true; $('sheetBackdrop').hidden = true; }
+
+  // =====================================================================
   // Init
   // =====================================================================
   function init() {
+    initTheme();
     initNav();
     initTransport();
     initPads();
