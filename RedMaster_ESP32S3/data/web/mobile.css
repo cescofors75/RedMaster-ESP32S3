@@ -168,7 +168,7 @@ body {
   flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 10px; gap: 8px;
 }
-.m-step-count { display: flex; gap: 6px; }
+.m-step-count { display: none; }
 .m-step-count button {
   height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--r808-border);
   background: var(--r808-bg-elevated); color: var(--r808-text); font-size: 13px;
@@ -181,14 +181,14 @@ body {
 .m-seq-scroll { flex: 1 1 auto; overflow: auto; }
 /* Compacto: 16 pasos caben en iPhone 12 vertical (~390px) sin scroll. */
 .m-seq { display: flex; flex-direction: column; gap: 3px; min-width: max-content; }
-.m-seq-row { display: flex; align-items: center; gap: 3px; }
+.m-seq-row { display: flex; align-items: center; gap: 1px; }
 .m-seq-label {
   flex: 0 0 24px; font-size: 9px; font-weight: 700; color: var(--r808-text-dim);
   text-align: right; padding-right: 2px;
 }
 .m-dot-cell {
-  width: 17px; height: 17px; flex: 0 0 17px;
-  border-radius: 50%;
+  width: 20px; height: 22px; flex: 0 0 20px;
+  border-radius: 5px;
   background: rgba(255,255,255,.07);
   border: 1px solid rgba(255,255,255,.06);
   transition: transform .05s, background .08s, box-shadow .08s;

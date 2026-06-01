@@ -1,0 +1,26 @@
+{
+  "$schema": "https://cdn.statically.io/gh/nguyenngoclongdev/cdn/main/schema/v11/terminal-keeper.json",
+  "theme": "Chaos",
+  "active": "default",
+  "activateOnStartup": true,
+  "keepExistingTerminals": false,
+  "sessions": {
+    "default": [
+      {
+        "name": "Monitor Daisy",
+        "autoExecuteCommands": true,
+        "icon": "circuit-board",
+        "color": "terminal.ansiCyan",
+        "commands": [
+          "$env:USERPROFILE\\.platformio\\penv\\Scripts\\platformio.exe device monitor --port COM18 --baud 115200"
+        ]
+      },
+      {
+        "name": "pwsh",
+        "icon": "terminal-powershell",
+        "color": "terminal.ansiMagenta",
+        "commands": []
+      }
+    ]
+  }
+}

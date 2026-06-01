@@ -18,6 +18,19 @@
     '#ff3b30','#ff9500','#ffcc00','#34c759','#00e5ff','#0a84ff','#5e5ce6','#bf5af2',
     '#ff2d55','#ff6b3d','#a3d900','#30d158','#64d2ff','#5ac8fa','#af52de','#ff375f'
   ];
+  // Paletas por tema visual (16 colores, uno por pista).
+  const PALETTES = {
+    red:    PALETTE,
+    neon:   ['#00e5ff','#ff2d95','#7dff3a','#ffe600','#4488ff','#ff6b3d','#bf5af2','#34c759',
+             '#00cfff','#ff99cc','#4dffa6','#ffd000','#36c5f0','#ff8c42','#d070ff','#00ff88'],
+    acid:   ['#00ff88','#ffe600','#a3f000','#39ff14','#00e5ff','#4dffa6','#ffd633','#b3ff00',
+             '#80ff44','#f5e642','#c8ff00','#00ffc8','#39ff14','#80ff00','#e6ff00','#00ff55'],
+    sunset: ['#ff7a18','#ff2d55','#ff9d4d','#ff3d7f','#ffc18a','#ff6b3d','#ff4444','#ff9966',
+             '#ff5500','#ff1493','#ff8c00','#ff3366','#ffaa44','#ff6699','#ff7733','#ff4080'],
+    violet: ['#bf5af2','#5e5ce6','#5ac8fa','#ff2d95','#af52de','#0a84ff','#7048e8','#c77dff',
+             '#9b59b6','#3498db','#e056fd','#6c5ce7','#74b9ff','#fd79a8','#a29bfe','#e84393']
+  };
+  let currentPalette = PALETTE;
   // Efectos "modo niño": presets con nombre divertido aplicados a TODAS las
   // pistas a la vez. `type` es el filtro que espera el firmware (1..9), `res`
   // la resonancia. El cutoff lo controla el slider "Tono".
@@ -187,7 +200,7 @@
     for (let i = 0; i < 16; i++) {
       const pad = document.createElement('button');
       pad.className = 'm-pad';
-      pad.style.setProperty('--pad-c', PALETTE[i]);
+      pad.style.setProperty('--pad-c', currentPalette[i]);
       pad.innerHTML = `${TRACK_NAMES[i]}<small>${i + 1}</small>`;
       const hit = (e) => { e.preventDefault(); triggerPad(i); flash(pad); };
       pad.addEventListener('touchstart', hit, { passive: false });
@@ -210,7 +223,7 @@
   function buildPiano() {
     const piano = $('piano');
     piano.innerHTML = '';
-    const OCTS = 2;                 // dos octavas visibles
+    const OCTS = 1;                 // una octava: teclas grandes en móvil
     const whiteCount = 7 * OCTS;
     // Teclas blancas
     for (let o = 0; o < OCTS; o++) {
@@ -263,14 +276,6 @@
   // Sequencer (grid de puntos de colores)
   // =====================================================================
   function initSeq() {
-    const sc = $('stepCountSel');
-    STEP_COUNTS.forEach((c) => {
-      const b = document.createElement('button');
-      b.textContent = c; b.dataset.count = c;
-      b.classList.toggle('active', c === stepCount);
-      b.addEventListener('click', () => { send({ cmd: 'setStepCount', count: c }); applyStepCount(c); });
-      sc.appendChild(b);
-    });
     $('seqClear').addEventListener('click', clearPattern);
     buildSeqGrid();
   }
@@ -291,12 +296,12 @@
       const label = document.createElement('div');
       label.className = 'm-seq-label';
       label.textContent = TRACK_NAMES[t];
-      label.style.color = PALETTE[t];
+      label.style.color = currentPalette[t];
       row.appendChild(label);
       for (let s = 0; s < stepCount; s++) {
         const dot = document.createElement('div');
         dot.className = 'm-dot-cell' + (s % 4 === 0 ? ' beat' : '');
-        dot.style.setProperty('--dot-c', PALETTE[t]);
+        dot.style.setProperty('--dot-c', currentPalette[t]);
         dot.dataset.track = t; dot.dataset.step = s;
         dot.addEventListener('click', () => toggleStep(t, s, dot));
         row.appendChild(dot);
@@ -411,8 +416,19 @@
   function applyTheme(id) {
     document.body.dataset.theme = id;
     try { localStorage.setItem(THEME_KEY, id); } catch (_) {}
+    currentPalette = PALETTES[id] || PALETTE;
     document.querySelectorAll('#themeOptions .m-theme-opt').forEach((b) =>
       b.classList.toggle('active', b.dataset.theme === id));
+    // Re-pintar pads con la paleta del tema
+    document.querySelectorAll('#padsGrid .m-pad').forEach((pad, i) =>
+      pad.style.setProperty('--pad-c', currentPalette[i]));
+    // Re-pintar etiquetas y dots del sequencer
+    document.querySelectorAll('#seqGrid .m-seq-row').forEach((row, t) => {
+      const lbl = row.querySelector('.m-seq-label');
+      if (lbl) lbl.style.color = currentPalette[t];
+      row.querySelectorAll('.m-dot-cell').forEach((dot) =>
+        dot.style.setProperty('--dot-c', currentPalette[t]));
+    });
   }
   function openThemeSheet() { $('themeSheet').hidden = false; $('sheetBackdrop').hidden = false; }
   function closeThemeSheet() { $('themeSheet').hidden = true; $('sheetBackdrop').hidden = true; }
