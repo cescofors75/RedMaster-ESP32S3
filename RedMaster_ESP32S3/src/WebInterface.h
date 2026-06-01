@@ -136,7 +136,6 @@ private:
   // File upload handlers
   void handleUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
   void handleDaisyUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
-  void handleCleanTrackUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final);
   void pumpPadTransfer();  // non-blocking pad sample → Daisy (a few chunks/tick)
 
   // Deferred sample load — set by handleUpload callback, consumed by update() in main loop

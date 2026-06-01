@@ -28,7 +28,6 @@
                     <span class="hdr-pattern-readout" id="headerPatternReadout">P01</span>
                     <span class="hdr-step-readout" id="headerStepIndicator" title="Step activo">S--</span>
                     <button class="hdr-transport-btn hdr-panic-btn" id="headerPanicBtn" title="Apagar todas las notas colgadas (ESC)">🛑</button>
-                    <button class="hdr-transport-btn hdr-stem-btn" id="headerStemUploadBtn" title="Subir WAV a la primera clean track libre" onclick="showCleanTrackUploadDialog()">SUBIR STEM</button>
                 </div>
                 <!-- BPM -->
                 <div class="hdr-ctrl" id="meter-bpm">
@@ -101,7 +100,6 @@
         <nav class="tab-navigation">
             <button class="tab-btn active" data-tab="performance">🎹 LIVE PADS</button>
             <button class="tab-btn" data-tab="xtra-pads">🎲 XTRA PADS</button>
-            <button class="tab-btn tab-btn-stems" data-tab="stems">🎼 STEMS</button>
             <button class="tab-btn" data-tab="sequencer">🎵 SEQUENCER</button>
             <button class="tab-btn" data-tab="volumes">🎚️ VOLUMENES</button>
             <button class="tab-btn" data-tab="melody">🎼 MELODY</button>
@@ -160,20 +158,6 @@
                         <span class="no-filters">Añade XTRA pads para aplicar filtros individuales</span>
                     </div>
                 </div>
-            </section>
-        </div>
-
-        <div id="tab-stems" class="tab-content">
-            <section id="section-stems" class="stems-section" data-section="stems" data-title="Stems">
-                <div class="stems-header">
-                    <div>
-                        <h2>STEMS</h2>
-                        <p class="stems-description">Aquí subes WAV largos, ves el nombre del clip, el estado real en Daisy y una preview de onda.</p>
-                    </div>
-                    <button class="clean-track-upload-btn clean-track-upload-btn-primary" onclick="showCleanTrackUploadDialog()">SUBIR WAV</button>
-                </div>
-                <div class="clean-tracks-summary" id="cleanTracksSummary"></div>
-                <div class="clean-tracks-grid" id="cleanTracksGrid"></div>
             </section>
         </div>
 
@@ -1455,12 +1439,6 @@
                         <span class="info-value">SPI → Daisy Seed (STM32H750)</span>
                     </div>
                 </div>
-            </section>
-
-            <section id="section-clean-tracks" class="device-info" data-section="clean-tracks" data-title="Clean Tracks">
-                <div class="info-title">🎚️ CLEAN TRACKS</div>
-                <div class="clean-tracks-summary" id="cleanTracksSummary">0/4 ocupadas • modelo híbrido en preparación</div>
-                <div class="clean-tracks-grid" id="cleanTracksGrid"></div>
             </section>
 
             <!-- Instruments Info Section -->

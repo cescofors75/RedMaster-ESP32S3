@@ -675,9 +675,6 @@
                             <button class="export-action-btn export-wav-btn" onclick="doExportWAV('mix')">
                                 <span>🎚️</span> Mix Stereo
                             </button>
-                            <button class="export-action-btn export-wav-btn export-wav-stems" onclick="doExportWAV('stems')">
-                                <span>📂</span> Stems (todos)
-                            </button>
                         </div>
 
                         <!-- Track selector for individual rendering -->
@@ -798,29 +795,25 @@
         if (progressEl) progressEl.style.display = 'flex';
 
         try {
-            if (mode === 'stems' || mode === 'selected') {
-                let selectedTracks = null;
-
-                if (mode === 'selected') {
-                    // Get selected tracks from checkboxes
-                    const checkboxes = document.querySelectorAll('#exportTrackGrid input[type="checkbox"]:checked');
-                    selectedTracks = Array.from(checkboxes).map(cb => parseInt(cb.value));
-                    if (selectedTracks.length === 0) {
-                        updateExportProgress('⚠ Selecciona al menos una pista', 0);
-                        setTimeout(() => { if (progressEl) progressEl.style.display = 'none'; }, 2000);
-                        return;
-                    }
+            if (mode === 'selected') {
+                // Get selected tracks from checkboxes
+                const checkboxes = document.querySelectorAll('#exportTrackGrid input[type="checkbox"]:checked');
+                const selectedTracks = Array.from(checkboxes).map(cb => parseInt(cb.value));
+                if (selectedTracks.length === 0) {
+                    updateExportProgress('⚠ Selecciona al menos una pista', 0);
+                    setTimeout(() => { if (progressEl) progressEl.style.display = 'none'; }, 2000);
+                    return;
                 }
 
-                updateExportProgress('Renderizando stems...', 5);
+                updateExportProgress('Renderizando pistas...', 5);
                 const tracks = await renderIndividualTracks(patternData, bpm, { sampleRate, bitDepth, selectedTracks });
 
-                // If only 1 stem, download directly
+                // If only 1 track, download directly
                 if (tracks.length <= 1 && tracks.length > 0) {
                     const blob = new Blob([tracks[0].wav], { type: 'audio/wav' });
                     downloadBlob(blob, `${filename}_${tracks[0].name}.wav`);
                 } else {
-                    // Download each stem
+                    // Download each track
                     for (const trk of tracks) {
                         const blob = new Blob([trk.wav], { type: 'audio/wav' });
                         downloadBlob(blob, `${filename}_${trk.name}.wav`);

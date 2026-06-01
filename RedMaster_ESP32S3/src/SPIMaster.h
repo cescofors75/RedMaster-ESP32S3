@@ -14,7 +14,7 @@
 
 // SPI fire-and-forget queue — Core0 (WS/WiFi) → Core1 (SPI task) dispatch.
 // Prevents the async WebSocket handler from blocking on SPI mutex.
-// 544 = enough to hold a CleanTrack/Sample data chunk: 256 samples * int16_t = 512 +
+// 544 = enough to hold a Sample data chunk: 256 samples * int16_t = 512 +
 // SampleDataHeader (~16) + slack. With queue depth 64 ⇒ ~35 KB RAM.
 static constexpr uint16_t SPI_QUEUE_PAYLOAD_MAX = 544;
 struct SpiQueuedCmd {
@@ -323,11 +323,6 @@ public:
     bool beginSampleStream(int padIndex, uint32_t numSamples);
     bool writeSampleStreamData(int padIndex, const int16_t* samples, uint16_t numSamples, uint32_t startSample);
     bool endSampleStream(int padIndex, bool ok, uint32_t totalSamples);
-    bool beginCleanTrackStream(int trackIndex, uint32_t numSamples);
-    bool writeCleanTrackStreamData(int trackIndex, const int16_t* samples, uint16_t numSamples, uint32_t startSample);
-    bool endCleanTrackStream(int trackIndex, bool ok, uint32_t totalSamples);
-    bool setCleanTrackActive(int trackIndex, bool active);
-    bool setCleanTrackMute(int trackIndex, bool muted);
     void unloadSample(int padIndex);
     void unloadAllSamples();
 

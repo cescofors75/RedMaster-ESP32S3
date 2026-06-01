@@ -266,23 +266,6 @@ const instrumentPalette = [
 ];
 
 const padSampleMetadata = new Array(16).fill(null);
-const CLEAN_TRACK_COUNT = 4;
-const cleanTrackState = Array.from({ length: CLEAN_TRACK_COUNT }, (_, index) => ({
-    id: index,
-    name: `Stem ${index + 1}`,
-    occupied: false,
-    loaded: false,
-    armed: true,
-    muted: false,
-    playing: false,
-    clipName: '',
-    status: 'empty',
-    movable: true
-}));
-const cleanTrackWaveforms = Array.from({ length: CLEAN_TRACK_COUNT }, () => null);
-const CLEAN_TRACK_WAVEFORMS_KEY = 'red808.cleanTrackWaveforms.v1';
-let pendingCleanTrackPreview = null;
-let cleanTrackUploadBusy = false;
 let daisySamplesLoadedCount = 0;
 const DEFAULT_SAMPLE_QUALITY = '44.1kHz • 16-bit mono';
 const sampleCatalog = {};
@@ -290,28 +273,6 @@ let sampleSelectorContext = null;
 let pendingAutoPlayPad = null;
 let activeSampleFilter = 'ALL';
 
-function loadCleanTrackWaveformsFromStorage() {
-    try {
-        const saved = JSON.parse(localStorage.getItem(CLEAN_TRACK_WAVEFORMS_KEY) || '[]');
-        if (Array.isArray(saved)) {
-            saved.slice(0, CLEAN_TRACK_COUNT).forEach((peaks, index) => {
-                cleanTrackWaveforms[index] = Array.isArray(peaks) ? peaks : null;
-            });
-        }
-    } catch (error) {
-        console.warn('[CleanTracks] waveform cache ignored:', error);
-    }
-}
-
-function saveCleanTrackWaveformsToStorage() {
-    try {
-        localStorage.setItem(CLEAN_TRACK_WAVEFORMS_KEY, JSON.stringify(cleanTrackWaveforms));
-    } catch (error) {
-        console.warn('[CleanTracks] waveform cache save failed:', error);
-    }
-}
-
-loadCleanTrackWaveformsFromStorage();
 let sampleBrowserRenderTimer = null;
 let sampleRequestTimers = [];
 let sampleRetryTimer = null;
@@ -357,7 +318,6 @@ document.addEventListener('DOMContentLoaded', () => {
     initWebSocket();
     createPads();
     createSequencer();
-    renderCleanTracks();
     setupControls();
     initHeaderMeters();
     initVolumesSection();
@@ -466,9 +426,6 @@ function handleWebSocketMessage(data) {
             updateDeviceStats(data);
             if (Array.isArray(data.samples)) {
                 applySampleMetadataFromState(data.samples);
-            }
-            if (Array.isArray(data.cleanTracks)) {
-                applyCleanTrackState(data.cleanTracks);
             }
             // Load pad filter states (only update DOM if changed)
             if (Array.isArray(data.padFilters)) {
@@ -2839,241 +2796,6 @@ function updateInstrumentMetadata(padIndex) {
     qualityEl.textContent = `Format: ${meta.format} • ${meta.quality}`;
 }
 
-function applyCleanTrackState(trackList) {
-    if (!Array.isArray(trackList)) return;
-    cleanTrackState.forEach((track, index) => {
-        const incoming = trackList.find((item) => item && Number(item.id) === index);
-        if (!incoming) {
-            track.id = index;
-            track.name = `Stem ${index + 1}`;
-            track.occupied = false;
-            track.loaded = false;
-            track.clipName = '';
-            track.status = 'empty';
-            track.movable = true;
-            cleanTrackWaveforms[index] = null;
-            return;
-        }
-        track.id = index;
-        track.name = incoming.name || `Stem ${index + 1}`;
-        track.occupied = !!incoming.occupied;
-        track.loaded = !!incoming.loaded;
-        track.armed = incoming.armed !== false;
-        track.muted = !!incoming.muted;
-        track.playing = !!incoming.playing;
-        track.clipName = incoming.clipName || '';
-        track.status = incoming.status || (track.loaded ? 'loaded' : (track.occupied ? 'assigned' : 'empty'));
-        track.movable = incoming.movable !== false;
-        if (!track.occupied) cleanTrackWaveforms[index] = null;
-    });
-    saveCleanTrackWaveformsToStorage();
-    renderCleanTracks();
-}
-
-function buildCleanTrackWaveformMarkup(peaks) {
-    if (!Array.isArray(peaks) || peaks.length === 0) {
-        return '<div class="clean-track-wave is-empty">sin preview</div>';
-    }
-    return `
-        <div class="clean-track-wave">
-            ${peaks.map((peak) => {
-                const height = Math.max(8, Math.min(100, Math.round(peak * 100)));
-                return `<span class="clean-track-wave-bar" style="height:${height}%"></span>`;
-            }).join('')}
-        </div>
-    `;
-}
-
-async function createCleanTrackWaveformPreview(file) {
-    const arrayBuffer = await file.arrayBuffer();
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    try {
-        const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
-        const channelData = audioBuffer.getChannelData(0);
-        const bars = 48;
-        const blockSize = Math.max(1, Math.floor(channelData.length / bars));
-        const peaks = [];
-        for (let index = 0; index < bars; index++) {
-            let peak = 0;
-            const start = index * blockSize;
-            const end = Math.min(channelData.length, start + blockSize);
-            for (let sample = start; sample < end; sample++) {
-                const value = Math.abs(channelData[sample]);
-                if (value > peak) peak = value;
-            }
-            peaks.push(peak);
-        }
-        return peaks;
-    } finally {
-        if (audioCtx && audioCtx.state !== 'closed') {
-            audioCtx.close().catch(() => {});
-        }
-    }
-}
-
-function renderCleanTracks() {
-    const grid = document.getElementById('cleanTracksGrid');
-    const summary = document.getElementById('cleanTracksSummary');
-    if (!grid) return;
-
-    const occupiedCount = cleanTrackState.reduce((count, track) => count + (track.occupied ? 1 : 0), 0);
-    const loadedCount = cleanTrackState.reduce((count, track) => count + (track.loaded ? 1 : 0), 0);
-    const playingCount = cleanTrackState.reduce((count, track) => count + (track.playing ? 1 : 0), 0);
-    const hasFreeSlot = cleanTrackState.some((track) => !track.occupied);
-    if (summary) {
-        summary.innerHTML = `
-            <span>${occupiedCount}/${cleanTrackState.length} ocupadas • ${loadedCount} cargadas en Daisy • ${playingCount} sonando</span>
-            <button class="clean-track-upload-btn" onclick="showCleanTrackUploadDialog()" ${(!hasFreeSlot || cleanTrackUploadBusy) ? 'disabled' : ''}>
-                ${cleanTrackUploadBusy ? 'SUBIENDO...' : 'SUBIR WAV'}
-            </button>
-        `;
-    }
-
-    updateSequencerStemRows();
-
-    grid.innerHTML = cleanTrackState.map((track) => {
-        const stateClass = `${track.loaded ? 'is-loaded' : 'is-empty'} ${track.playing ? 'is-playing' : ''}`.trim();
-        const statusText = track.status || (track.loaded ? 'loaded' : 'empty');
-        const clipName = track.clipName || 'Vacía. Sube un WAV para crear esta stem.';
-        const waveformMarkup = buildCleanTrackWaveformMarkup(cleanTrackWaveforms[track.id]);
-        const nextFreeTrack = cleanTrackState.find((item) => !item.occupied);
-        const canUploadHere = nextFreeTrack && nextFreeTrack.id === track.id && !cleanTrackUploadBusy;
-        return `
-            <article class="clean-track-card ${stateClass}" data-clean-track="${track.id}">
-                <div class="clean-track-head">
-                    <span class="clean-track-name">${escapeHtml(track.name)}</span>
-                    <span class="clean-track-status">${escapeHtml(statusText)}</span>
-                </div>
-                <div class="clean-track-badges">
-                    <span class="clean-track-badge">${track.playing ? 'sonando' : (track.armed ? 'armada' : 'parada')}</span>
-                    <span class="clean-track-badge">${track.muted ? 'mute' : 'audio'}</span>
-                    <span class="clean-track-badge">slot ${track.id + 1}</span>
-                </div>
-                <div class="clean-track-clip ${track.clipName ? '' : 'is-empty'}">${escapeHtml(clipName)}</div>
-                ${waveformMarkup}
-                <div class="clean-track-actions">
-                    <button class="clean-track-upload-btn" onclick="showCleanTrackUploadDialog(${track.id})" ${!canUploadHere ? 'disabled' : ''}>${track.occupied ? 'OCUPADA' : 'SUBIR AQUÍ'}</button>
-                    <button class="clean-track-upload-btn" onclick="toggleCleanTrackActive(${track.id})" ${(!track.occupied || !track.loaded) ? 'disabled' : ''}>${track.armed ? 'STOP' : 'PLAY'}</button>
-                    <button class="clean-track-upload-btn" onclick="toggleCleanTrackMute(${track.id})" ${!track.occupied ? 'disabled' : ''}>${track.muted ? 'UNMUTE' : 'MUTE'}</button>
-                </div>
-                <div class="clean-track-meta-row">
-                    <span>Slot ${track.id + 1}</span>
-                    <span>${track.movable ? 'movible' : 'fijo'}</span>
-                    <span>${track.loaded ? 'Daisy OK' : 'sin cargar'}</span>
-                </div>
-            </article>
-        `;
-    }).join('');
-}
-
-function toggleCleanTrackActive(trackId) {
-    const track = cleanTrackState.find((item) => item.id === trackId);
-    if (!track || !track.occupied) return;
-    sendWebSocket({ cmd: 'setCleanTrackActive', track: trackId, active: !track.armed });
-}
-
-function toggleCleanTrackMute(trackId) {
-    const track = cleanTrackState.find((item) => item.id === trackId);
-    if (!track || !track.occupied) return;
-    sendWebSocket({ cmd: 'setCleanTrackMute', track: trackId, muted: !track.muted });
-}
-
-function showCleanTrackUploadDialog(preferredTrackId = null) {
-    const freeTrack = cleanTrackState.find((track) => !track.occupied);
-    if (!freeTrack) {
-        if (window.showToast) {
-            window.showToast('❌ No hay clean tracks libres', window.TOAST_TYPES.ERROR, 3000);
-        }
-        return;
-    }
-
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.wav';
-    input.style.display = 'none';
-    input.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        if (!file.name.toLowerCase().endsWith('.wav')) {
-            if (window.showToast) {
-                window.showToast('❌ Solo se permiten archivos WAV', window.TOAST_TYPES.ERROR, 3000);
-            }
-            return;
-        }
-        uploadCleanTrack(file, preferredTrackId);
-    });
-    document.body.appendChild(input);
-    input.click();
-    setTimeout(() => input.remove(), 1000);
-}
-
-async function uploadCleanTrack(file, preferredTrackId = null) {
-    const freeTrack = cleanTrackState.find((track) => !track.occupied);
-    if (!freeTrack) {
-        if (window.showToast) {
-            window.showToast('❌ No hay clean tracks libres', window.TOAST_TYPES.ERROR, 3000);
-        }
-        return;
-    }
-
-    if (preferredTrackId !== null && freeTrack.id !== preferredTrackId) {
-        if (window.showToast) {
-            window.showToast(`⚠️ La siguiente stem libre es la ${freeTrack.id + 1}`, window.TOAST_TYPES.INFO, 2600);
-        }
-    }
-
-    try {
-        pendingCleanTrackPreview = await createCleanTrackWaveformPreview(file);
-    } catch (error) {
-        pendingCleanTrackPreview = null;
-        console.warn('[CleanTrackUpload] waveform preview failed:', error);
-    }
-
-    cleanTrackUploadBusy = true;
-    renderCleanTracks();
-    if (window.showToast) {
-        window.showToast(`📤 Subiendo ${file.name} a la primera clean track libre...`, window.TOAST_TYPES.INFO, 2200);
-    }
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    fetch('/api/upload?target=cleanTrack', {
-        method: 'POST',
-        body: formData
-    })
-    .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok || !data.success) {
-            throw new Error(data.message || 'Upload failed');
-        }
-        if (typeof data.cleanTrackId === 'number' && pendingCleanTrackPreview) {
-            cleanTrackWaveforms[data.cleanTrackId] = pendingCleanTrackPreview;
-            saveCleanTrackWaveformsToStorage();
-        }
-        if (window.showToast) {
-            window.showToast(`✅ Stem ${data.cleanTrackId + 1}: ${data.clipName}`, window.TOAST_TYPES.SUCCESS, 3000);
-        }
-        switchTab('stems');
-        renderCleanTracks();
-    })
-    .catch((error) => {
-        console.error('[CleanTrackUpload] Error:', error);
-        if (window.showToast) {
-            window.showToast(`❌ Error al subir stem: ${error.message}`, window.TOAST_TYPES.ERROR, 4000);
-        }
-    })
-    .finally(() => {
-        pendingCleanTrackPreview = null;
-        cleanTrackUploadBusy = false;
-        renderCleanTracks();
-    });
-}
-
-window.showCleanTrackUploadDialog = showCleanTrackUploadDialog;
-window.toggleCleanTrackActive = toggleCleanTrackActive;
-window.toggleCleanTrackMute = toggleCleanTrackMute;
-
 function escapeHtml(value) {
     return String(value ?? '')
         .replace(/&/g, '&amp;')
@@ -3960,96 +3682,8 @@ function rebuildSequencerGrid(stepCount) {
     grid.classList.remove('steps-16', 'steps-32', 'steps-64');
     grid.classList.add(`steps-${stepCount}`);
 
-    // Stem rows (one per clean track, DAW-style)
-    updateSequencerStemRows();
-
     // Update playhead
     requestAnimationFrame(() => updateSequencerPlayhead(currentStep));
-}
-
-// ── Stem rows in the sequencer grid ──────────────────────────────────────────
-const STEM_COLORS_SEQ = ['#00e5ff', '#c77dff', '#ff9f1c', '#57cc99'];
-
-function stemGridTemplateForStepCount(stepCount) {
-    if (stepCount <= 16) return `72px repeat(${stepCount}, 1fr) 50px`;
-    if (stepCount <= 32) return `62px repeat(${stepCount}, 1fr) 44px`;
-    return `52px repeat(${stepCount}, 1fr) 40px`;
-}
-
-function makeStemStepCells(peaks, stepCount, occupied) {
-    const cells = [];
-    for (let step = 0; step < stepCount; step++) {
-        let peak = 0;
-        if (Array.isArray(peaks) && peaks.length > 0) {
-            const start = Math.floor((step / stepCount) * peaks.length);
-            const end = Math.max(start + 1, Math.floor(((step + 1) / stepCount) * peaks.length));
-            for (let index = start; index < end && index < peaks.length; index++) {
-                peak = Math.max(peak, Number(peaks[index]) || 0);
-            }
-        }
-        const height = occupied ? Math.max(4, Math.min(100, Math.round(peak * 100))) : 0;
-        const beatClass = step % 16 === 0 && step > 0 ? ' bar-start' : (step % 4 === 0 ? ' beat-step' : '');
-        cells.push(`<div class="seq-stem-step${beatClass}" data-step="${step}"><span class="seq-stem-step-bar" style="height:${height}%"></span></div>`);
-    }
-    return cells.join('');
-}
-
-function updateSequencerStemRows() {
-    const grid = document.getElementById('sequencerGrid');
-    if (!grid) return;
-    const stepCount = currentStepCount || stepColumns.length || 16;
-
-    // Remove old rows and rebuild
-    grid.querySelectorAll('.seq-stem-row').forEach(el => el.remove());
-
-    cleanTrackState.forEach((track, i) => {
-        const color = STEM_COLORS_SEQ[i % STEM_COLORS_SEQ.length];
-        const row = document.createElement('div');
-        row.className = 'seq-stem-row' +
-            (track.playing ? ' is-playing' : '') +
-            (track.occupied ? ' is-occupied' : ' is-empty-slot');
-        row.dataset.stemIndex = i;
-        row.style.setProperty('--stem-color', color);
-        row.style.gridTemplateColumns = stemGridTemplateForStepCount(stepCount);
-
-        // Label
-        const label = document.createElement('div');
-        label.className = 'seq-stem-label';
-        const shortName = track.clipName
-            ? track.clipName.replace(/\.[^.]+$/, '').substring(0, 10).toUpperCase()
-            : `STEM ${i + 1}`;
-        label.innerHTML =
-            `<span class="seq-stem-name" style="color:${color}">${escapeHtml(shortName)}</span>` +
-            (track.playing ? '<span class="seq-stem-playing-dot"></span>' : '');
-
-        const waveCells = makeStemStepCells(cleanTrackWaveforms[i], stepCount, track.occupied);
-
-        // Controls
-        const ctrl = document.createElement('div');
-        ctrl.className = 'seq-stem-controls';
-
-        const muteBtn = document.createElement('button');
-        muteBtn.className = 'seq-stem-btn' + (track.muted ? ' s-muted' : '');
-        muteBtn.textContent = 'M';
-        muteBtn.title = track.muted ? 'Unmute stem' : 'Mute stem';
-        muteBtn.disabled = !track.occupied;
-        muteBtn.addEventListener('click', () => toggleCleanTrackMute(i));
-
-        const playBtn = document.createElement('button');
-        playBtn.className = 'seq-stem-btn' + (track.armed ? ' s-armed' : '');
-        playBtn.textContent = track.armed ? '\u25A0' : '\u25B6';
-        playBtn.title = track.armed ? 'Detener stem' : 'Activar stem';
-        playBtn.disabled = !track.occupied || !track.loaded;
-        playBtn.addEventListener('click', () => toggleCleanTrackActive(i));
-
-        ctrl.appendChild(muteBtn);
-        ctrl.appendChild(playBtn);
-
-        row.appendChild(label);
-        row.insertAdjacentHTML('beforeend', waveCells);
-        row.appendChild(ctrl);
-        grid.appendChild(row);
-    });
 }
 
 function toggleStep(track, step, element) {
