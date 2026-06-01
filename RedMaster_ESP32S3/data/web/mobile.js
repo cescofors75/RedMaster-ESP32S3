@@ -21,26 +21,26 @@
   // Paletas por tema visual (16 colores, uno por pista).
   const PALETTES = {
     red:    PALETTE,
-    neon:   ['#00e5ff','#ff2d95','#7dff3a','#ffe600','#4488ff','#ff6b3d','#bf5af2','#34c759',
-             '#00cfff','#ff99cc','#4dffa6','#ffd000','#36c5f0','#ff8c42','#d070ff','#00ff88'],
-    acid:   ['#00ff88','#ffe600','#a3f000','#39ff14','#00e5ff','#4dffa6','#ffd633','#b3ff00',
-             '#80ff44','#f5e642','#c8ff00','#00ffc8','#39ff14','#80ff00','#e6ff00','#00ff55'],
-    sunset: ['#ff7a18','#ff2d55','#ff9d4d','#ff3d7f','#ffc18a','#ff6b3d','#ff4444','#ff9966',
-             '#ff5500','#ff1493','#ff8c00','#ff3366','#ffaa44','#ff6699','#ff7733','#ff4080'],
-    violet: ['#bf5af2','#5e5ce6','#5ac8fa','#ff2d95','#af52de','#0a84ff','#7048e8','#c77dff',
-             '#9b59b6','#3498db','#e056fd','#6c5ce7','#74b9ff','#fd79a8','#a29bfe','#e84393']
+    neon:   ['#00e5ff','#ff2d95','#7dff3a','#ffe600','#4488ff','#ff5fa0','#bf5af2','#34c759',
+             '#00cfff','#ff80c0','#4dffa6','#ffd000','#36c5f0','#ff3385','#d070ff','#00ffcc'],
+    acid:   ['#00ff88','#c8ff00','#39ff14','#ffe600','#80ff00','#4dffa6','#b3ff00','#00ffc8',
+             '#a3f000','#f5e642','#00ff55','#e6ff00','#44ff88','#aaff00','#66ff33','#00ffaa'],
+    sunset: ['#ff7a18','#ff2d55','#ff9d4d','#ff3d7f','#ffcc00','#ff6b3d','#ff5500','#ff9966',
+             '#ffc18a','#ff1493','#ff8c00','#ff3366','#ffaa44','#ff6699','#ff7733','#ff4080'],
+    retro:  ['#f5a623','#e74c3c','#f39c12','#d35400','#e67e22','#c0392b','#f1c40f','#ca6f1e',
+             '#eb984e','#d68910','#f5b041','#a93226','#fad7a0','#dc7633','#f0b27a','#e59866']
   };
   let currentPalette = PALETTE;
   // Efectos "modo niño": presets con nombre divertido aplicados a TODAS las
   // pistas a la vez. `type` es el filtro que espera el firmware (1..9), `res`
   // la resonancia. El cutoff lo controla el slider "Tono".
   const FX_PRESETS = [
-    { id: 'off',    name: 'Normal',    emoji: '🎵', color: '#5b6472', type: 0, res: 1 },
-    { id: 'sub',    name: 'Submarino', emoji: '🌊', color: '#0a84ff', type: 1, res: 3 },
-    { id: 'bright', name: 'Brillante', emoji: '✨', color: '#ffcc00', type: 2, res: 2 },
-    { id: 'phone',  name: 'Teléfono',  emoji: '📞', color: '#ff9500', type: 3, res: 5 },
-    { id: 'robot',  name: 'Robot',     emoji: '🤖', color: '#34c759', type: 9, res: 12 },
-    { id: 'tunnel', name: 'Túnel',     emoji: '🕳️', color: '#bf5af2', type: 4, res: 6 }
+    { id: 'off',    name: 'Normal',    emoji: '🎵', color: '#5b6472', type: 0,  cutoff: 4000, res: 1   },
+    { id: 'sub',    name: 'Submarino', emoji: '🌊', color: '#0a84ff', type: 1,  cutoff: 220,  res: 7   },
+    { id: 'bright', name: 'Brillante', emoji: '✨', color: '#ffcc00', type: 2,  cutoff: 2800, res: 3   },
+    { id: 'phone',  name: 'Teléfono',  emoji: '📞', color: '#ff9500', type: 3,  cutoff: 1400, res: 9   },
+    { id: 'robot',  name: 'Robot',     emoji: '🤖', color: '#34c759', type: 9,  cutoff: 900,  res: 16  },
+    { id: 'tunnel', name: 'Túnel',     emoji: '🕳️', color: '#bf5af2', type: 14, cutoff: 420,  res: 18  }
   ];
   const STEP_COUNTS = [16, 32, 64];
   // Piano: una octava = 12 semitonos. Patrón de teclas negras.
@@ -48,14 +48,20 @@
   const BLACK = { 0: 1, 1: 3, 3: 6, 4: 8, 5: 10 }; // posición blanca -> semitono negro
   // Colores arcoíris para las 7 teclas blancas (modo niño).
   const WHITE_COLORS = ['#ff4d4d', '#ff9f40', '#ffd633', '#4dd964', '#36c5f0', '#5b8def', '#b06bf0'];
-  const PIANO_ENGINE = 3; // motor fijo (sin selector técnico para el niño)
+  const PIANO_ENGINES = [
+    { id: 3, label: '303' },
+    { id: 4, label: 'WT' },
+    { id: 5, label: 'SH101' },
+    { id: 6, label: 'FM2OP' }
+  ];
+  let pianoEngine = 3;
   // Temas visuales (re-pintan los tokens RED808 vía body[data-theme]).
   const THEMES = [
     { id: 'red',    name: 'RED808', color: '#ff3b30' },
     { id: 'neon',   name: 'Neon',   color: '#00e5ff' },
     { id: 'acid',   name: 'Acid',   color: '#00ff88' },
     { id: 'sunset', name: 'Sunset', color: '#ff7a18' },
-    { id: 'violet', name: 'Violet', color: '#bf5af2' }
+    { id: 'retro',  name: 'Retro',  color: '#f5a623' }
   ];
   const THEME_KEY = 'r808_mobile_theme';
 
@@ -125,7 +131,8 @@
       if (d.index !== undefined) setPatternSel(d.index, false);
       return;
     }
-    if (type === 'step') { highlightPlayhead(d.step); return; }
+    if (type === 'step') { highlightPlayhead(d.step); syncFlashPads(d.step); return; }
+    if (type === 'pad') { flashPadEl(d.pad); return; }
     if (type === 'stepCount' && d.count) { applyStepCount(d.count); return; }
   }
 
@@ -210,6 +217,22 @@
   }
   function triggerPad(i) { sendBinary([0x90, i, 127]); }
   function flash(el) { el.classList.add('hit'); setTimeout(() => el.classList.remove('hit'), 90); }
+  function flashPadEl(idx) {
+    const pads = document.querySelectorAll('#padsGrid .m-pad');
+    if (pads[idx]) flash(pads[idx]);
+  }
+  let _syncFlashTimer = null;
+  function syncFlashPads(step) {
+    if (!isPlaying) return;
+    const pads = document.querySelectorAll('#padsGrid .m-pad');
+    const toFlash = [];
+    for (let t = 0; t < 16; t++) {
+      if (seqState[t][step] && pads[t]) { pads[t].classList.add('sync-flash'); toFlash.push(pads[t]); }
+    }
+    if (!toFlash.length) return;
+    if (_syncFlashTimer) clearTimeout(_syncFlashTimer);
+    _syncFlashTimer = setTimeout(() => { toFlash.forEach(e => e.classList.remove('sync-flash')); _syncFlashTimer = null; }, 110);
+  }
 
   // =====================================================================
   // Piano
@@ -218,51 +241,63 @@
     $('octUp').addEventListener('click', () => { octave = Math.min(7, octave + 1); $('octVal').textContent = octave; buildPiano(); });
     $('octDown').addEventListener('click', () => { octave = Math.max(1, octave - 1); $('octVal').textContent = octave; buildPiano(); });
     $('octVal').textContent = octave;
+    // Selector de engine
+    const pianoSection = $('view-piano');
+    const engBar = document.createElement('div');
+    engBar.className = 'm-engine-sel';
+    engBar.id = 'engineSel';
+    PIANO_ENGINES.forEach(({ id, label }) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.dataset.engine = String(id);
+      b.classList.toggle('active', id === pianoEngine);
+      b.addEventListener('click', () => {
+        pianoEngine = id;
+        document.querySelectorAll('#engineSel button').forEach(x => x.classList.toggle('active', +x.dataset.engine === id));
+      });
+      engBar.appendChild(b);
+    });
+    pianoSection.querySelector('.m-piano-bar').after(engBar);
     buildPiano();
   }
   function buildPiano() {
     const piano = $('piano');
     piano.innerHTML = '';
-    const OCTS = 1;                 // una octava: teclas grandes en móvil
-    const whiteCount = 7 * OCTS;
-    // Teclas blancas
-    for (let o = 0; o < OCTS; o++) {
+    const wPct = 100 / 7;
+    for (let o = 0; o < 2; o++) {         // 2 filas apiladas = 2 octavas
+      const row = document.createElement('div');
+      row.className = 'm-piano-row';
+      const oct = octave + o;
       for (let w = 0; w < 7; w++) {
-        const semitone = WHITE_OFFSETS[w];
-        const note = (octave + o) * 12 + semitone;
+        const note = oct * 12 + WHITE_OFFSETS[w];
         const key = document.createElement('div');
         key.className = 'm-key';
         key.style.setProperty('--kc', WHITE_COLORS[w]);
         bindKey(key, note);
-        piano.appendChild(key);
+        row.appendChild(key);
       }
-    }
-    // Teclas negras (posicionadas en %)
-    const wPct = 100 / whiteCount;
-    for (let o = 0; o < OCTS; o++) {
       for (let w = 0; w < 7; w++) {
         if (!(w in BLACK)) continue;
-        const semitone = BLACK[w];
-        const note = (octave + o) * 12 + semitone;
-        const idx = o * 7 + w;
+        const note = oct * 12 + BLACK[w];
         const key = document.createElement('div');
         key.className = 'm-key black';
-        key.style.left = `calc(${(idx + 1) * wPct}% - 3.5%)`;
+        key.style.left = `calc(${(w + 1) * wPct}% - 3.5%)`;
         bindKey(key, note);
-        piano.appendChild(key);
+        row.appendChild(key);
       }
+      piano.appendChild(row);
     }
   }
   function bindKey(el, note) {
     const down = (e) => {
       e.preventDefault();
       el.classList.add('down');
-      send({ cmd: 'synthNoteOnEx', engine: PIANO_ENGINE, note, velocity: 110, accent: false, slide: false });
+      send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: false });
     };
     const up = (e) => {
       if (e) e.preventDefault();
       el.classList.remove('down');
-      send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note });
+      send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note });
     };
     el.addEventListener('touchstart', down, { passive: false });
     el.addEventListener('touchend', up, { passive: false });
@@ -358,10 +393,15 @@
     renderFx();
     onTono(); // pinta la etiqueta inicial
   }
-  // Slider Tono 0..100 -> cutoff 120..9000 Hz (curva exponencial, más musical).
+  // Slider Tono 0..100 -> cutoff según preset (curva exponencial, más musical).
   function tonoCutoff() {
+    const p = FX_PRESETS.find((x) => x.id === activeFxPreset) || FX_PRESETS[0];
+    if (p.type === 0) return 4000;
     const v = parseFloat($('tono').value) / 100;
-    return Math.round(120 * Math.pow(9000 / 120, v));
+    // Rango dinámico por preset: submarina baja frecuencia, brillante alta
+    const lo = p.type === 1 ? 80  : p.type === 14 ? 100 : 200;
+    const hi = p.type === 2 ? 12000 : p.type === 14 ? 1200 : 6000;
+    return Math.round(lo * Math.pow(hi / lo, v));
   }
   function applyKidFx(id) {
     activeFxPreset = id;
@@ -408,6 +448,8 @@
     let saved = 'red';
     try { saved = localStorage.getItem(THEME_KEY) || 'red'; } catch (_) {}
     if (!THEMES.some((t) => t.id === saved)) saved = 'red';
+    // Migrar tema 'violet' antiguo → 'retro'
+    if (saved === 'violet') saved = 'retro';
     applyTheme(saved);
 
     $('themeBtn').addEventListener('click', openThemeSheet);
