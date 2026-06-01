@@ -471,90 +471,6 @@ body {
 }
 .pb-help .dot.out { background: var(--pb-red); box-shadow: 0 0 8px var(--pb-red); }
 
-#pbMacroPanel {
-  min-width: 0;
-  width: 100%;
-  border: 1px solid rgba(255,255,255,0.14);
-  border-radius: 14px;
-  padding: 14px;
-  background: linear-gradient(165deg, rgba(10,15,23,0.78), rgba(8,10,16,0.78));
-}
-.pb-macro-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  font-size: 14px;
-  font-weight: 700;
-  color: #9fbed6;
-  letter-spacing: 1.5px;
-}
-.pb-macro-scenes {
-  display: flex;
-  gap: 6px;
-}
-.pb-macro-scenes button,
-.pb-macro-actions button {
-  border: 1.5px solid rgba(255,255,255,0.22);
-  border-radius: 8px;
-  background: rgba(255,255,255,0.08);
-  color: #dff7ff;
-  font-family: var(--pb-font);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 8px 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.pb-macro-scenes button:hover,
-.pb-macro-actions button:hover {
-  background: rgba(255,255,255,0.14);
-  transform: translateY(-1px);
-}
-.pb-macro-scenes button.is-active {
-  border-color: rgba(0,229,255,0.6);
-  background: rgba(0,229,255,0.2);
-  color: #d9feff;
-  box-shadow: 0 0 12px rgba(0,229,255,0.2);
-}
-.pb-macro-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 14px;
-}
-.pb-macro-grid label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 1.2px;
-  color: #9fb2c8;
-}
-.pb-macro-grid input[type="range"] {
-  width: 100%;
-  height: 6px;
-  -webkit-appearance: none;
-  appearance: none;
-  border-radius: 3px;
-  background: var(--pb-border);
-  outline: none;
-}
-.pb-macro-grid input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 18px; height: 18px;
-  border-radius: 50%;
-  background: var(--pb-cyan);
-  cursor: pointer;
-  border: 2px solid var(--pb-bg);
-  box-shadow: 0 0 8px rgba(0,229,255,0.4);
-}
-.pb-macro-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-}
-
 .pb-preset-browser-tools {
   display: flex;
   gap: 10px;
@@ -1068,9 +984,6 @@ body {
 @media (max-width: 1400px) {
   #pbToolbar {
     grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
-  }
-  #pbMacroPanel {
-    grid-column: 1 / -1;
   }
 }
 

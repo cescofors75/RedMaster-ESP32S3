@@ -250,13 +250,8 @@ let stepPulseTimer = null;
 let serverPlaying = null;
 let stepDrivenPlaying = false;
 let stepDrivenTimer = null;
-let signalDemoMode = false;
 let viewZoom = 1;
 let gridVisible = true;
-let heatMode = 'on'; // 'off' | 'on' | 'auto'
-let sceneQuantizeEnabled = true;
-let pendingSceneState = null;
-let pendingSceneLabel = '';
 let trackVolumes = new Array(16).fill(100);
 let trackPeaks = new Array(16).fill(0);
 let trackMuted = new Array(16).fill(false);
@@ -268,14 +263,6 @@ const WS_MIN_SEND_GAP_MS = 12;
 const WS_MAX_QUEUE = 240;
 const WS_BOOT_SYNC_DELAY_MS = 34;
 const WS_BOOT_SYNC_MAX_CABLES = 48;
-let activeMacroScene = 'A';
-let macrosEnabled = true;
-let macroScenes = {
-  A: [45, 35, 55, 40],
-  B: [70, 20, 68, 55],
-  C: [25, 62, 34, 22],
-  D: [55, 48, 72, 68]
-};
 
 /* Drag state */
 let drag = null;   // { type:'node'|'cable', nodeId, startX, startY, offsetX, offsetY, fromId, fromType }
@@ -401,10 +388,6 @@ function init() {
   loadViewPrefs();
   applyZoom();
   applyGridVisibility();
-  updateHeatModeButton();
-  updateQuantizeButton();
-  loadMacroScenes();
-  initMacroPanel();
 
   /* Create initial sampler sources */
   for (let i = 0; i < Math.min(INITIAL_SOURCE_COUNT, TRACK_NAMES.length); i++) {
@@ -716,150 +699,6 @@ function sendCmdThrottled(key, cmd, data, delay = 70) {
   throttledCmdTimers.set(key, tid);
 }
 
-function getMacroSliderValues() {
-  const values = [];
-  for (let i = 1; i <= 4; i++) {
-    const el = document.getElementById(`pbMacro${i}`);
-    values.push(el ? parseInt(el.value || '0', 10) : 0);
-  }
-  return values.map(v => Number.isNaN(v) ? 0 : Math.max(0, Math.min(100, v)));
-}
-
-function setMacroSliderValues(values) {
-  if (!Array.isArray(values)) return;
-  for (let i = 1; i <= 4; i++) {
-    const el = document.getElementById(`pbMacro${i}`);
-    if (!el) continue;
-    const v = Math.max(0, Math.min(100, parseInt(values[i - 1] ?? 0, 10) || 0));
-    el.value = String(v);
-  }
-}
-
-function updateMacroSceneButtons() {
-  ['A','B','C','D'].forEach(scene => {
-    const btn = document.getElementById(`pbMacroScene${scene}`);
-    if (!btn) return;
-    btn.classList.toggle('is-active', scene === activeMacroScene);
-  });
-}
-
-function saveMacroScenes() {
-  try {
-    localStorage.setItem('pb_macro_scenes', JSON.stringify({ active: activeMacroScene, scenes: macroScenes }));
-  } catch(ex) {}
-}
-
-function loadMacroScenes() {
-  try {
-    const raw = localStorage.getItem('pb_macro_scenes');
-    if (!raw) return;
-    const parsed = JSON.parse(raw);
-    if (parsed && parsed.scenes) {
-      ['A','B','C','D'].forEach(scene => {
-        if (Array.isArray(parsed.scenes[scene]) && parsed.scenes[scene].length >= 4) {
-          macroScenes[scene] = parsed.scenes[scene].slice(0, 4);
-        }
-      });
-    }
-    if (parsed && ['A','B','C','D'].includes(parsed.active)) {
-      activeMacroScene = parsed.active;
-    }
-  } catch(ex) {}
-}
-
-function applyMacroValue(index, value) {
-  if (!macrosEnabled) return; /* Macros disabled */
-  const v = Math.max(0, Math.min(100, value));
-  if (index === 1) {
-    const cutoff = Math.round(200 + (v / 100) * 11800);
-    sendCmdThrottled('macro:m1', 'setFilterCutoff', { value: cutoff }, 60);
-  } else if (index === 2) {
-    sendCmdThrottled('macro:m2:active', 'setDelayActive', { value: v > 0 }, 80);
-    sendCmdThrottled('macro:m2:mix', 'setDelayMix', { value: v }, 80);
-  } else if (index === 3) {
-    const threshold = -50 + (v / 100) * 44;
-    sendCmdThrottled('macro:m3:active', 'setCompressorActive', { value: v > 0 }, 90);
-    sendCmdThrottled('macro:m3:thr', 'setCompressorThreshold', { value: threshold }, 90);
-  } else if (index === 4) {
-    sendCmdThrottled('macro:m4:sidechain', 'setSidechainPro', {
-      active: v > 0,
-      source: 0,
-      destinations: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-      amount: v,
-      attack: 6,
-      release: 180,
-      knee: 0.45
-    }, 130);
-  }
-}
-
-function applyMacroSceneValues(values) {
-  const safe = (Array.isArray(values) ? values : [0,0,0,0]).slice(0, 4);
-  setMacroSliderValues(safe);
-  for (let i = 0; i < 4; i++) {
-    applyMacroValue(i + 1, parseInt(safe[i], 10) || 0);
-  }
-}
-
-function initMacroPanel() {
-  // Only initialise UI — do NOT send WS commands on page load.
-  // applyMacroSceneValues() will be called explicitly by the user via pbSelectMacroScene/pbLoadMacroScene.
-  setMacroSliderValues(macroScenes[activeMacroScene]);
-  updateMacroSceneButtons();
-
-  for (let i = 1; i <= 4; i++) {
-    const el = document.getElementById(`pbMacro${i}`);
-    if (!el) continue;
-    el.addEventListener('input', () => {
-      const values = getMacroSliderValues();
-      macroScenes[activeMacroScene] = values;
-      applyMacroValue(i, values[i - 1]);
-      saveMacroScenes();
-    });
-  }
-  // Do NOT call applyMacroSceneValues here — avoid sending sidechain/FX commands on every page load.
-}
-
-window.pbSelectMacroScene = function(scene) {
-  if (!['A','B','C','D'].includes(scene)) return;
-  activeMacroScene = scene;
-  updateMacroSceneButtons();
-  applyMacroSceneValues(macroScenes[scene]);
-  saveMacroScenes();
-};
-
-window.pbSaveMacroScene = function() {
-  macroScenes[activeMacroScene] = getMacroSliderValues();
-  saveMacroScenes();
-};
-
-window.pbLoadMacroScene = function() {
-  applyMacroSceneValues(macroScenes[activeMacroScene]);
-};
-
-window.pbToggleMacros = function() {
-  macrosEnabled = !macrosEnabled;
-  const btn = document.getElementById('pbMacroToggleBtn');
-  if (btn) {
-    btn.textContent = macrosEnabled ? '🔊 MACROS ON' : '🔇 MACROS OFF';
-    btn.style.background = macrosEnabled ? 'rgba(105,240,174,0.2)' : 'rgba(255,45,45,0.25)';
-    btn.style.borderColor = macrosEnabled ? 'rgba(105,240,174,0.5)' : 'rgba(255,45,45,0.5)';
-    btn.style.color = macrosEnabled ? '#69f0ae' : '#ff8a8a';
-  }
-  if (!macrosEnabled) {
-    /* Send reset commands to firmware — clear all macro effects */
-    sendCmd('setFilterCutoff', { value: 16000 });
-    sendCmd('setDelayActive', { value: false });
-    sendCmd('setCompressorActive', { value: false });
-    sendCmd('setSidechainPro', { active: false, source: 0, destinations: [], amount: 0, attack: 6, release: 180, knee: 0.45 });
-    console.log('[MACRO] Macros DISABLED — all master FX reset');
-  } else {
-    /* Re-apply current scene */
-    applyMacroSceneValues(macroScenes[activeMacroScene]);
-    console.log('[MACRO] Macros ENABLED — scene', activeMacroScene, 'applied');
-  }
-};
-
 function handleWSMessage(msg) {
   if ((msg.type === 'playState' || msg.type === 'sequencerState' || msg.type === 'status' || msg.type === 'state') && typeof msg.playing !== 'undefined') {
     isPlaying = !!msg.playing;
@@ -887,9 +726,6 @@ function handleWSMessage(msg) {
     if (!Number.isNaN(parsedStep) && parsedStep !== currentStep) {
       currentStep = parsedStep;
       triggerStepPulse();
-      if (pendingSceneState && parsedStep % 4 === 0) {
-        applyQueuedSceneState();
-      }
       if (serverPlaying !== true) {
         stepDrivenPlaying = true;
         updatePlayingVisualState();
@@ -1151,7 +987,7 @@ function applyTempoVisuals() {
 function updatePlayingVisualState() {
   const root = document.getElementById('patchbay');
   if (!root) return;
-  const active = !!(signalDemoMode || serverPlaying || stepDrivenPlaying || isPlaying);
+  const active = !!(serverPlaying || stepDrivenPlaying || isPlaying);
   root.classList.toggle('pb-playing', active);
   /* Update transport button */
   const playBtn = document.getElementById('pbPlayBtn');
@@ -1421,8 +1257,7 @@ function renderCables() {
 
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     const baseWidth = getCableStrokeWidth(cable);
-    const levelNorm = getCableLevelNorm(cable);
-    const cableStroke = isHeatActive() ? getCableHeatColor(cable.color, levelNorm) : cable.color;
+    const cableStroke = cable.color;
     path.setAttribute('d', d);
     path.setAttribute('stroke', cableStroke);
     path.setAttribute('stroke-width', String(baseWidth.toFixed(2)));
@@ -1506,49 +1341,6 @@ function getCableLevelNorm(cable) {
   const volNorm = avg < 0 ? 0.5 : Math.max(0, Math.min(1, avg / 127));
   const peakNorm = p < 0 ? 0.0 : Math.max(0, Math.min(1, p));
   return Math.max(0, Math.min(1, volNorm * 0.35 + peakNorm * 0.65));
-}
-
-function getCableHeatColor(baseHex, levelNorm) {
-  const c = hexToRgb(baseHex);
-  if (!c) return baseHex;
-
-  const cool = { r: 90, g: 170, b: 255 };
-  const hot = { r: 255, g: 62, b: 72 };
-
-  const warmMix = Math.max(0, Math.min(1, levelNorm));
-  const target = {
-    r: Math.round(cool.r + (hot.r - cool.r) * warmMix),
-    g: Math.round(cool.g + (hot.g - cool.g) * warmMix),
-    b: Math.round(cool.b + (hot.b - cool.b) * warmMix)
-  };
-
-  const blendBase = 0.45;
-  const out = {
-    r: Math.round(c.r * (1 - blendBase) + target.r * blendBase),
-    g: Math.round(c.g * (1 - blendBase) + target.g * blendBase),
-    b: Math.round(c.b * (1 - blendBase) + target.b * blendBase)
-  };
-  return rgbToHex(out.r, out.g, out.b);
-}
-
-function hexToRgb(hex) {
-  if (typeof hex !== 'string') return null;
-  const clean = hex.trim().replace('#', '');
-  if (!/^[0-9a-fA-F]{6}$/.test(clean)) return null;
-  const num = parseInt(clean, 16);
-  return {
-    r: (num >> 16) & 255,
-    g: (num >> 8) & 255,
-    b: num & 255
-  };
-}
-
-function rgbToHex(r, g, b) {
-  const rr = Math.max(0, Math.min(255, r)) | 0;
-  const gg = Math.max(0, Math.min(255, g)) | 0;
-  const bb = Math.max(0, Math.min(255, b)) | 0;
-  const v = (rr << 16) | (gg << 8) | bb;
-  return '#' + v.toString(16).padStart(6, '0');
 }
 
 function renderPreviewCable(x1, y1, x2, y2, color) {
@@ -2397,24 +2189,6 @@ window.pbToggleGrid = function() {
   saveViewPrefs();
 };
 
-window.pbToggleHeatMode = function() {
-  if (heatMode === 'off') heatMode = 'on';
-  else if (heatMode === 'on') heatMode = 'auto';
-  else heatMode = 'off';
-  updateHeatModeButton();
-  renderCables();
-  saveViewPrefs();
-};
-
-window.pbToggleSceneQuantize = function() {
-  sceneQuantizeEnabled = !sceneQuantizeEnabled;
-  if (!sceneQuantizeEnabled && pendingSceneState) {
-    applyQueuedSceneState();
-  }
-  updateQuantizeButton();
-  saveViewPrefs();
-};
-
 window.pbSaveSnapshot = function(slot) {
   const key = String(slot || 'A').toUpperCase() === 'B' ? 'B' : 'A';
   localStorage.setItem(`pb_snapshot_${key}`, JSON.stringify(exportState()));
@@ -2512,62 +2286,6 @@ window.pbAutoRoute = function() {
       addCable(pad.id, 'master');
     }
   });
-};
-
-window.pbBuildChain = function() {
-  setPBMenuOpen(false);
-  const fxNodes = nodes.filter(n => n.type === 'fx').sort((a, b) => (a.x - b.x) || (a.y - b.y));
-  if (fxNodes.length === 0) return;
-
-  cables.forEach(c => clearConnection(c));
-  cables = [];
-
-  const firstFx = fxNodes[0];
-  nodes.filter(n => n.type === 'pad').forEach(pad => addCable(pad.id, firstFx.id));
-  for (let i = 0; i < fxNodes.length - 1; i++) {
-    addCable(fxNodes[i].id, fxNodes[i + 1].id);
-  }
-  addCable(fxNodes[fxNodes.length - 1].id, 'master');
-
-  renderCables();
-  updateStatus();
-  saveState();
-};
-
-window.pbOrganizeNodes = function() {
-  setPBMenuOpen(false);
-  const fxNodes = nodes.filter(n => n.type === 'fx').sort((a, b) => (a.x - b.x) || (a.y - b.y));
-  fxNodes.forEach((node, idx) => {
-    const col = idx % 4;
-    const row = Math.floor(idx / 4);
-    node.x = snap(760 + col * 280);
-    node.y = snap(280 + row * 220);
-    const el = document.getElementById('node-' + node.id);
-    if (el) {
-      el.style.left = node.x + 'px';
-      el.style.top = node.y + 'px';
-    }
-  });
-
-  const master = nodes.find(n => n.type === 'master');
-  if (master) {
-    master.x = snap(CANVAS_W - 260);
-    master.y = snap(520);
-    const el = document.getElementById('node-' + master.id);
-    if (el) {
-      el.style.left = master.x + 'px';
-      el.style.top = master.y + 'px';
-    }
-  }
-
-  renderCables();
-  saveState();
-};
-
-window.pbToggleSignalDemo = function() {
-  setPBMenuOpen(false);
-  signalDemoMode = !signalDemoMode;
-  updatePlayingVisualState();
 };
 
 window.pbSavePreset = function() {
@@ -2861,29 +2579,6 @@ function applyGridVisibility() {
   }
 }
 
-function updateHeatModeButton() {
-  const btn = document.getElementById('pbHeatToggleBtn');
-  if (!btn) return;
-  const labels = {
-    off: '🌡 Heat OFF',
-    on: '🌡 Heat ON',
-    auto: '🌡 Heat AUTO'
-  };
-  btn.textContent = labels[heatMode] || '🌡 Heat ON';
-}
-
-function updateQuantizeButton() {
-  const btn = document.getElementById('pbQuantizeBtn');
-  if (!btn) return;
-  if (!sceneQuantizeEnabled) {
-    btn.textContent = '⏱ Quantize OFF';
-    return;
-  }
-  btn.textContent = pendingSceneState
-    ? `⏱ Quantize ON • ${pendingSceneLabel || 'Queued'}`
-    : '⏱ Quantize ON';
-}
-
 function cloneSceneState(state) {
   try {
     return JSON.parse(JSON.stringify(state));
@@ -2899,38 +2594,10 @@ function applySceneStateNow(state) {
   saveState();
 }
 
-function applyQueuedSceneState() {
-  if (!pendingSceneState) return;
-  const queued = pendingSceneState;
-  pendingSceneState = null;
-  pendingSceneLabel = '';
-  applySceneStateNow(queued);
-  updateQuantizeButton();
-}
-
 function scheduleSceneStateApply(state, label = '') {
   const cloned = cloneSceneState(state);
   if (!cloned) return;
-
-  const running = !!(serverPlaying || stepDrivenPlaying || isPlaying);
-  if (!sceneQuantizeEnabled || !running) {
-    pendingSceneState = null;
-    pendingSceneLabel = '';
-    applySceneStateNow(cloned);
-    updateQuantizeButton();
-    return;
-  }
-
-  pendingSceneState = cloned;
-  pendingSceneLabel = label || 'Queued';
-  updateQuantizeButton();
-}
-
-function isHeatActive() {
-  if (heatMode === 'on') return true;
-  if (heatMode === 'off') return false;
-  const isRunning = !!(signalDemoMode || serverPlaying || stepDrivenPlaying || isPlaying);
-  return isRunning;
+  applySceneStateNow(cloned);
 }
 
 function loadViewPrefs() {
@@ -2940,18 +2607,12 @@ function loadViewPrefs() {
     const cfg = JSON.parse(raw);
     if (typeof cfg.zoom === 'number') viewZoom = Math.max(0.5, Math.min(2.5, cfg.zoom));
     if (typeof cfg.gridVisible === 'boolean') gridVisible = cfg.gridVisible;
-    if (typeof cfg.heatMode === 'string' && ['off', 'on', 'auto'].includes(cfg.heatMode)) {
-      heatMode = cfg.heatMode;
-    } else if (typeof cfg.heatModeEnabled === 'boolean') {
-      heatMode = cfg.heatModeEnabled ? 'on' : 'off';
-    }
-    if (typeof cfg.sceneQuantizeEnabled === 'boolean') sceneQuantizeEnabled = cfg.sceneQuantizeEnabled;
   } catch(ex) {}
 }
 
 function saveViewPrefs() {
   try {
-    localStorage.setItem('pb_view', JSON.stringify({ zoom: viewZoom, gridVisible, heatMode, sceneQuantizeEnabled }));
+    localStorage.setItem('pb_view', JSON.stringify({ zoom: viewZoom, gridVisible }));
   } catch(ex) {}
 }
 

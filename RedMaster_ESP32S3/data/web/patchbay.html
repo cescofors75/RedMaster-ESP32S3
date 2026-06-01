@@ -24,13 +24,6 @@
       <button onclick="pbClearAll()">🗑 Borrar todo</button>
       <button onclick="pbResetLayout()">📐 Reset layout</button>
       <button onclick="pbAutoRoute()">⚡ Auto-route</button>
-      <button onclick="pbBuildChain()">🧬 Encadenar FX</button>
-      <button onclick="pbOrganizeNodes()">🧭 Organizar nodos</button>
-      <button onclick="pbToggleSignalDemo()">🎬 Demo señal</button>
-
-      <div class="pb-menu-title">Live</div>
-      <button id="pbHeatToggleBtn" onclick="pbToggleHeatMode()">🌡 Heat ON</button>
-      <button id="pbQuantizeBtn" onclick="pbToggleSceneQuantize()">⏱ Quantize ON</button>
 
       <div class="pb-menu-title">Snapshots</div>
       <button onclick="pbSaveSnapshot('A')">📸 Guardar Snap A</button>
@@ -93,28 +86,6 @@
           <button class="pb-add-btn" data-fx="flanger"     onclick="pbAddEffect('flanger')">FLANGER</button>
           <button class="pb-add-btn" data-fx="phaser"      onclick="pbAddEffect('phaser')">PHASER</button>
         </div>
-      </div>
-    </div>
-    <div id="pbMacroPanel">
-      <div class="pb-macro-head">
-        <span>MACROS</span>
-        <div class="pb-macro-scenes">
-          <button id="pbMacroSceneA" onclick="pbSelectMacroScene('A')">A</button>
-          <button id="pbMacroSceneB" onclick="pbSelectMacroScene('B')">B</button>
-          <button id="pbMacroSceneC" onclick="pbSelectMacroScene('C')">C</button>
-          <button id="pbMacroSceneD" onclick="pbSelectMacroScene('D')">D</button>
-        </div>
-      </div>
-      <div class="pb-macro-grid">
-        <label>M1 TONE <input id="pbMacro1" type="range" min="0" max="100" value="45"></label>
-        <label>M2 SPACE <input id="pbMacro2" type="range" min="0" max="100" value="35"></label>
-        <label>M3 GLUE <input id="pbMacro3" type="range" min="0" max="100" value="55"></label>
-        <label>M4 PUMP <input id="pbMacro4" type="range" min="0" max="100" value="40"></label>
-      </div>
-      <div class="pb-macro-actions">
-        <button onclick="pbSaveMacroScene()">Guardar escena</button>
-        <button onclick="pbLoadMacroScene()">Cargar escena</button>
-        <button id="pbMacroToggleBtn" onclick="pbToggleMacros()" style="background:rgba(105,240,174,0.2);border-color:rgba(105,240,174,0.5);color:#69f0ae;font-weight:800">\ud83d\udd0a MACROS ON</button>
       </div>
     </div>
     <div class="pb-help">DRAG <span class="dot out"></span> TO CONNECT · CLICK WIRE TO SELECT · SUPR/BACKSPACE TO REMOVE · DRAG NODE TO MOVE</div>
