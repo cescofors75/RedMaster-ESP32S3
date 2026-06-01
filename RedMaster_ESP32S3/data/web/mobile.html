@@ -30,7 +30,11 @@
           <span class="m-bpm-val" id="bpmVal">120</span>
           <button class="m-bpm-btn" id="bpmUp">+</button>
         </div>
-        <select class="m-pattern" id="patternSel" aria-label="Patrón"></select>
+        <div class="m-pattern-sel">
+          <button class="m-pat-btn" id="patPrev" aria-label="Patrón anterior">−</button>
+          <span class="m-pat-name" id="patName">—</span>
+          <button class="m-pat-btn" id="patNext" aria-label="Patrón siguiente">+</button>
+        </div>
       </div>
     </div>
   </header>
@@ -39,6 +43,9 @@
   <main class="m-main">
     <!-- PADS -->
     <section class="m-view is-active" id="view-pads">
+      <div class="m-roll-bar" id="rollBar">
+        <span class="m-roll-label">🥁 Roll</span>
+      </div>
       <div class="m-pads" id="padsGrid"></div>
     </section>
 
@@ -59,6 +66,10 @@
     <section class="m-view" id="view-seq">
       <div class="m-seq-tools">
         <div class="m-step-count" id="stepCountSel"></div>
+        <div class="m-seq-allbtns">
+          <button class="m-seqall m-seqall-mute" id="seqMuteAll">🔇 Todo</button>
+          <button class="m-seqall m-seqall-unmute" id="seqUnmuteAll">🔊 Todo</button>
+        </div>
         <button class="m-clear" id="seqClear">Limpiar</button>
       </div>
       <div class="m-seq-scroll">
@@ -82,6 +93,14 @@
   <div class="m-theme-sheet" id="themeSheet" hidden>
     <div class="m-theme-sheet-head">🎨 Tema visual</div>
     <div class="m-theme-options" id="themeOptions"></div>
+  </div>
+
+  <!-- Sample picker (long-press en un pad) -->
+  <div class="m-sheet-backdrop" id="sampleBackdrop" hidden></div>
+  <div class="m-theme-sheet m-sample-sheet" id="sampleSheet" hidden>
+    <div class="m-theme-sheet-head">🎵 Sonido en pad <span id="sampleTargetName"></span></div>
+    <div class="m-fam-chips" id="famChips"></div>
+    <div class="m-sample-list" id="sampleList"><div class="se-empty">Elige una familia…</div></div>
   </div>
 
   <!-- Bottom view switcher -->
