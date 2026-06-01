@@ -126,13 +126,16 @@ bool SPIMaster::begin() {
     daisySpi.begin(DAISY_SPI_SCK, DAISY_SPI_MISO, DAISY_SPI_MOSI, DAISY_SPI_CS);
 
     if (!spiCmdQueue) {
-        // Queue depth 64 × ~547B = ~35 KB. Sufficient for clean-track stream
-        // chunks (4 per pump tick) plus normal control traffic.
+        // Queue depth 64 × ~547B = ~35 KB. Sized for normal control traffic
+        // plus the pad/sample upload stream chunks.
         spiCmdQueue = xQueueCreate(64, sizeof(SpiQueuedCmd));
     }
 
-    
-    // Try to connect to Daisy
+    // Try to connect to Daisy. We always return true so the ESP boots even
+    // if the Daisy is offline (the web UI must come up regardless); the
+    // runtime heartbeat in update() reconnects automatically once it answers.
+    // We just make a missing slave explicit in the log instead of pretending
+    // the link is up.
     uint32_t rtt;
     for (int attempt = 0; attempt < 10; attempt++) {
         if (ping(rtt)) {
@@ -141,7 +144,10 @@ bool SPIMaster::begin() {
         }
         delay(200);
     }
-    
+
+    stm32Connected = false;
+    Serial.println("[SPIMaster] WARNING: Daisy slave did not respond after 10 pings — "
+                   "booting without audio link, will retry at runtime.");
     return true;
 }
 

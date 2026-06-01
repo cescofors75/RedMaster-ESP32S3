@@ -106,61 +106,6 @@ static DaisyUploadStreamState s_daisyUpload;
 
 static void pumpDaisyUpload();
 
-static bool parseWavFileHeader(File& file, uint16_t& channels, uint16_t& bits, uint32_t& dataOffset, uint32_t& dataSize, char* err, size_t errLen) {
-  uint8_t header[4096] = {};
-  size_t headerLen = file.read(header, sizeof(header));
-  if (headerLen < 44) {
-    strlcpy(err, "WAV header too small", errLen);
-    return false;
-  }
-  if (memcmp(header, "RIFF", 4) != 0 || memcmp(header + 8, "WAVE", 4) != 0) {
-    strlcpy(err, "Not a WAV file", errLen);
-    return false;
-  }
-
-  uint32_t pos = 12;
-  bool fmtFound = false;
-  bool dataFound = false;
-  while (pos + 8 <= headerLen) {
-    uint32_t chunkSize = le32(header + pos + 4);
-    if (memcmp(header + pos, "fmt ", 4) == 0) {
-      if (chunkSize < 16 || pos + 24 > headerLen) {
-        strlcpy(err, "Invalid fmt chunk", errLen);
-        return false;
-      }
-      const uint8_t* fmt = header + pos + 8;
-      uint16_t audioFormat = le16(fmt);
-      channels = le16(fmt + 2);
-      bits = le16(fmt + 14);
-      if (audioFormat != 1 && audioFormat != 0xFFFE) {
-        strlcpy(err, "Unsupported WAV format", errLen);
-        return false;
-      }
-      fmtFound = true;
-    } else if (memcmp(header + pos, "data", 4) == 0) {
-      dataOffset = pos + 8;
-      dataSize = chunkSize;
-      dataFound = true;
-      break;
-    }
-    pos += 8 + chunkSize + (chunkSize & 1);
-  }
-
-  if (!fmtFound || !dataFound) {
-    strlcpy(err, "Missing WAV chunks", errLen);
-    return false;
-  }
-  if ((bits != 16 && bits != 24) || channels < 1 || channels > 2) {
-    strlcpy(err, "Need mono/stereo 16/24-bit WAV", errLen);
-    return false;
-  }
-  if (!file.seek(dataOffset, SeekSet)) {
-    strlcpy(err, "Seek to WAV data failed", errLen);
-    return false;
-  }
-  return true;
-}
-
 // Page‐transition broadcast pause: set when '/' is served, cleared after 2s
 static volatile unsigned long pageTransitionMs = 0;
 static bool gMasterDelayActive = false;
@@ -1074,7 +1019,9 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
   // === MIDI preset files: list + serve ===
   server->on("/api/midi/list", HTTP_GET, [](AsyncWebServerRequest *request){
-    String json = "[";
+    String json;
+    json.reserve(512);  // pre-reserve to avoid repeated reallocs while listing
+    json = "[";
     File dir = LittleFS.open("/midi");
     bool first = true;
     if (dir && dir.isDirectory()) {
