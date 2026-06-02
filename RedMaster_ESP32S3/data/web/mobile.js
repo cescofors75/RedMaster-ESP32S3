@@ -1,5 +1,5 @@
 /* =========================================================================
-   RED808 Mobile — lógica mínima para tocar desde el móvil.
+   RED808 Mobile ÔÇö l├│gica m├¡nima para tocar desde el m├│vil.
    Reutiliza el MISMO protocolo WebSocket que la UI principal (app.js):
      - Pads (sample)  : mensaje binario [0x90, pad, velocity]
      - Piano (synth)  : {cmd:'synthNoteOnEx'} / {cmd:'synthNoteOff'}
@@ -13,22 +13,22 @@
   // ---- Constantes compartidas con app.js -------------------------------
   const TRACK_NAMES = ['BD','SD','CH','OH','CY','CP','RS','CB','LT','MT','HT','MA','CL','HC','MC','LC'];
   const PATTERN_NAMES = ['HIP HOP','TECHNO','DnB','BREAK','HOUSE','TRAP'];
-  // Índices de pista por nombre (para los patrones demo).
+  // ├ìndices de pista por nombre (para los patrones demo).
   const TR = { BD:0, SD:1, CH:2, OH:3, CY:4, CP:5, RS:6, CB:7, LT:8, MT:9, HT:10, MA:11, CL:12, HC:13, MC:14, LC:15 };
   // Patrones demo reales (16 pasos), uno por nombre, para que cada estilo SUENE
   // distinto. Cada entrada: { pista: [pasos activos 0..15] }.
   const DEMO_PATTERNS = [
-    // HIP HOP — boom bap
+    // HIP HOP ÔÇö boom bap
     { [TR.BD]:[0,6,10], [TR.SD]:[4,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[14] },
-    // TECHNO — four on the floor
+    // TECHNO ÔÇö four on the floor
     { [TR.BD]:[0,4,8,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[2,6,10,14], [TR.CP]:[4,12] },
-    // DnB — two step
+    // DnB ÔÇö two step
     { [TR.BD]:[0,10], [TR.SD]:[4,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[7,15] },
-    // BREAK — amen-ish
+    // BREAK ÔÇö amen-ish
     { [TR.BD]:[0,10], [TR.SD]:[4,7,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[14] },
-    // HOUSE — kick + clap + offbeat hats
+    // HOUSE ÔÇö kick + clap + offbeat hats
     { [TR.BD]:[0,4,8,12], [TR.CP]:[4,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[2,6,10,14] },
-    // TRAP — sparse kick + hi-hat rolls
+    // TRAP ÔÇö sparse kick + hi-hat rolls
     { [TR.BD]:[0,6,9], [TR.SD]:[8], [TR.CH]:[0,2,3,4,6,8,10,11,12,14,15], [TR.CB]:[0,8] }
   ];
   // 16 colores fijos (uno por pista/pad), legibles sobre fondo oscuro.
@@ -52,24 +52,24 @@
              '#e4e4e4','#cccccc','#b4b4b4','#9c9c9c','#dcdcdc','#c4c4c4','#acacac','#949494']
   };
   let currentPalette = PALETTES.red;
-  // Color para cada uno de los 6 presets FX según la paleta del tema actual.
+  // Color para cada uno de los 6 presets FX seg├║n la paleta del tema actual.
   const fxColor = (i) => currentPalette[(i * 3) % 16];
-  // Efectos "modo niño": presets con nombre divertido aplicados a TODAS las
+  // Efectos "modo ni├▒o": presets con nombre divertido aplicados a TODAS las
   // pistas a la vez. `type` es el filtro que espera el firmware (1..9), `res`
   // la resonancia. El cutoff lo controla el slider "Tono".
   const FX_PRESETS = [
-    { id: 'off',    name: 'Normal',    emoji: '🎵', color: '#5b6472', type: 0,  cutoff: 4000, res: 1   },
-    { id: 'sub',    name: 'Submarino', emoji: '🌊', color: '#0a84ff', type: 1,  cutoff: 350,  res: 6   },
-    { id: 'bright', name: 'Brillante', emoji: '✨', color: '#ffcc00', type: 2,  cutoff: 3500, res: 6   },
-    { id: 'phone',  name: 'Teléfono',  emoji: '📞', color: '#ff9500', type: 3,  cutoff: 1200, res: 8   },
-    { id: 'robot',  name: 'Robot',     emoji: '🤖', color: '#34c759', type: 9,  cutoff: 700,  res: 14  },
-    { id: 'tunnel', name: 'Túnel',     emoji: '🕳️', color: '#bf5af2', type: 14, cutoff: 800,  res: 4   }
+    { id: 'off',    name: 'Normal',    emoji: '🎵', color: '#5b6472', filterType: 0,  cutoff: 4000, res: 1        },
+    { id: 'sub',    name: 'Submarino', emoji: '🌊', color: '#0a84ff', filterType: 1,  cutoff: 350,  res: 6        },
+    { id: 'bright', name: 'Brillante', emoji: '✨', color: '#ffcc00', filterType: 2,  cutoff: 3500, res: 6        },
+    { id: 'phone',  name: 'Teléfono',  emoji: '📞', color: '#ff9500', filterType: 3,  cutoff: 1200, res: 8        },
+    { id: 'robot',  name: 'Robot',     emoji: '🤖', color: '#34c759', filterType: 9,  cutoff: 700,  res: 14       },
+    { id: 'wah',    name: 'Wah',       emoji: '🎸', color: '#bf5af2', filterType: 6,  cutoff: 1200, res: 8, gain: 10 }
   ];
   const STEP_COUNTS = [16, 32, 64];
-  // Piano: una octava = 12 semitonos. Patrón de teclas negras.
+  // Piano: una octava = 12 semitonos. Patr├│n de teclas negras.
   const WHITE_OFFSETS = [0, 2, 4, 5, 7, 9, 11];
-  const BLACK = { 0: 1, 1: 3, 3: 6, 4: 8, 5: 10 }; // posición blanca -> semitono negro
-  // Colores arcoíris para las 7 teclas blancas (modo niño).
+  const BLACK = { 0: 1, 1: 3, 3: 6, 4: 8, 5: 10 }; // posici├│n blanca -> semitono negro
+  // Colores arco├¡ris para las 7 teclas blancas (modo ni├▒o).
   const WHITE_COLORS = ['#ff4d4d', '#ff9f40', '#ffd633', '#4dd964', '#36c5f0', '#5b8def', '#b06bf0'];
   const PIANO_ENGINES = [
     { id: 3, label: '303' },
@@ -78,7 +78,7 @@
     { id: 6, label: 'FM2OP' }
   ];
   let pianoEngine = 3;
-  // Temas visuales (re-pintan los tokens RED808 vía body[data-theme]).
+  // Temas visuales (re-pintan los tokens RED808 v├¡a body[data-theme]).
   const THEMES = [
     { id: 'red',    name: 'RED808', color: '#ff2020' },
     { id: 'neon',   name: 'Neon',   color: '#00e5ff' },
@@ -126,7 +126,7 @@
     ws.onclose = () => { connected = false; setConn(false); retryTimer = setTimeout(connect, 1500); };
     ws.onerror = () => { try { ws.close(); } catch (_) {} };
     ws.onmessage = (ev) => {
-      if (ev.data instanceof ArrayBuffer) return; // niveles de audio: ignorar en móvil
+      if (ev.data instanceof ArrayBuffer) return; // niveles de audio: ignorar en m├│vil
       if (typeof ev.data !== 'string') return;
       let msg; try { msg = JSON.parse(ev.data); } catch (_) { return; }
       handleMessage(msg);
@@ -180,7 +180,7 @@
   }
 
   // =====================================================================
-  // Navegación de vistas
+  // Navegaci├│n de vistas
   // =====================================================================
   function initNav() {
     document.querySelectorAll('.m-tab').forEach((tab) => {
@@ -191,7 +191,6 @@
           v.classList.toggle('is-active', v.id === 'view-' + view);
         });
         jamSetActive(view === 'jam'); // arranca/para el loop del canvas
-        if (view === 'seq') requestAnimationFrame(layoutSeq); // recalcula tamaño puntos
       });
     });
   }
@@ -223,7 +222,7 @@
     // Carga el beat demo del estilo elegido para que cada nombre suene distinto.
     applyDemoPattern(currentPattern);
   }
-  // Vuelca el patrón demo del índice en el secuenciador (solo manda los cambios).
+  // Vuelca el patr├│n demo del ├¡ndice en el secuenciador (solo manda los cambios).
   function applyDemoPattern(idx) {
     const demo = DEMO_PATTERNS[idx] || {};
     for (let t = 0; t < 16; t++) {
@@ -241,7 +240,7 @@
   function setPlaying(on, doSend) {
     isPlaying = on;
     $('playBtn').classList.toggle('playing', on);
-    $('playBtn').textContent = on ? '⏹' : '▶';
+    $('playBtn').textContent = on ? 'ÔÅ╣' : 'ÔûÂ';
     if (doSend) send({ cmd: on ? 'start' : 'stop' });
   }
   function setBpm(v, doSend) {
@@ -258,11 +257,15 @@
   // =====================================================================
   // Pads
   // =====================================================================
-  let _lpTimer = null;
-  // Cuántos pads se muestran en pantalla. Menos pads = pads más grandes.
+  let _holdTimer = null;
+  let _tremoloTimer = null;
+  let _tremoloPad = -1;
+  let _tremoloEl = null;
+  let lastTappedPad = 0;
+  // Cu├íntos pads se muestran en pantalla. Menos pads = pads m├ís grandes.
   const PAD_COUNTS = [16, 8, 4, 2, 1];
   let padCount = 16;
-  // Columnas del grid según el número de pads visibles.
+  // Columnas del grid seg├║n el n├║mero de pads visibles.
   function padCols(n) {
     if (n >= 16) return 4;
     if (n >= 8) return 2;
@@ -271,7 +274,12 @@
   }
   function initPadCountBar() {
     const bar = $('rollBar');
-    bar.innerHTML = '<span class="m-roll-label">🥁 Pads</span>';
+    bar.innerHTML = '';
+    // Wire static Sonidos button
+    const uploadBtn = $('padsUploadBtn');
+    if (uploadBtn) {
+      uploadBtn.addEventListener('click', () => openSampleSheet(lastTappedPad));
+    }
     PAD_COUNTS.forEach((n) => {
       const b = document.createElement('button');
       b.className = 'm-roll-btn';
@@ -298,35 +306,36 @@
       pad.style.setProperty('--pad-c', currentPalette[i]);
       pad.textContent = TRACK_NAMES[i];
       let startX = 0, startY = 0;
-      const startLP = () => { _lpTimer = setTimeout(() => { _lpTimer = null; openSampleSheet(i); }, 500); };
-      const cancelLP = () => { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } };
+      const startHold = () => {
+        _holdTimer = setTimeout(() => { _holdTimer = null; startTremolo(i, pad); }, 160);
+      };
+      const cancelHold = () => {
+        if (_holdTimer) { clearTimeout(_holdTimer); _holdTimer = null; }
+        if (_tremoloPad === i) stopTremolo();
+      };
       const down = (e) => {
         e.preventDefault();
-        triggerPad(i); flash(pad);
-        startLP();
-      };
-      // Cancela el long-press solo si el dedo se desplaza de verdad (>14px).
-      const move = (e) => {
-        if (!_lpTimer) return;
         const t = e.touches ? e.touches[0] : e;
-        if (Math.abs(t.clientX - startX) > 14 || Math.abs(t.clientY - startY) > 14) cancelLP();
+        startX = t.clientX; startY = t.clientY;
+        lastTappedPad = i;
+        triggerPad(i); flash(pad);
+        startHold();
       };
-      const release = () => { cancelLP(); };
+      const move = (e) => {
+        if (!_holdTimer && _tremoloPad !== i) return;
+        const t = e.touches ? e.touches[0] : e;
+        if (Math.abs(t.clientX - startX) > 14 || Math.abs(t.clientY - startY) > 14) cancelHold();
+      };
+      const release = () => { cancelHold(); };
       pad.addEventListener('touchstart', down, { passive: false });
       pad.addEventListener('touchend', release);
+      pad.addEventListener('touchmove', move, { passive: true });
       pad.addEventListener('touchcancel', release);
       pad.addEventListener('mousedown', down);
       pad.addEventListener('mouseup', release);
       pad.addEventListener('mouseleave', release);
       grid.appendChild(pad);
     }
-    // Botón superior para cargar sonidos (mejor que mantener pulsado el pad)
-    const upBtn = document.createElement('button');
-    upBtn.className = 'm-pads-upload';
-    upBtn.textContent = '📁 Sonidos';
-    upBtn.addEventListener('click', () => openSampleSheet(samplePadDefault));
-    const rb = $('rollBar');
-    if (rb) rb.appendChild(upBtn);
   }
   function triggerPad(i) { sendBinary([0x90, i, 127]); }
   function flash(el) { el.classList.add('hit'); setTimeout(() => el.classList.remove('hit'), 90); }
@@ -346,6 +355,32 @@
     if (_syncFlashTimer) clearTimeout(_syncFlashTimer);
     _syncFlashTimer = setTimeout(() => { toFlash.forEach(e => e.classList.remove('sync-flash')); _syncFlashTimer = null; }, 110);
   }
+  // ---- Tremolo (hold >= 160ms) ----------------------------------------
+  function startTremolo(padIdx, el) {
+    stopTremolo();
+    _tremoloPad = padIdx;
+    _tremoloEl = el;
+    el.classList.add('tremolo');
+    const fire = () => {
+      if (_tremoloPad < 0) return;
+      triggerPad(_tremoloPad);
+      tremoloPunch(_tremoloEl);
+      _tremoloTimer = setTimeout(fire, Math.round(60000 / bpm / 4));
+    };
+    _tremoloTimer = setTimeout(fire, Math.round(60000 / bpm / 4));
+  }
+  function stopTremolo() {
+    if (_tremoloTimer) { clearTimeout(_tremoloTimer); _tremoloTimer = null; }
+    if (_tremoloEl) { _tremoloEl.classList.remove('tremolo', 'tremolo-hit'); _tremoloEl = null; }
+    _tremoloPad = -1;
+  }
+  function tremoloPunch(el) {
+    if (!el) return;
+    el.classList.remove('tremolo-hit');
+    void el.offsetWidth;
+    el.classList.add('tremolo-hit');
+  }
+
 
   // =====================================================================
   // Piano
@@ -421,7 +456,7 @@
   }
   // Permite tocar varias teclas a la vez y deslizar el dedo (glissando "tirirri").
   function bindGlissando(piano) {
-    // Estado por dedo (pointerId): { el, note } o { el:null, note:null } si está fuera de teclas.
+    // Estado por dedo (pointerId): { el, note } o { el:null, note:null } si est├í fuera de teclas.
     const fingerKey = new Map();
     const stopNote = (st) => {
       if (st && st.el) { st.el.classList.remove('down'); noteOff(st.note); }
@@ -458,7 +493,6 @@
     $('seqClear').addEventListener('click', clearPattern);
     $('seqMuteAll').addEventListener('click', () => setAllMute(true));
     $('seqUnmuteAll').addEventListener('click', () => setAllMute(false));
-    window.addEventListener('resize', layoutSeq);
     buildSeqGrid();
   }
   function applyStepCount(c) {
@@ -505,18 +539,6 @@
       }
       grid.appendChild(row);
     }
-    layoutSeq();
-  }
-  // Tamaño de punto responsive: rellena el ancho disponible (iPhone 12 → tablet).
-  function layoutSeq() {
-    const scroll = document.querySelector('.m-seq-scroll');
-    if (!scroll) return;
-    const w = scroll.clientWidth;
-    if (w < 60) return; // vista oculta: aún sin ancho
-    const overhead = 24 + 24 + 24 + stepCount; // label + mute + solo + gaps (~1px)
-    let d = Math.floor((w - overhead) / stepCount);
-    d = Math.max(11, Math.min(40, d));
-    $('seqGrid').style.setProperty('--dot', d + 'px');
   }
   function toggleMute(t) {
     muteState[t] = !muteState[t];
@@ -524,13 +546,23 @@
     refreshTrackButtons();
   }
   function toggleSolo(t) {
-    soloState[t] = !soloState[t];
-    send({ cmd: 'solo', track: t, value: soloState[t] });
+    const newVal = !soloState[t];
+    // Solo exclusivo: apagar solos de las demas pistas primero
+    if (newVal) {
+      for (let i = 0; i < 16; i++) {
+        if (i !== t && soloState[i]) {
+          soloState[i] = false;
+          send({ cmd: 'solo', track: i, value: false });
+        }
+      }
+    }
+    soloState[t] = newVal;
+    send({ cmd: 'solo', track: t, value: newVal });
     refreshTrackButtons();
   }
   function setAllMute(on) {
     for (let t = 0; t < 16; t++) muteState[t] = on;
-    // Envío atómico (una sola orden) para evitar parpadeos.
+    // Env├¡o at├│mico (una sola orden) para evitar parpadeos.
     send({ cmd: 'setMuteMask', mask: on ? 0xFFFF : 0 });
     refreshTrackButtons();
   }
@@ -593,7 +625,7 @@
   // Slider Tono 0..100 -> escala el cutoff base del preset (0.3x .. 3x).
   function tonoCutoff() {
     const p = FX_PRESETS.find((x) => x.id === activeFxPreset) || FX_PRESETS[0];
-    if (p.type === 0) return 4000;
+    if (p.filterType === 0) return 4000;
     const v = parseFloat($('tono').value) / 100;   // 0..1
     const factor = Math.pow(2, (v - 0.5) * 3.4);    // ~0.3x .. ~3.2x
     return Math.round(Math.max(60, Math.min(16000, p.cutoff * factor)));
@@ -603,10 +635,11 @@
     const p = FX_PRESETS.find((x) => x.id === id) || FX_PRESETS[0];
     const cutoff = tonoCutoff();
     for (let t = 0; t < 16; t++) {
-      if (p.type === 0) {
+      if (p.filterType === 0) {
         send({ cmd: 'clearTrackFilter', track: t });
       } else {
-        send({ cmd: 'setTrackFilter', track: t, type: p.type, cutoff, resonance: p.res, gain: 0 });
+        const msg = { cmd: 'setTrackFilter', track: t, filterType: p.filterType, cutoff, resonance: p.res, gain: p.gain || 0 };
+        send(msg);
       }
     }
     renderFx();
@@ -615,10 +648,10 @@
     const v = parseFloat($('tono').value);
     $('tonoVal').textContent = v < 33 ? 'grave' : (v > 66 ? 'agudo' : 'medio');
     const p = FX_PRESETS.find((x) => x.id === activeFxPreset);
-    if (p && p.type > 0) {
+    if (p && p.filterType > 0) {
       const cutoff = tonoCutoff();
       for (let t = 0; t < 16; t++) {
-        send({ cmd: 'setTrackFilter', track: t, type: p.type, cutoff, resonance: p.res, gain: 0 });
+        send({ cmd: 'setTrackFilter', track: t, filterType: p.filterType, cutoff, resonance: p.res, gain: p.gain || 0 });
       }
     }
   }
@@ -643,7 +676,7 @@
     let saved = 'red';
     try { saved = localStorage.getItem(THEME_KEY) || 'red'; } catch (_) {}
     if (!THEMES.some((t) => t.id === saved)) saved = 'red';
-    // Migrar tema 'violet' antiguo → 'retro'
+    // Migrar tema 'violet' antiguo ÔåÆ 'retro'
     if (saved === 'violet') saved = 'retro';
     applyTheme(saved);
 
@@ -681,7 +714,7 @@
   function closeThemeSheet() { $('themeSheet').hidden = true; $('sheetBackdrop').hidden = true; }
 
   // =====================================================================
-  // JAM — canvas multitouch (samples + synth) con efectos visuales
+  // JAM ÔÇö canvas multitouch (samples + synth) con efectos visuales
   // =====================================================================
   let jamCanvas = null, jamCtx = null, jamW = 0, jamH = 0, jamDpr = 1;
   let jamRaf = 0, jamLastT = 0, jamRunning = false, jamMode = 'samples';
@@ -691,16 +724,6 @@
   const JAM_COLS = 4, JAM_ROWS = 4; // 16 zonas = 16 pads
   // 16 notas (escala mayor, 2 octavas) para el modo synth.
   const JAM_NOTES = [48, 50, 52, 53, 55, 57, 59, 60, 62, 64, 65, 67, 69, 71, 72, 74];
-  // MediaPipe Hands (cámara). Opcional, requiere internet en el móvil (CDN+modelo).
-  let jamVideo = null, jamHands = null, jamCamOn = false, jamCamLoading = false;
-  const jamFinger = new Map();       // 'hand-tip' -> { zone, t }
-  const JAM_TRIG_TIPS = [8, 12];     // índice + corazón (más dedos = respuesta más rápida)
-  const JAM_COOLDOWN = 55;           // ms mínimos entre disparos por dedo (snappy)
-  const JAM_TIPS = [4, 8, 12, 16, 20]; // puntas de los dedos (glow visual)
-  // Modo synth con manos: nota sostenida + variación de tono por altura de la mano.
-  let jamSynthNote = -1, jamSynthZone = -1, jamPitch = 1, jamPitchT = 0;
-  const JAM_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],
-    [10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
 
   function hexToRgb(hex) {
     const n = parseInt(hex.slice(1), 16);
@@ -717,14 +740,10 @@
     jamCanvas.addEventListener('pointerleave', jamUp);
     $('jamModeSamples').addEventListener('click', () => setJamMode('samples'));
     $('jamModeSynth').addEventListener('click', () => setJamMode('synth'));
-    jamVideo = $('jamVideo');
-    const camBtn = $('jamCamBtn');
-    if (camBtn) camBtn.addEventListener('click', toggleJamCam);
     window.addEventListener('resize', () => { if (jamRunning) jamResize(); });
   }
   function setJamMode(m) {
     jamReleaseAll();
-    jamReleaseSynthHand();
     jamMode = m;
     $('jamModeSamples').classList.toggle('active', m === 'samples');
     $('jamModeSynth').classList.toggle('active', m === 'synth');
@@ -745,7 +764,6 @@
       jamRunning = false;
       if (jamRaf) { cancelAnimationFrame(jamRaf); jamRaf = 0; }
       jamReleaseAll();
-      stopJamCam(); // libera cámara al salir de la pestaña
     }
   }
   function jamZoneAt(x, y) {
@@ -760,7 +778,7 @@
       return null;
     }
     const note = JAM_NOTES[zone];
-    send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: false });
+    send({ cmd: 'synthNoteOnEx', engine: PIANO_ENGINE, note, velocity: 110, accent: false, slide: false });
     return note;
   }
   function jamPos(e) {
@@ -781,20 +799,20 @@
     e.preventDefault();
     const { x, y } = jamPos(e);
     const zone = jamZoneAt(x, y);
-    if (zone === st.zone) return; // mismo sitio → no re-disparar
-    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
+    if (zone === st.zone) return; // mismo sitio ÔåÆ no re-disparar
+    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
     st.note = jamTrigger(zone, x, y);
     st.zone = zone;
   }
   function jamUp(e) {
     const st = jamTouch.get(e.pointerId);
     if (!st) return;
-    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
+    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
     jamTouch.delete(e.pointerId);
   }
   function jamReleaseAll() {
     jamTouch.forEach((st) => {
-      if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
+      if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
     });
     jamTouch.clear();
   }
@@ -806,157 +824,21 @@
       jamParticles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, r: 3 + Math.random() * 4, rgb });
     }
   }
-  // ---- Cámara + MediaPipe Hands ----
-  function jamTip(txt, show) {
-    const el = $('jamTip'); if (!el) return;
-    if (txt != null) el.textContent = txt;
-    el.classList.toggle('hide', show === false);
-  }
-  async function toggleJamCam() {
-    if (jamCamLoading) return;
-    if (jamCamOn) { stopJamCam(); jamTip('👆 ¡Toca con los dedos!', true); return; }
-    await startJamCam();
-  }
-  async function startJamCam() {
-    jamCamLoading = true;
-    $('jamCamBtn').classList.add('active');
-    try {
-      jamTip('📷 Iniciando cámara…', true);
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 }, audio: false });
-      jamVideo.srcObject = stream;
-      jamVideo.classList.add('on');
-      await jamVideo.play().catch(() => {});
-      jamTip('⬇️ Cargando MediaPipe (necesita internet)…', true);
-      const CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
-      const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-      const withTimeout = (p, ms, msg) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(msg)), ms))]);
-      const { FilesetResolver, HandLandmarker } = await withTimeout(import(CDN + '/vision_bundle.mjs'), 30000, 'CDN sin respuesta (¿WiFi sin internet?)');
-      const vision = await withTimeout(FilesetResolver.forVisionTasks(CDN + '/wasm'), 20000, 'Timeout WASM');
-      const opts = { runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: .45, minHandPresenceConfidence: .45, minTrackingConfidence: .4 };
-      try {
-        jamHands = await withTimeout(HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'GPU' }, ...opts }), 25000, 'Timeout GPU');
-      } catch (_) {
-        jamTip('GPU falló, probando CPU…', true);
-        jamHands = await withTimeout(HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' }, ...opts }), 30000, 'Timeout CPU (revisa internet)');
-      }
-      jamCamOn = true;
-      jamCanvas.style.background = 'transparent'; // dejar ver el vídeo detrás
-      jamTip('✋ ¡Mueve las manos!', true);
-      setTimeout(() => { if (jamCamOn) jamTip(null, false); }, 1800);
-    } catch (e) {
-      stopJamCam();
-      jamTip('❌ ' + ((e && e.message) || 'cámara/red'), true);
-      setTimeout(() => jamTip(null, false), 3500);
-    } finally {
-      jamCamLoading = false;
-    }
-  }
-  function stopJamCam() {
-    jamCamOn = false;
-    const b = $('jamCamBtn'); if (b) b.classList.remove('active');
-    if (jamCanvas) jamCanvas.style.background = '';
-    jamFinger.clear();
-    jamReleaseSynthHand();
-    if (jamVideo) {
-      jamVideo.classList.remove('on');
-      const s = jamVideo.srcObject;
-      if (s) { s.getTracks().forEach((tr) => tr.stop()); jamVideo.srcObject = null; }
-    }
-  }
-  function jamHandTrigger(zone, x, y) {
-    spawnJamBurst(x, y, hexToRgb(currentPalette[zone]));
-    if (jamMode === 'samples') { triggerPad(zone); return; }
-    const note = JAM_NOTES[zone];
-    send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: false });
-    setTimeout(() => send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note }), 280);
-  }
-  function jamProcessHands(hands) {
-    if (jamMode === 'synth') { jamProcessHandsSynth(hands); return; }
-    // SAMPLES: cada punta de dedo dispara al entrar en una zona (rápido).
-    const now = performance.now();
-    for (let h = 0; h < hands.length; h++) {
-      for (const tip of JAM_TRIG_TIPS) {
-        const lm = hands[h][tip];
-        if (!lm) continue;
-        const x = (1 - lm.x) * jamW, y = lm.y * jamH; // espejo (selfie)
-        const zone = jamZoneAt(x, y);
-        const key = h + '-' + tip;
-        const st = jamFinger.get(key);
-        if (!st || st.zone !== zone) {
-          if (!st || now - st.t > JAM_COOLDOWN) {
-            triggerPad(zone);
-            spawnJamBurst(x, y, hexToRgb(currentPalette[zone]));
-          }
-          jamFinger.set(key, { zone, t: now });
-        }
-      }
-    }
-  }
-  // SYNTH con manos: la nota se MANTIENE mientras el dedo esté en la zona
-  // ("estirar la nota"); cambiar de zona = nota nueva (glissando); la ALTURA de
-  // la mano hace variación de tono (bend) vía setLivePitch.
-  function jamProcessHandsSynth(hands) {
-    if (!hands.length) { jamReleaseSynthHand(); return; }
-    const lm = hands[0][8]; // índice de la primera mano
-    if (!lm) { jamReleaseSynthHand(); return; }
-    const x = (1 - lm.x) * jamW, y = lm.y * jamH;
-    const zone = jamZoneAt(x, y);
-    if (zone !== jamSynthZone) {
-      if (jamSynthNote >= 0) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamSynthNote });
-      const note = JAM_NOTES[zone];
-      send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: true });
-      jamSynthNote = note; jamSynthZone = zone;
-      spawnJamBurst(x, y, hexToRgb(currentPalette[zone]));
-    }
-    // Variación de tono: arriba = agudo, abajo = grave (0.5..2.0).
-    const pitch = Math.max(0.5, Math.min(2.0, 2.0 - (y / jamH) * 1.5));
-    const now = performance.now();
-    if (Math.abs(pitch - jamPitch) > 0.015 && now - jamPitchT > 45) {
-      jamPitch = pitch; jamPitchT = now;
-      send({ cmd: 'setLivePitch', pitch });
-    }
-  }
-  function jamReleaseSynthHand() {
-    if (jamSynthNote >= 0) { send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamSynthNote }); jamSynthNote = -1; jamSynthZone = -1; }
-    if (jamPitch !== 1) { jamPitch = 1; send({ cmd: 'setLivePitch', pitch: 1 }); }
-  }
-  function jamDrawHand(ctx, hand) {
-    const px = (i) => [(1 - hand[i].x) * jamW, hand[i].y * jamH];
-    ctx.save();
-    ctx.lineCap = 'round'; ctx.lineWidth = 3;
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-    ctx.shadowColor = 'rgba(0,229,255,0.9)'; ctx.shadowBlur = 12;
-    for (const [a, b] of JAM_CONN) { const p = px(a), q = px(b); ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke(); }
-    ctx.shadowBlur = 0;
-    for (const tip of JAM_TIPS) { const p = px(tip); ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 14; ctx.fill(); }
-    ctx.restore();
-  }
-
   function jamLoop(t) {
     if (!jamRunning) { jamRaf = 0; return; }
     jamRaf = requestAnimationFrame(jamLoop);
     const dt = Math.min(0.05, (t - jamLastT) / 1000); jamLastT = t;
     const ctx = jamCtx;
-    // Cámara activa: detectar manos y disparar por zonas
-    let hands = null;
-    if (jamCamOn && jamHands && jamVideo && jamVideo.readyState >= 2 && jamVideo.videoWidth > 0) {
-      try { const res = jamHands.detectForVideo(jamVideo, t); hands = res && res.landmarks; } catch (_) {}
-      if (hands && hands.length) jamProcessHands(hands);
-    }
-    if (jamCamOn) {
-      ctx.clearRect(0, 0, jamW, jamH); // transparente: se ve el vídeo detrás
-    } else {
-      // estela: capa semitransparente para que los trazos se desvanezcan
-      ctx.fillStyle = 'rgba(8,11,16,0.28)';
-      ctx.fillRect(0, 0, jamW, jamH);
-      // guías suaves en el centro de cada zona
-      const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
-      for (let z = 0; z < JAM_COLS * JAM_ROWS; z++) {
-        const cx = ((z % JAM_COLS) + 0.5) * cw, cy = (Math.floor(z / JAM_COLS) + 0.5) * ch;
-        const c = hexToRgb(currentPalette[z]);
-        ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.18)`; ctx.fill();
-      }
+    // estela: capa semitransparente para que los trazos se desvanezcan
+    ctx.fillStyle = 'rgba(8,11,16,0.28)';
+    ctx.fillRect(0, 0, jamW, jamH);
+    // gu├¡as suaves en el centro de cada zona
+    const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
+    for (let z = 0; z < JAM_COLS * JAM_ROWS; z++) {
+      const cx = ((z % JAM_COLS) + 0.5) * cw, cy = (Math.floor(z / JAM_COLS) + 0.5) * ch;
+      const c = hexToRgb(PALETTE[z]);
+      ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.18)`; ctx.fill();
     }
     // anillos
     for (let i = jamRings.length - 1; i >= 0; i--) {
@@ -967,7 +849,7 @@
       ctx.strokeStyle = `rgba(${rg.rgb[0]},${rg.rgb[1]},${rg.rgb[2]},${rg.life * 0.6})`;
       ctx.lineWidth = 3 * rg.life + 0.5; ctx.stroke();
     }
-    // partículas
+    // part├¡culas
     for (let i = jamParticles.length - 1; i >= 0; i--) {
       const p = jamParticles[i];
       p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.94;
@@ -977,8 +859,6 @@
       ctx.fillStyle = `rgba(${p.rgb[0]},${p.rgb[1]},${p.rgb[2]},${p.life * 0.9})`;
       ctx.fill();
     }
-    // esqueletos de las manos (encima de todo)
-    if (jamCamOn && hands) { for (const hand of hands) jamDrawHand(ctx, hand); }
   }
 
   // =====================================================================
@@ -986,30 +866,9 @@
   // =====================================================================
   let sampleTargetPad = -1;
   let sampleFamily = '';
-  let samplePadDefault = 0;
   function openSampleSheet(pad) {
-    // Selector de PAD (chips): elige a qué pad va el sonido
-    const padChips = $('padChips');
-    if (padChips) {
-      padChips.innerHTML = '';
-      TRACK_NAMES.forEach((nm, idx) => {
-        const b = document.createElement('button');
-        b.textContent = (idx + 1) + ' ' + nm;
-        b.dataset.pad = String(idx);
-        b.addEventListener('click', () => setSamplePad(idx));
-        padChips.appendChild(b);
-      });
-    }
-    $('sampleSheet').hidden = false;
-    $('sampleBackdrop').hidden = false;
-    setSamplePad(pad);
-  }
-  function setSamplePad(pad) {
     sampleTargetPad = pad;
-    samplePadDefault = pad;
-    $('sampleTargetName').textContent = `${pad + 1} · ${TRACK_NAMES[pad]}`;
-    document.querySelectorAll('#padChips button').forEach((b) =>
-      b.classList.toggle('active', +b.dataset.pad === pad));
+    $('sampleTargetName').textContent = `${pad + 1} ┬À ${TRACK_NAMES[pad]}`;
     // Chips de familias
     const chips = $('famChips');
     chips.innerHTML = '';
@@ -1020,7 +879,9 @@
       b.addEventListener('click', () => requestSamples(fam));
       chips.appendChild(b);
     });
-    $('sampleList').innerHTML = '<div class="se-empty">Cargando…</div>';
+    $('sampleList').innerHTML = '<div class="se-empty">CargandoÔÇª</div>';
+    $('sampleSheet').hidden = false;
+    $('sampleBackdrop').hidden = false;
     requestSamples(TRACK_NAMES[pad]); // familia por defecto = la del pad
   }
   function closeSampleSheet() {
@@ -1032,7 +893,7 @@
     sampleFamily = fam;
     document.querySelectorAll('#famChips button').forEach((b) =>
       b.classList.toggle('active', b.dataset.fam === fam));
-    $('sampleList').innerHTML = '<div class="se-empty">Cargando…</div>';
+    $('sampleList').innerHTML = '<div class="se-empty">CargandoÔÇª</div>';
     send({ cmd: 'getSamples', family: fam, pad: sampleTargetPad });
   }
   function renderSampleList(d) {
@@ -1087,13 +948,13 @@
         blob = file;
         name = file.name;
       } else {
-        setUploadStatus('Convirtiendo audio…', '');
+        setUploadStatus('Convirtiendo audioÔÇª', '');
         const wav = await decodeToWav(file);
         blob = wav;
         name = file.name.replace(/\.[^.]+$/, '') + '.wav';
-        if (blob.size > 8 * 1024 * 1024) { setUploadStatus('Archivo muy grande tras convertir (máx 8MB)', 'err'); return; }
+        if (blob.size > 8 * 1024 * 1024) { setUploadStatus('Archivo muy grande tras convertir (m├íx 8MB)', 'err'); return; }
       }
-      setUploadStatus('Subiendo… 0%', '');
+      setUploadStatus('SubiendoÔÇª 0%', '');
       await postSample(blob, name, pad);
     } catch (err) {
       setUploadStatus('Error: ' + (err && err.message ? err.message : err), 'err');
@@ -1106,11 +967,11 @@
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload?pad=' + pad);
       xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) setUploadStatus('Subiendo… ' + Math.round((e.loaded / e.total) * 100) + '%', '');
+        if (e.lengthComputable) setUploadStatus('SubiendoÔÇª ' + Math.round((e.loaded / e.total) * 100) + '%', '');
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          setUploadStatus('✅ ' + name + ' cargado en pad ' + (pad + 1), 'ok');
+          setUploadStatus('Ô£à ' + name + ' cargado en pad ' + (pad + 1), 'ok');
           triggerPad(pad);
           setTimeout(() => { setUploadStatus('', ''); closeSampleSheet(); }, 1200);
           resolve();
