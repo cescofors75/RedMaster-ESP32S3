@@ -738,6 +738,9 @@
   const JAM_TAP_VY = 0.045;             // golpe = movimiento brusco hacia ABAJO (frac. alto/frame)
   const JAM_TAP_COOLDOWN = 180;         // ms mínimos entre golpes del mismo dedo
   const JAM_PIANO_ENGINE = 3;           // un solo engine en piano (como un piano de verdad)
+  // Modo POSE: golpe + nº de dedos (0=puño … 5=palma) -> pad. Robusto.
+  let jamPose = false;
+  const JAM_POSE_PADS = [0, 1, 2, 3, 4, 5]; // dedos 0..5 -> BOMBO,CAJA,HAT,OPEN,CRASH,CLAP
   const JAM_WORDS = ['BOMBO','CAJA','HAT','OPEN','CRASH','CLAP','RIM','COW',
     'TOM','TOM','TOM','SHAKE','CLAVE','CONGA','BONGO','BLOCK'];
   const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
@@ -763,6 +766,13 @@
     $('jamModeSamples').addEventListener('click', () => setJamMode('samples'));
     $('jamModeSynth').addEventListener('click', () => setJamMode('synth'));
     $('jamCamBtn').addEventListener('click', toggleJamCamera);
+    $('jamPoseBtn').addEventListener('click', () => {
+      jamPose = !jamPose;
+      jamFinger.clear();
+      $('jamPoseBtn').textContent = jamPose ? '✋' : '📍';
+      $('jamPoseBtn').classList.toggle('active', jamPose);
+      if (jamCamOn) jamTip(jamPose ? '✋ Pose: nº de dedos = sonido' : '📍 Posición: zona = sonido', true);
+    });
     window.addEventListener('resize', () => { if (jamRunning) jamResize(); });
   }
   function jamTip(txt, show) {
@@ -850,10 +860,31 @@
     st.x = x; st.y = y; jamFinger.set(key, st);
     return hit;
   }
-  // DRUM: GOLPE hacia abajo dispara el pad de la ZONA donde está el dedo
-  // (posición = sonido, predecible; da igual qué dedo/mano).
+  // Nº de dedos extendidos 0..5 (incluye pulgar). Robusto para el modo POSE.
+  function jamHandFingers(hand) {
+    const d = (a, b) => Math.hypot(hand[a].x - hand[b].x, hand[a].y - hand[b].y);
+    let n = 0;
+    if (d(4, 0) > d(2, 0) * 1.10) n++;              // pulgar
+    const tips = [8, 12, 16, 20], pips = [6, 10, 14, 18];
+    for (let i = 0; i < 4; i++) if (d(tips[i], 0) > d(pips[i], 0) * 1.05) n++;
+    return n;
+  }
+  // DRUM:
+  //  · POSICIÓN (📍): golpe hacia abajo → pad de la zona bajo el dedo.
+  //  · POSE (✋): golpe de la mano → pad según nº de dedos (0=puño … 5=palma).
   function jamProcessDrum(hands) {
     const now = performance.now();
+    if (jamPose) {
+      for (let h = 0; h < hands.length; h++) {
+        const ref = hands[h][9]; if (!ref) continue; // centro de la palma
+        const x = (1 - ref.x) * jamW, y = ref.y * jamH;
+        if (jamTap('g', h, 0, x, y, now)) {
+          const count = jamHandFingers(hands[h]);
+          jamHit(JAM_POSE_PADS[count] != null ? JAM_POSE_PADS[count] : 0, x, y);
+        }
+      }
+      return;
+    }
     for (let h = 0; h < hands.length; h++) {
       for (let f = 0; f < JAM_TIPS.length; f++) {
         const lm = hands[h][JAM_TIPS[f]]; if (!lm) continue;
@@ -898,8 +929,25 @@
     for (const tip of JAM_TIPS) { const p = px(tip); ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 14; ctx.fill(); }
     ctx.restore();
   }
+  // Leyenda del modo POSE (nº de dedos → sonido).
+  function jamDrawPoseLegend(ctx) {
+    const icons = ['✊ 0', '☝ 1', '✌ 2', '🤟 3', '🖖 4', '🖐 5'];
+    ctx.save();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.font = '700 15px -apple-system, system-ui, sans-serif';
+    const x = 16; let y = 26;
+    for (let i = 0; i < 6; i++) {
+      const pad = JAM_POSE_PADS[i] != null ? JAM_POSE_PADS[i] : 0;
+      const c = hexToRgb(currentPalette[pad]);
+      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.85)`;
+      ctx.fillText(`${icons[i]} → ${JAM_WORDS[pad] || ''}`, x, y);
+      y += 26;
+    }
+    ctx.restore();
+  }
   // Rejilla de 16 zonas con etiqueta (palabra o nota) para ver dónde suena cada cosa.
   function jamDrawGuides(ctx) {
+    if (jamPose && jamMode !== 'synth') { jamDrawPoseLegend(ctx); return; }
     const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
     ctx.save();
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.06)';
