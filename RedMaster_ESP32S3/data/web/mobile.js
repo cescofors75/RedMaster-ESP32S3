@@ -746,6 +746,9 @@
   const jamPoseLast = ['', ''];         // último gesto disparado por mano
   // ORBES (lanza-ritmos): bolas que rebotan y suenan en cada rebote.
   const jamOrbs = [];
+  // BASS wobble (303 ácido): X=nota grave, Y=cutoff (wob), gesto=carácter.
+  const JAM_BASS_NOTES = [28, 31, 33, 35, 38, 40, 43, 45]; // E menor pent. grave
+  let jamBassNote = -1, jamBassOct = 0, jamBassLastG = '', jamBassCutT = 0;
   const JAM_WORDS = ['BOMBO','CAJA','HAT','OPEN','CRASH','CLAP','RIM','COW',
     'TOM','TOM','TOM','SHAKE','CLAVE','CONGA','BONGO','BLOCK'];
   const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
@@ -772,6 +775,7 @@
     $('jamModeSynth').addEventListener('click', () => setJamMode('synth'));
     $('jamModePose').addEventListener('click', () => setJamMode('pose'));
     $('jamModeOrbs').addEventListener('click', () => setJamMode('orbs'));
+    $('jamModeBass').addEventListener('click', () => setJamMode('bass'));
     $('jamCamBtn').addEventListener('click', toggleJamCamera);
     window.addEventListener('resize', () => { if (jamRunning) jamResize(); });
   }
@@ -824,7 +828,7 @@
     jamCamOn = false;
     const b = $('jamCamBtn'); if (b) b.classList.remove('active');
     if (jamCanvas) jamCanvas.style.background = '';
-    jamFinger.clear(); jamReleasePianoHand();
+    jamFinger.clear(); jamReleasePianoHand(); jamBassOff();
     if (jamVideo) {
       jamVideo.classList.remove('on');
       const s = jamVideo.srcObject;
@@ -849,7 +853,45 @@
     if (jamMode === 'synth') jamProcessPiano(hands);
     else if (jamMode === 'pose') jamProcessPose(hands, gestures);
     else if (jamMode === 'orbs') jamProcessOrbs(hands);
+    else if (jamMode === 'bass') jamProcessBass(hands, gestures);
     else jamProcessDrum(hands);
+  }
+  // BASS WOBBLE (303): mano más alta toca; X=nota, Y=cutoff (wob), gesto=carácter.
+  function jamProcessBass(hands, gestures) {
+    if (!hands.length) { jamBassOff(); return; }
+    let hand = hands[0], hi = 0;
+    if (hands.length >= 2 && hands[1][9] && hands[0][9] && hands[1][9].y < hands[0][9].y) { hand = hands[1]; hi = 1; }
+    const g = gestures && gestures[hi] && gestures[hi][0];
+    const gname = (g && g.score > 0.55) ? g.categoryName : '';
+    if (gname && gname !== jamBassLastG && JAM_GESTURE_PADS[gname] != null) { applyBassChar(gname); jamBassLastG = gname; }
+    else if (!gname) jamBassLastG = '';
+    const lm = hand[9] || hand[8]; if (!lm) { jamBassOff(); return; }
+    const nx = 1 - lm.x, ny = lm.y;
+    const idx = Math.max(0, Math.min(JAM_BASS_NOTES.length - 1, Math.floor(nx * JAM_BASS_NOTES.length)));
+    const note = JAM_BASS_NOTES[idx] + jamBassOct;
+    if (note !== jamBassNote) {
+      send({ cmd: 'synth303NoteOn', note, accent: false, slide: true });
+      jamBassNote = note;
+      jamShowText('BASS', hexToRgb(currentPalette[idx % 16]));
+    }
+    const now = performance.now();
+    if (now - jamBassCutT > 55) {             // wob: Y → cutoff (throttle)
+      jamBassCutT = now;
+      send({ cmd: 'synth303Param', paramId: 0, value: 120 + (1 - ny) * 3200 });
+    }
+  }
+  function applyBassChar(g) {
+    const set = (p, v) => send({ cmd: 'synth303Param', paramId: p, value: v });
+    jamBassOct = 0;
+    if (g === 'Closed_Fist') { set(1, 0.9); set(11, 0.85); set(12, 1.0); }   // drop pesado
+    else if (g === 'Open_Palm') { set(1, 0.4); set(11, 0.1); set(12, 0.0); } // limpio
+    else if (g === 'Victory') { set(1, 0.97); set(11, 1.0); }               // scream
+    else if (g === 'Pointing_Up') { jamBassOct = 12; }                       // octava arriba
+    else if (g === 'Thumb_Up') { set(12, 1.0); set(1, 0.7); }                // sub gordo
+    else if (g === 'ILoveYou') { set(1, 0.95); set(11, 0.6); }               // resonante
+  }
+  function jamBassOff() {
+    if (jamBassNote >= 0) { send({ cmd: 'synth303NoteOff' }); jamBassNote = -1; }
   }
   // Detecta un "golpe": el dedo se mueve bruscamente hacia ABAJO. Devuelve true
   // una sola vez por golpe (respetando el cooldown).
@@ -990,6 +1032,17 @@
     }
     ctx.restore();
   }
+  function jamDrawBassHint(ctx) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    // flecha/idea de wob: arriba brillante, abajo oscuro
+    ctx.textBaseline = 'top'; ctx.font = '700 13px -apple-system, system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.fillText('⬆ brillante', jamW / 2, 8);
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('⬇ oscuro · mueve la mano = WOB', jamW / 2, jamH - 8);
+    ctx.restore();
+  }
   function jamDrawOrbHint(ctx) {
     if (jamOrbs.length) return;                       // ya hay bolas, no hace falta
     ctx.save();
@@ -1019,6 +1072,7 @@
     if (jamMode === 'synth') { jamDrawTheremin(ctx); return; }
     if (jamMode === 'pose') { jamDrawPoseLegend(ctx); return; }
     if (jamMode === 'orbs') { jamDrawOrbHint(ctx); return; }
+    if (jamMode === 'bass') { jamDrawBassHint(ctx); return; }
     const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
     ctx.save();
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.06)';
@@ -1071,16 +1125,24 @@
     samples: '🥁 Golpea con los dedos en cada zona',
     synth: '🎻 Theremin: mueve la mano = melodía',
     pose: '✋ Haz gestos: ✊✋✌☝👍🤟',
-    orbs: '🪀 Flick rápido = lanza una bola que rebota'
+    orbs: '🪀 Flick rápido = lanza una bola que rebota',
+    bass: '🔊 Arriba/abajo = WOB · gestos = carácter'
   };
   function setJamMode(m) {
     jamReleaseAll();
     jamReleasePianoHand();
+    jamBassOff();
     jamFinger.clear();
     jamPoseLast[0] = jamPoseLast[1] = '';
+    jamBassLastG = ''; jamBassOct = 0;
     if (m !== 'orbs') jamOrbs.length = 0;     // limpia bolas al salir de orbes
     jamMode = m;
-    ['samples', 'synth', 'pose', 'orbs'].forEach((k) =>
+    if (m === 'bass') {                        // arranque con buen tono ácido
+      send({ cmd: 'synth303Param', paramId: 1, value: 0.75 });  // resonancia
+      send({ cmd: 'synth303Param', paramId: 11, value: 0.4 });  // overdrive
+      send({ cmd: 'synth303Param', paramId: 3, value: 0.6 });   // decay
+    }
+    ['samples', 'synth', 'pose', 'orbs', 'bass'].forEach((k) =>
       $('jamMode' + k.charAt(0).toUpperCase() + k.slice(1)).classList.toggle('active', m === k));
     if (jamCamOn) jamTip(JAM_MODE_TIPS[m] || '', true);
   }
