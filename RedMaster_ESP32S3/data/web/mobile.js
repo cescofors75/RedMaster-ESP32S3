@@ -850,19 +850,20 @@
     st.x = x; st.y = y; jamFinger.set(key, st);
     return hit;
   }
-  // DRUM: cada dedo = un pad. GOLPE hacia abajo dispara su pad (sin spam).
+  // DRUM: GOLPE hacia abajo dispara el pad de la ZONA donde está el dedo
+  // (posición = sonido, predecible; da igual qué dedo/mano).
   function jamProcessDrum(hands) {
     const now = performance.now();
     for (let h = 0; h < hands.length; h++) {
       for (let f = 0; f < JAM_TIPS.length; f++) {
         const lm = hands[h][JAM_TIPS[f]]; if (!lm) continue;
         const x = (1 - lm.x) * jamW, y = lm.y * jamH;
-        if (jamTap('d', h, f, x, y, now)) jamHit(jamFingerPad(h, f), x, y);
+        if (jamTap('d', h, f, x, y, now)) jamHit(jamZoneAt(x, y), x, y);
       }
     }
   }
-  // PIANO (un solo engine, como un piano real): cada dedo toca una nota según su
-  // posición X al GOLPEAR hacia abajo. Varios dedos a la vez = acordes.
+  // PIANO (un solo engine): GOLPE hacia abajo toca la nota de la ZONA. Varios
+  // dedos = acordes. Posición = nota (predecible).
   function jamProcessPiano(hands) {
     const now = performance.now();
     for (let h = 0; h < hands.length; h++) {
@@ -870,11 +871,11 @@
         const lm = hands[h][JAM_TIPS[f]]; if (!lm) continue;
         const x = (1 - lm.x) * jamW, y = lm.y * jamH;
         if (!jamTap('p', h, f, x, y, now)) continue;
-        const idx = Math.max(0, Math.min(JAM_NOTES.length - 1, Math.floor((x / jamW) * JAM_NOTES.length)));
-        const note = JAM_NOTES[idx];
+        const zone = jamZoneAt(x, y);
+        const note = JAM_NOTES[zone];
         send({ cmd: 'synthNoteOnEx', engine: JAM_PIANO_ENGINE, note, velocity: 110, accent: false, slide: false });
         setTimeout(() => send({ cmd: 'synthNoteOff', engine: JAM_PIANO_ENGINE, track: 255, note }), 320);
-        const rgb = hexToRgb(currentPalette[idx]);
+        const rgb = hexToRgb(currentPalette[zone]);
         spawnJamBurst(x, y, rgb);
         jamShowText(jamNoteName(note), rgb);
       }
@@ -895,6 +896,26 @@
     for (const [a, b] of JAM_CONN) { const p = px(a), q = px(b); ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke(); }
     ctx.shadowBlur = 0;
     for (const tip of JAM_TIPS) { const p = px(tip); ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 14; ctx.fill(); }
+    ctx.restore();
+  }
+  // Rejilla de 16 zonas con etiqueta (palabra o nota) para ver dónde suena cada cosa.
+  function jamDrawGuides(ctx) {
+    const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
+    ctx.save();
+    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    for (let i = 1; i < JAM_COLS; i++) { ctx.beginPath(); ctx.moveTo(i * cw, 0); ctx.lineTo(i * cw, jamH); ctx.stroke(); }
+    for (let i = 1; i < JAM_ROWS; i++) { ctx.beginPath(); ctx.moveTo(0, i * ch); ctx.lineTo(jamW, i * ch); ctx.stroke(); }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '700 12px -apple-system, system-ui, sans-serif';
+    for (let z = 0; z < JAM_COLS * JAM_ROWS; z++) {
+      const cx = ((z % JAM_COLS) + 0.5) * cw, cy = (Math.floor(z / JAM_COLS) + 0.5) * ch;
+      const c = hexToRgb(currentPalette[z]);
+      ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.22)`; ctx.fill();
+      const label = jamMode === 'synth' ? jamNoteName(JAM_NOTES[z]) : (JAM_WORDS[z] || '');
+      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.5)`;
+      ctx.fillText(label, cx, cy - 15);
+    }
     ctx.restore();
   }
   function jamDrawText(ctx) {
@@ -1031,17 +1052,10 @@
     if (jamCamOn) {
       ctx.clearRect(0, 0, jamW, jamH); // transparente: se ve el vídeo detrás
     } else {
-      // estela + guías de zona (solo modo táctil)
       ctx.fillStyle = 'rgba(8,11,16,0.28)';
       ctx.fillRect(0, 0, jamW, jamH);
-      const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
-      for (let z = 0; z < JAM_COLS * JAM_ROWS; z++) {
-        const cx = ((z % JAM_COLS) + 0.5) * cw, cy = (Math.floor(z / JAM_COLS) + 0.5) * ch;
-        const c = hexToRgb(currentPalette[z]);
-        ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.18)`; ctx.fill();
-      }
     }
+    jamDrawGuides(ctx); // rejilla de zonas con etiquetas (dónde suena cada cosa)
     // anillos
     for (let i = jamRings.length - 1; i >= 0; i--) {
       const rg = jamRings[i];
