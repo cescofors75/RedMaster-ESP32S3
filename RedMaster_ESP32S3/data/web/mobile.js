@@ -738,9 +738,14 @@
   const JAM_TAP_VY = 0.045;             // golpe = movimiento brusco hacia ABAJO (frac. alto/frame)
   const JAM_TAP_COOLDOWN = 180;         // ms mínimos entre golpes del mismo dedo
   const JAM_PIANO_ENGINE = 3;           // un solo engine en piano (como un piano de verdad)
-  // Modo POSE: golpe + nº de dedos (0=puño … 5=palma) -> pad. Robusto.
-  let jamPose = false;
-  const JAM_POSE_PADS = [0, 1, 2, 3, 4, 5]; // dedos 0..5 -> BOMBO,CAJA,HAT,OPEN,CRASH,CLAP
+  // POSE: gesto reconocido por MediaPipe GestureRecognizer -> pad (fiable).
+  const JAM_GESTURE_PADS = {
+    Closed_Fist: 0, Open_Palm: 4, Victory: 2, Pointing_Up: 1,
+    Thumb_Up: 5, ILoveYou: 6, Thumb_Down: 7
+  };
+  const jamPoseLast = ['', ''];         // último gesto disparado por mano
+  // ORBES (lanza-ritmos): bolas que rebotan y suenan en cada rebote.
+  const jamOrbs = [];
   const JAM_WORDS = ['BOMBO','CAJA','HAT','OPEN','CRASH','CLAP','RIM','COW',
     'TOM','TOM','TOM','SHAKE','CLAVE','CONGA','BONGO','BLOCK'];
   const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
@@ -765,14 +770,9 @@
     jamCanvas.addEventListener('pointerleave', jamUp);
     $('jamModeSamples').addEventListener('click', () => setJamMode('samples'));
     $('jamModeSynth').addEventListener('click', () => setJamMode('synth'));
+    $('jamModePose').addEventListener('click', () => setJamMode('pose'));
+    $('jamModeOrbs').addEventListener('click', () => setJamMode('orbs'));
     $('jamCamBtn').addEventListener('click', toggleJamCamera);
-    $('jamPoseBtn').addEventListener('click', () => {
-      jamPose = !jamPose;
-      jamFinger.clear();
-      $('jamPoseBtn').textContent = jamPose ? '✋' : '📍';
-      $('jamPoseBtn').classList.toggle('active', jamPose);
-      if (jamCamOn) jamTip(jamPose ? '✋ Pose: nº de dedos = sonido' : '📍 Posición: zona = sonido', true);
-    });
     window.addEventListener('resize', () => { if (jamRunning) jamResize(); });
   }
   function jamTip(txt, show) {
@@ -798,15 +798,17 @@
       await jamVideo.play().catch(() => {});
       jamTip('⬇️ Cargando MediaPipe (necesita internet)…', true);
       const CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
-      const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+      // GestureRecognizer: da landmarks (21 puntos) Y gestos reconocidos
+      // (Closed_Fist, Open_Palm, Victory, Pointing_Up, Thumb_Up/Down, ILoveYou).
+      const MODEL = 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task';
       const withTimeout = (p, ms, msg) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(msg)), ms))]);
-      const { FilesetResolver, HandLandmarker } = await withTimeout(import(CDN + '/vision_bundle.mjs'), 30000, 'CDN sin respuesta (¿WiFi sin internet?)');
+      const { FilesetResolver, GestureRecognizer } = await withTimeout(import(CDN + '/vision_bundle.mjs'), 30000, 'CDN sin respuesta (¿WiFi sin internet?)');
       const vision = await withTimeout(FilesetResolver.forVisionTasks(CDN + '/wasm'), 20000, 'Timeout WASM');
       const opts = { runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: .45, minHandPresenceConfidence: .45, minTrackingConfidence: .4 };
       try {
-        jamHands = await withTimeout(HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'GPU' }, ...opts }), 25000, 'Timeout GPU');
+        jamHands = await withTimeout(GestureRecognizer.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'GPU' }, ...opts }), 25000, 'Timeout GPU');
       } catch (_) {
-        jamHands = await withTimeout(HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' }, ...opts }), 30000, 'Timeout CPU (revisa internet)');
+        jamHands = await withTimeout(GestureRecognizer.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' }, ...opts }), 30000, 'Timeout CPU (revisa internet)');
       }
       jamCamOn = true;
       jamCanvas.style.background = 'transparent';
@@ -843,54 +845,88 @@
     spawnJamBurst(x, y, rgb);
     jamShowText(JAM_WORDS[pad] || ('PAD ' + (pad + 1)), rgb);
   }
-  function jamProcessHands(hands) {
+  function jamProcessHands(hands, gestures) {
     if (jamMode === 'synth') jamProcessPiano(hands);
+    else if (jamMode === 'pose') jamProcessPose(hands, gestures);
+    else if (jamMode === 'orbs') jamProcessOrbs(hands);
     else jamProcessDrum(hands);
   }
-  // DRUM: cada dedo = un pad. Mover un dedo rápido = golpe. Varios dedos = varios sonidos.
   // Detecta un "golpe": el dedo se mueve bruscamente hacia ABAJO. Devuelve true
-  // una sola vez por golpe (respetando el cooldown). `pref` separa el estado
-  // drum/piano para que no se pisen.
+  // una sola vez por golpe (respetando el cooldown).
   function jamTap(pref, h, f, x, y, now) {
     const key = pref + h + '-' + f;
     const st = jamFinger.get(key) || { x, y, lastHit: 0 };
-    const vy = (y - st.y) / jamH;                  // + = hacia abajo (frac. alto/frame)
+    const vy = (y - st.y) / jamH;
     let hit = false;
     if (vy > JAM_TAP_VY && now - st.lastHit > JAM_TAP_COOLDOWN) { hit = true; st.lastHit = now; }
     st.x = x; st.y = y; jamFinger.set(key, st);
     return hit;
   }
-  // Nº de dedos extendidos 0..5 (incluye pulgar). Robusto para el modo POSE.
-  function jamHandFingers(hand) {
-    const d = (a, b) => Math.hypot(hand[a].x - hand[b].x, hand[a].y - hand[b].y);
-    let n = 0;
-    if (d(4, 0) > d(2, 0) * 1.10) n++;              // pulgar
-    const tips = [8, 12, 16, 20], pips = [6, 10, 14, 18];
-    for (let i = 0; i < 4; i++) if (d(tips[i], 0) > d(pips[i], 0) * 1.05) n++;
-    return n;
-  }
-  // DRUM:
-  //  · POSICIÓN (📍): golpe hacia abajo → pad de la zona bajo el dedo.
-  //  · POSE (✋): golpe de la mano → pad según nº de dedos (0=puño … 5=palma).
+  // DRUM: golpe hacia abajo → pad de la zona bajo el dedo (posición = sonido).
   function jamProcessDrum(hands) {
     const now = performance.now();
-    if (jamPose) {
-      for (let h = 0; h < hands.length; h++) {
-        const ref = hands[h][9]; if (!ref) continue; // centro de la palma
-        const x = (1 - ref.x) * jamW, y = ref.y * jamH;
-        if (jamTap('g', h, 0, x, y, now)) {
-          const count = jamHandFingers(hands[h]);
-          jamHit(JAM_POSE_PADS[count] != null ? JAM_POSE_PADS[count] : 0, x, y);
-        }
-      }
-      return;
-    }
     for (let h = 0; h < hands.length; h++) {
       for (let f = 0; f < JAM_TIPS.length; f++) {
         const lm = hands[h][JAM_TIPS[f]]; if (!lm) continue;
         const x = (1 - lm.x) * jamW, y = lm.y * jamH;
         if (jamTap('d', h, f, x, y, now)) jamHit(jamZoneAt(x, y), x, y);
       }
+    }
+  }
+  // POSE: gesto reconocido (✊✋✌☝👍🤟) → su pad. Suena al CAMBIAR de gesto
+  // (fiable, sin spam). Usa el GestureRecognizer de MediaPipe.
+  function jamProcessPose(hands, gestures) {
+    if (!gestures) return;
+    for (let h = 0; h < hands.length; h++) {
+      const g = gestures[h] && gestures[h][0];
+      const name = (g && g.score > 0.55) ? g.categoryName : '';
+      if (name && name !== jamPoseLast[h] && JAM_GESTURE_PADS[name] != null) {
+        const ref = hands[h][9] || hands[h][0];
+        const x = (1 - ref.x) * jamW, y = ref.y * jamH;
+        jamHit(JAM_GESTURE_PADS[name], x, y);
+      }
+      jamPoseLast[h] = name;
+    }
+  }
+  // ORBES (lanza-ritmos): un flick rápido de la mano lanza una bola que rebota
+  // por la pantalla; cada rebote suena. Lanza varias = poliritmo generativo.
+  function jamProcessOrbs(hands) {
+    const now = performance.now();
+    for (let h = 0; h < hands.length; h++) {
+      const ref = hands[h][9]; if (!ref) continue;   // centro de la palma
+      const x = (1 - ref.x) * jamW, y = ref.y * jamH;
+      const st = jamFinger.get('o' + h) || { x, y, t: now, last: 0 };
+      const dt = Math.max(1, now - st.t) / 1000;     // s
+      const vx = (x - st.x) / dt, vy = (y - st.y) / dt; // px/s
+      const speed = Math.hypot(vx, vy);
+      if (speed > jamW * 1.6 && now - st.last > 280) {  // flick = lanzar
+        spawnOrb(x, y, vx * 0.45, vy * 0.45, jamZoneAt(x, y));
+        st.last = now;
+      }
+      st.x = x; st.y = y; st.t = now; jamFinger.set('o' + h, st);
+    }
+  }
+  function spawnOrb(x, y, vx, vy, pad) {
+    if (jamOrbs.length >= 16) jamOrbs.shift();
+    jamOrbs.push({ x, y, vx, vy, pad, rgb: hexToRgb(currentPalette[pad]), life: 1 });
+    jamHit(pad, x, y);                                // suena al lanzar
+  }
+  function jamUpdateOrbs(ctx, dt) {
+    for (let i = jamOrbs.length - 1; i >= 0; i--) {
+      const o = jamOrbs[i];
+      o.x += o.vx * dt; o.y += o.vy * dt;
+      o.vx *= 0.999; o.vy *= 0.999;
+      let b = false;
+      if (o.x < 12) { o.x = 12; o.vx = Math.abs(o.vx); b = true; }
+      else if (o.x > jamW - 12) { o.x = jamW - 12; o.vx = -Math.abs(o.vx); b = true; }
+      if (o.y < 12) { o.y = 12; o.vy = Math.abs(o.vy); b = true; }
+      else if (o.y > jamH - 12) { o.y = jamH - 12; o.vy = -Math.abs(o.vy); b = true; }
+      if (b) { triggerPad(o.pad); spawnJamBurst(o.x, o.y, o.rgb); jamShowText(JAM_WORDS[o.pad] || '', o.rgb); }
+      o.life -= dt * 0.045;                            // ~22 s de vida
+      if (o.life <= 0) { jamOrbs.splice(i, 1); continue; }
+      ctx.beginPath(); ctx.arc(o.x, o.y, 11, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${o.rgb[0]},${o.rgb[1]},${o.rgb[2]},${0.5 + o.life * 0.5})`;
+      ctx.shadowColor = `rgb(${o.rgb[0]},${o.rgb[1]},${o.rgb[2]})`; ctx.shadowBlur = 18; ctx.fill(); ctx.shadowBlur = 0;
     }
   }
   // PIANO (un solo engine): GOLPE hacia abajo toca la nota de la ZONA. Varios
@@ -939,18 +975,28 @@
   }
   // Leyenda del modo POSE (nº de dedos → sonido).
   function jamDrawPoseLegend(ctx) {
-    const icons = ['✊ 0', '☝ 1', '✌ 2', '🤟 3', '🖖 4', '🖐 5'];
+    const rows = [['✊', 'Closed_Fist'], ['🖐', 'Open_Palm'], ['✌', 'Victory'],
+      ['☝', 'Pointing_Up'], ['👍', 'Thumb_Up'], ['🤟', 'ILoveYou']];
     ctx.save();
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.font = '700 15px -apple-system, system-ui, sans-serif';
     const x = 16; let y = 26;
-    for (let i = 0; i < 6; i++) {
-      const pad = JAM_POSE_PADS[i] != null ? JAM_POSE_PADS[i] : 0;
+    for (const [icon, name] of rows) {
+      const pad = JAM_GESTURE_PADS[name];
       const c = hexToRgb(currentPalette[pad]);
       ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.85)`;
-      ctx.fillText(`${icons[i]} → ${JAM_WORDS[pad] || ''}`, x, y);
+      ctx.fillText(`${icon} → ${JAM_WORDS[pad] || ''}`, x, y);
       y += 26;
     }
+    ctx.restore();
+  }
+  function jamDrawOrbHint(ctx) {
+    if (jamOrbs.length) return;                       // ya hay bolas, no hace falta
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = '800 17px -apple-system, system-ui, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillText('🪀 Lanza bolas: flick rápido con la mano', jamW / 2, jamH / 2);
     ctx.restore();
   }
   // Tira del THEREMIN: columnas de la escala pentatónica con su nota.
@@ -971,7 +1017,8 @@
   // Rejilla de 16 zonas con etiqueta (palabra o nota) para ver dónde suena cada cosa.
   function jamDrawGuides(ctx) {
     if (jamMode === 'synth') { jamDrawTheremin(ctx); return; }
-    if (jamPose) { jamDrawPoseLegend(ctx); return; }
+    if (jamMode === 'pose') { jamDrawPoseLegend(ctx); return; }
+    if (jamMode === 'orbs') { jamDrawOrbHint(ctx); return; }
     const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
     ctx.save();
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.06)';
@@ -1020,14 +1067,22 @@
       ctx.strokeText(jamBig.text, cx, cy); ctx.fillText(jamBig.text, cx, cy); ctx.restore();
     }
   }
+  const JAM_MODE_TIPS = {
+    samples: '🥁 Golpea con los dedos en cada zona',
+    synth: '🎻 Theremin: mueve la mano = melodía',
+    pose: '✋ Haz gestos: ✊✋✌☝👍🤟',
+    orbs: '🪀 Flick rápido = lanza una bola que rebota'
+  };
   function setJamMode(m) {
     jamReleaseAll();
     jamReleasePianoHand();
     jamFinger.clear();
+    jamPoseLast[0] = jamPoseLast[1] = '';
+    if (m !== 'orbs') jamOrbs.length = 0;     // limpia bolas al salir de orbes
     jamMode = m;
-    $('jamModeSamples').classList.toggle('active', m === 'samples');
-    $('jamModeSynth').classList.toggle('active', m === 'synth');
-    if (jamCamOn) jamTip(m === 'synth' ? '🎻 Theremin: mueve la mano = melodía' : '✋ ¡Mueve los dedos = ritmo!', true);
+    ['samples', 'synth', 'pose', 'orbs'].forEach((k) =>
+      $('jamMode' + k.charAt(0).toUpperCase() + k.slice(1)).classList.toggle('active', m === k));
+    if (jamCamOn) jamTip(JAM_MODE_TIPS[m] || '', true);
   }
   function jamResize() {
     jamDpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1056,7 +1111,7 @@
   function jamTrigger(zone, x, y) {
     const rgb = hexToRgb(currentPalette[zone]);
     spawnJamBurst(x, y, rgb);
-    if (jamMode === 'samples') {
+    if (jamMode !== 'synth') {            // pads en samples/pose/orbs (táctil)
       triggerPad(zone);
       jamShowText(JAM_WORDS[zone] || ('PAD ' + (zone + 1)), rgb);
       return null;
@@ -1114,11 +1169,11 @@
     jamRaf = requestAnimationFrame(jamLoop);
     const dt = Math.min(0.05, (t - jamLastT) / 1000); jamLastT = t;
     const ctx = jamCtx;
-    // Cámara activa: detectar manos y disparar
-    let hands = null;
+    // Cámara activa: reconocer manos + gestos y disparar
+    let hands = null, gestures = null;
     if (jamCamOn && jamHands && jamVideo && jamVideo.readyState >= 2 && jamVideo.videoWidth > 0) {
-      try { const res = jamHands.detectForVideo(jamVideo, t); hands = res && res.landmarks; } catch (_) {}
-      if (hands && hands.length) jamProcessHands(hands);
+      try { const res = jamHands.recognizeForVideo(jamVideo, t); hands = res && res.landmarks; gestures = res && res.gestures; } catch (_) {}
+      if (hands && hands.length) jamProcessHands(hands, gestures);
       else if (jamMode === 'synth') jamReleasePianoHand();
     }
     if (jamCamOn) {
@@ -1147,6 +1202,8 @@
       ctx.fillStyle = `rgba(${p.rgb[0]},${p.rgb[1]},${p.rgb[2]},${p.life * 0.9})`;
       ctx.fill();
     }
+    // bolas que rebotan (lanza-ritmos)
+    if (jamOrbs.length) jamUpdateOrbs(ctx, dt);
     // esqueletos de manos + texto espectacular
     if (jamCamOn && hands) { for (const hand of hands) jamDrawHand(ctx, hand); }
     jamDrawText(ctx);
