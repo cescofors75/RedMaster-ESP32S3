@@ -10,3 +10,6 @@ RedMaster_DaisySeed64MB/DaisySeed/build_*.txt
 # Binarios grandes (evitar advertencia GitHub 50 MB)
 .tools/caddy/caddy.exe
 **/*.exe
+
+# data_gz es artefacto de build (se regenera desde data/ en uploadfs)
+RedMaster_ESP32S3/data_gz/
