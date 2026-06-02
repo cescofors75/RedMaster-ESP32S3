@@ -810,7 +810,7 @@
       }
       jamCamOn = true;
       jamCanvas.style.background = 'transparent';
-      jamTip(jamMode === 'synth' ? '✋ Mano = notas · otra mano = engine' : '✋ ¡Mueve los dedos = ritmo!', true);
+      jamTip(jamMode === 'synth' ? '🎻 Theremin: mueve la mano = melodía' : '✋ ¡Mueve los dedos = ritmo!', true);
       setTimeout(() => { if (jamCamOn) jamTip(null, false); }, 2200);
     } catch (e) {
       stopJamCam();
@@ -895,24 +895,32 @@
   }
   // PIANO (un solo engine): GOLPE hacia abajo toca la nota de la ZONA. Varios
   // dedos = acordes. Posición = nota (predecible).
+  // THEREMIN: la nota sigue la posición X de la mano en escala PENTATÓNICA (no
+  // hay notas malas → siempre suena bien y es fácil). Se mantiene mientras haya
+  // mano; cambia de nota al cruzar de columna (slide = ligado, suave).
+  const JAM_PENTA = [48, 50, 52, 55, 57, 60, 62, 64, 67, 69, 72, 74, 76, 79, 81, 84];
+  let jamTherNote = -1;
   function jamProcessPiano(hands) {
-    const now = performance.now();
-    for (let h = 0; h < hands.length; h++) {
-      for (let f = 0; f < JAM_TIPS.length; f++) {
-        const lm = hands[h][JAM_TIPS[f]]; if (!lm) continue;
-        const x = (1 - lm.x) * jamW, y = lm.y * jamH;
-        if (!jamTap('p', h, f, x, y, now)) continue;
-        const zone = jamZoneAt(x, y);
-        const note = JAM_NOTES[zone];
-        send({ cmd: 'synthNoteOnEx', engine: JAM_PIANO_ENGINE, note, velocity: 110, accent: false, slide: false });
-        setTimeout(() => send({ cmd: 'synthNoteOff', engine: JAM_PIANO_ENGINE, track: 255, note }), 320);
-        const rgb = hexToRgb(currentPalette[zone]);
-        spawnJamBurst(x, y, rgb);
-        jamShowText(jamNoteName(note), rgb);
-      }
+    if (!hands.length) { jamReleasePianoHand(); return; }
+    // la mano más ALTA (índice más arriba) es la que toca
+    let hand = hands[0];
+    if (hands.length >= 2 && hands[1][8] && hands[0][8] && hands[1][8].y < hands[0][8].y) hand = hands[1];
+    const lm = hand[8] || hand[9]; if (!lm) { jamReleasePianoHand(); return; }
+    const nx = 1 - lm.x;                          // 0 (izq) .. 1 (der)
+    const idx = Math.max(0, Math.min(JAM_PENTA.length - 1, Math.floor(nx * JAM_PENTA.length)));
+    const note = JAM_PENTA[idx];
+    if (note !== jamTherNote) {
+      if (jamTherNote >= 0) send({ cmd: 'synthNoteOff', engine: JAM_PIANO_ENGINE, track: 255, note: jamTherNote });
+      send({ cmd: 'synthNoteOnEx', engine: JAM_PIANO_ENGINE, note, velocity: 110, accent: false, slide: true });
+      jamTherNote = note;
+      const rgb = hexToRgb(currentPalette[idx % 16]);
+      spawnJamBurst(nx * jamW, lm.y * jamH, rgb);
+      jamShowText(jamNoteName(note), rgb);
     }
   }
-  function jamReleasePianoHand() { /* notas pulsadas se auto-sueltan; nada que sostener */ }
+  function jamReleasePianoHand() {
+    if (jamTherNote >= 0) { send({ cmd: 'synthNoteOff', engine: JAM_PIANO_ENGINE, track: 255, note: jamTherNote }); jamTherNote = -1; }
+  }
   function jamNoteName(midi) { return NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1); }
   function jamCountFingers(hand) {
     const d = (a, b) => Math.hypot(hand[a].x - hand[b].x, hand[a].y - hand[b].y);
@@ -945,9 +953,25 @@
     }
     ctx.restore();
   }
+  // Tira del THEREMIN: columnas de la escala pentatónica con su nota.
+  function jamDrawTheremin(ctx) {
+    const n = JAM_PENTA.length, cw = jamW / n;
+    ctx.save();
+    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.font = '700 11px -apple-system, system-ui, sans-serif';
+    for (let i = 0; i < n; i++) {
+      if (i > 0) { ctx.beginPath(); ctx.moveTo(i * cw, 0); ctx.lineTo(i * cw, jamH); ctx.stroke(); }
+      const c = hexToRgb(currentPalette[i % 16]);
+      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.45)`;
+      ctx.fillText(jamNoteName(JAM_PENTA[i]), (i + 0.5) * cw, 6);
+    }
+    ctx.restore();
+  }
   // Rejilla de 16 zonas con etiqueta (palabra o nota) para ver dónde suena cada cosa.
   function jamDrawGuides(ctx) {
-    if (jamPose && jamMode !== 'synth') { jamDrawPoseLegend(ctx); return; }
+    if (jamMode === 'synth') { jamDrawTheremin(ctx); return; }
+    if (jamPose) { jamDrawPoseLegend(ctx); return; }
     const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
     ctx.save();
     ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.06)';
@@ -1003,7 +1027,7 @@
     jamMode = m;
     $('jamModeSamples').classList.toggle('active', m === 'samples');
     $('jamModeSynth').classList.toggle('active', m === 'synth');
-    if (jamCamOn) jamTip(m === 'synth' ? '✋ Mano = notas · otra mano = engine' : '✋ ¡Mueve los dedos = ritmo!', true);
+    if (jamCamOn) jamTip(m === 'synth' ? '🎻 Theremin: mueve la mano = melodía' : '✋ ¡Mueve los dedos = ritmo!', true);
   }
   function jamResize() {
     jamDpr = Math.min(window.devicePixelRatio || 1, 2);
