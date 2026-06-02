@@ -731,6 +731,19 @@
   const JAM_COLS = 4, JAM_ROWS = 4; // 16 zonas = 16 pads
   // 16 notas (escala mayor, 2 octavas) para el modo synth.
   const JAM_NOTES = [48, 50, 52, 53, 55, 57, 59, 60, 62, 64, 65, 67, 69, 71, 72, 74];
+  // ---- MediaPipe Hands (cámara) ----
+  let jamVideo = null, jamHands = null, jamCamOn = false, jamCamLoading = false;
+  const jamFinger = new Map();          // 'h-f' -> { x, y, lastHit }
+  const JAM_TIPS = [4, 8, 12, 16, 20];  // pulgar..meñique (5 dedos = 5 pads/mano)
+  const JAM_TRIG_COOLDOWN = 110, JAM_MOVE_THRESH = 0.030;
+  const JAM_WORDS = ['BOMBO','CAJA','HAT','OPEN','CRASH','CLAP','RIM','COW',
+    'TOM','TOM','TOM','SHAKE','CLAVE','CONGA','BONGO','BLOCK'];
+  const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const JAM_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],
+    [10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  let jamPianoNote = -1, jamPianoEngLabel = '', jamPitch = 1, jamPitchT = 0;
+  let jamBig = null;                    // golpe grande central { text, color, t }
+  const jamLog = [];                    // histórico reciente [{ text, color, t }]
 
   function hexToRgb(hex) {
     const n = parseInt(hex.slice(1), 16);
@@ -750,38 +763,185 @@
     $('jamCamBtn').addEventListener('click', toggleJamCamera);
     window.addEventListener('resize', () => { if (jamRunning) jamResize(); });
   }
-  let _jamCamStream = null;
+  function jamTip(txt, show) {
+    const el = $('jamTip'); if (!el) return;
+    if (txt != null) el.textContent = txt;
+    el.classList.toggle('hide', show === false);
+  }
   async function toggleJamCamera() {
-    const video = $('jamVideo');
-    const btn = $('jamCamBtn');
-    if (_jamCamStream) {
-      // Apagar camara
-      _jamCamStream.getTracks().forEach(t => t.stop());
-      _jamCamStream = null;
-      video.srcObject = null;
-      video.classList.remove('on');
-      btn.classList.remove('active');
-      return;
-    }
+    if (jamCamLoading) return;
+    if (jamCamOn) { stopJamCam(); jamTip('👆 ¡Toca! · 📷 para manos', true); return; }
+    await startJamCam();
+  }
+  async function startJamCam() {
+    jamCamLoading = true;
+    $('jamCamBtn').classList.add('active');
+    jamVideo = $('jamVideo');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false
+      jamTip('📷 Iniciando cámara…', true);
+      // Cámara FRONTAL: el niño se ve y mueve sus propios dedos.
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+      jamVideo.srcObject = stream;
+      jamVideo.classList.add('on');
+      await jamVideo.play().catch(() => {});
+      jamTip('⬇️ Cargando MediaPipe (necesita internet)…', true);
+      const CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+      const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+      const withTimeout = (p, ms, msg) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(msg)), ms))]);
+      const { FilesetResolver, HandLandmarker } = await withTimeout(import(CDN + '/vision_bundle.mjs'), 30000, 'CDN sin respuesta (¿WiFi sin internet?)');
+      const vision = await withTimeout(FilesetResolver.forVisionTasks(CDN + '/wasm'), 20000, 'Timeout WASM');
+      const opts = { runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: .45, minHandPresenceConfidence: .45, minTrackingConfidence: .4 };
+      try {
+        jamHands = await withTimeout(HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'GPU' }, ...opts }), 25000, 'Timeout GPU');
+      } catch (_) {
+        jamHands = await withTimeout(HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' }, ...opts }), 30000, 'Timeout CPU (revisa internet)');
+      }
+      jamCamOn = true;
+      jamCanvas.style.background = 'transparent';
+      jamTip(jamMode === 'synth' ? '✋ Mano = notas · otra mano = engine' : '✋ ¡Mueve los dedos = ritmo!', true);
+      setTimeout(() => { if (jamCamOn) jamTip(null, false); }, 2200);
+    } catch (e) {
+      stopJamCam();
+      jamTip('❌ ' + ((e && e.message) || 'cámara/red'), true);
+      setTimeout(() => jamTip(null, false), 3500);
+    } finally { jamCamLoading = false; }
+  }
+  function stopJamCam() {
+    jamCamOn = false;
+    const b = $('jamCamBtn'); if (b) b.classList.remove('active');
+    if (jamCanvas) jamCanvas.style.background = '';
+    jamFinger.clear(); jamReleasePianoHand();
+    if (jamVideo) {
+      jamVideo.classList.remove('on');
+      const s = jamVideo.srcObject;
+      if (s) { s.getTracks().forEach((tr) => tr.stop()); jamVideo.srcObject = null; }
+    }
+  }
+  // (mano, dedo) -> pad. Mano 0: pads 0..4, mano 1: pads 5..9.
+  function jamFingerPad(hand, finger) { return (hand * 5 + finger) % 16; }
+  function jamShowText(text, rgb) {
+    const now = performance.now();
+    jamBig = { text, color: rgb, t: now };
+    jamLog.push({ text, color: rgb, t: now });
+    if (jamLog.length > 9) jamLog.shift();
+  }
+  function jamHit(pad, x, y) {
+    triggerPad(pad);
+    const rgb = hexToRgb(currentPalette[pad]);
+    spawnJamBurst(x, y, rgb);
+    jamShowText(JAM_WORDS[pad] || ('PAD ' + (pad + 1)), rgb);
+  }
+  function jamProcessHands(hands) {
+    if (jamMode === 'synth') jamProcessPiano(hands);
+    else jamProcessDrum(hands);
+  }
+  // DRUM: cada dedo = un pad. Mover un dedo rápido = golpe. Varios dedos = varios sonidos.
+  function jamProcessDrum(hands) {
+    const now = performance.now();
+    for (let h = 0; h < hands.length; h++) {
+      for (let f = 0; f < JAM_TIPS.length; f++) {
+        const lm = hands[h][JAM_TIPS[f]]; if (!lm) continue;
+        const x = (1 - lm.x) * jamW, y = lm.y * jamH;
+        const key = h + '-' + f;
+        const st = jamFinger.get(key) || { x, y, lastHit: 0 };
+        const dist = Math.hypot(x - st.x, y - st.y) / jamW;
+        if (dist > JAM_MOVE_THRESH && now - st.lastHit > JAM_TRIG_COOLDOWN) { jamHit(jamFingerPad(h, f), x, y); st.lastHit = now; }
+        st.x = x; st.y = y; jamFinger.set(key, st);
+      }
+    }
+  }
+  // PIANO: una mano toca notas (X del índice), la OTRA cambia engine (nº de dedos
+  // 1..4 → 303/WT/SH101/FM). La altura del dedo hace bend de tono.
+  function jamProcessPiano(hands) {
+    if (!hands.length) { jamReleasePianoHand(); return; }
+    let noteHand = hands[0], engHand = null;
+    if (hands.length >= 2 && hands[0][8] && hands[1][8]) {
+      const ix0 = 1 - hands[0][8].x, ix1 = 1 - hands[1][8].x;
+      if (ix1 > ix0) { noteHand = hands[1]; engHand = hands[0]; } else { engHand = hands[1]; }
+    }
+    if (engHand) {
+      const n = jamCountFingers(engHand);
+      if (n >= 1 && n <= 4) {
+        const eng = PIANO_ENGINES[n - 1].id;
+        if (eng !== pianoEngine) {
+          if (jamPianoNote >= 0) { send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamPianoNote }); jamPianoNote = -1; }
+          pianoEngine = eng; jamPianoEngLabel = PIANO_ENGINES[n - 1].label;
+          document.querySelectorAll('#engineSel button').forEach((b) => b.classList.toggle('active', +b.dataset.engine === eng));
+        }
+      }
+    }
+    const lm = noteHand[8]; if (!lm) { jamReleasePianoHand(); return; }
+    const x = (1 - lm.x) * jamW, y = lm.y * jamH;
+    const idx = Math.max(0, Math.min(JAM_NOTES.length - 1, Math.floor((x / jamW) * JAM_NOTES.length)));
+    const note = JAM_NOTES[idx];
+    if (note !== jamPianoNote) {
+      if (jamPianoNote >= 0) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamPianoNote });
+      send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: true });
+      jamPianoNote = note;
+      const rgb = hexToRgb(currentPalette[idx]);
+      spawnJamBurst(x, y, rgb); jamShowText(jamNoteName(note) + (jamPianoEngLabel ? ' · ' + jamPianoEngLabel : ''), rgb);
+    }
+    const pitch = Math.max(0.5, Math.min(2.0, 2.0 - (y / jamH) * 1.5));
+    const now = performance.now();
+    if (Math.abs(pitch - jamPitch) > 0.015 && now - jamPitchT > 45) { jamPitch = pitch; jamPitchT = now; send({ cmd: 'setLivePitch', pitch }); }
+  }
+  function jamReleasePianoHand() {
+    if (jamPianoNote >= 0) { send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamPianoNote }); jamPianoNote = -1; }
+    if (jamPitch !== 1) { jamPitch = 1; send({ cmd: 'setLivePitch', pitch: 1 }); }
+  }
+  function jamNoteName(midi) { return NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1); }
+  function jamCountFingers(hand) {
+    const d = (a, b) => Math.hypot(hand[a].x - hand[b].x, hand[a].y - hand[b].y);
+    const tips = [8, 12, 16, 20], pips = [6, 10, 14, 18]; let n = 0;
+    for (let i = 0; i < 4; i++) if (d(tips[i], 0) > d(pips[i], 0) * 1.05) n++;
+    return n;
+  }
+  function jamDrawHand(ctx, hand) {
+    const px = (i) => [(1 - hand[i].x) * jamW, hand[i].y * jamH];
+    ctx.save(); ctx.lineCap = 'round'; ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.shadowColor = 'rgba(0,229,255,0.9)'; ctx.shadowBlur = 12;
+    for (const [a, b] of JAM_CONN) { const p = px(a), q = px(b); ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke(); }
+    ctx.shadowBlur = 0;
+    for (const tip of JAM_TIPS) { const p = px(tip); ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 14; ctx.fill(); }
+    ctx.restore();
+  }
+  function jamDrawText(ctx) {
+    const now = performance.now();
+    const parts = jamLog.filter((p) => now - p.t < 2200).slice(-7);
+    if (parts.length) {
+      ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.font = '700 16px -apple-system, system-ui, sans-serif';
+      const gap = 10;
+      const ws = parts.map((p) => ctx.measureText(p.text.toLowerCase()).width);
+      const total = ws.reduce((a, b) => a + b, 0) + gap * (parts.length - 1);
+      let x = jamW / 2 - total / 2; const y = jamH - 20;
+      parts.forEach((p, i) => {
+        const alpha = Math.max(0.15, 1 - (now - p.t) / 2200);
+        ctx.fillStyle = `rgba(${p.color[0]},${p.color[1]},${p.color[2]},${alpha})`;
+        ctx.fillText(p.text.toLowerCase(), x + ws[i] / 2, y); x += ws[i] + gap;
       });
-      _jamCamStream = stream;
-      video.srcObject = stream;
-      video.play().catch(() => {});
-      video.classList.add('on');
-      btn.classList.add('active');
-    } catch (err) {
-      alert('Camara no disponible: ' + (err.message || err));
+      ctx.restore();
+    }
+    if (jamBig) {
+      const age = (now - jamBig.t) / 650;
+      if (age >= 1) { jamBig = null; return; }
+      ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      const scale = 1 + (1 - age) * 0.6, alpha = 1 - age, size = Math.min(jamW, jamH) * 0.16 * scale;
+      ctx.font = `900 ${size}px -apple-system, system-ui, sans-serif`;
+      ctx.lineWidth = Math.max(2, size * 0.06); ctx.strokeStyle = `rgba(0,0,0,${alpha * 0.55})`;
+      ctx.shadowColor = `rgba(${jamBig.color[0]},${jamBig.color[1]},${jamBig.color[2]},${alpha})`; ctx.shadowBlur = 30 * (1 - age);
+      ctx.fillStyle = `rgba(${jamBig.color[0]},${jamBig.color[1]},${jamBig.color[2]},${alpha})`;
+      const cx = jamW / 2, cy = jamH * 0.4;
+      ctx.strokeText(jamBig.text, cx, cy); ctx.fillText(jamBig.text, cx, cy); ctx.restore();
     }
   }
   function setJamMode(m) {
     jamReleaseAll();
+    jamReleasePianoHand();
     jamMode = m;
     $('jamModeSamples').classList.toggle('active', m === 'samples');
     $('jamModeSynth').classList.toggle('active', m === 'synth');
+    if (jamCamOn) jamTip(m === 'synth' ? '✋ Mano = notas · otra mano = engine' : '✋ ¡Mueve los dedos = ritmo!', true);
   }
   function jamResize() {
     jamDpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -799,6 +959,7 @@
       jamRunning = false;
       if (jamRaf) { cancelAnimationFrame(jamRaf); jamRaf = 0; }
       jamReleaseAll();
+      stopJamCam(); // libera cámara al salir de la pestaña (perf/batería)
     }
   }
   function jamZoneAt(x, y) {
@@ -807,13 +968,16 @@
     return row * JAM_COLS + col;
   }
   function jamTrigger(zone, x, y) {
-    spawnJamBurst(x, y, hexToRgb(PALETTE[zone]));
+    const rgb = hexToRgb(currentPalette[zone]);
+    spawnJamBurst(x, y, rgb);
     if (jamMode === 'samples') {
       triggerPad(zone);
+      jamShowText(JAM_WORDS[zone] || ('PAD ' + (zone + 1)), rgb);
       return null;
     }
     const note = JAM_NOTES[zone];
     send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: false });
+    jamShowText(jamNoteName(note), rgb);
     return note;
   }
   function jamPos(e) {
@@ -864,16 +1028,26 @@
     jamRaf = requestAnimationFrame(jamLoop);
     const dt = Math.min(0.05, (t - jamLastT) / 1000); jamLastT = t;
     const ctx = jamCtx;
-    // estela: capa semitransparente para que los trazos se desvanezcan
-    ctx.fillStyle = 'rgba(8,11,16,0.28)';
-    ctx.fillRect(0, 0, jamW, jamH);
-    // gu├¡as suaves en el centro de cada zona
-    const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
-    for (let z = 0; z < JAM_COLS * JAM_ROWS; z++) {
-      const cx = ((z % JAM_COLS) + 0.5) * cw, cy = (Math.floor(z / JAM_COLS) + 0.5) * ch;
-      const c = hexToRgb(PALETTE[z]);
-      ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.18)`; ctx.fill();
+    // Cámara activa: detectar manos y disparar
+    let hands = null;
+    if (jamCamOn && jamHands && jamVideo && jamVideo.readyState >= 2 && jamVideo.videoWidth > 0) {
+      try { const res = jamHands.detectForVideo(jamVideo, t); hands = res && res.landmarks; } catch (_) {}
+      if (hands && hands.length) jamProcessHands(hands);
+      else if (jamMode === 'synth') jamReleasePianoHand();
+    }
+    if (jamCamOn) {
+      ctx.clearRect(0, 0, jamW, jamH); // transparente: se ve el vídeo detrás
+    } else {
+      // estela + guías de zona (solo modo táctil)
+      ctx.fillStyle = 'rgba(8,11,16,0.28)';
+      ctx.fillRect(0, 0, jamW, jamH);
+      const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
+      for (let z = 0; z < JAM_COLS * JAM_ROWS; z++) {
+        const cx = ((z % JAM_COLS) + 0.5) * cw, cy = (Math.floor(z / JAM_COLS) + 0.5) * ch;
+        const c = hexToRgb(currentPalette[z]);
+        ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.18)`; ctx.fill();
+      }
     }
     // anillos
     for (let i = jamRings.length - 1; i >= 0; i--) {
@@ -894,6 +1068,9 @@
       ctx.fillStyle = `rgba(${p.rgb[0]},${p.rgb[1]},${p.rgb[2]},${p.life * 0.9})`;
       ctx.fill();
     }
+    // esqueletos de manos + texto espectacular
+    if (jamCamOn && hands) { for (const hand of hands) jamDrawHand(ctx, hand); }
+    jamDrawText(ctx);
   }
 
   // =====================================================================
