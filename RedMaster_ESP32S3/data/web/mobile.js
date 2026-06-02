@@ -262,6 +262,7 @@
   let _tremoloPad = -1;
   let _tremoloEl = null;
   let lastTappedPad = 0;
+  let _tonoDebounce = null;
   // Cu├íntos pads se muestran en pantalla. Menos pads = pads m├ís grandes.
   const PAD_COUNTS = [16, 8, 4, 2, 1];
   let padCount = 16;
@@ -618,7 +619,11 @@
       b.addEventListener('click', () => applyKidFx(p.id));
       grid.appendChild(b);
     });
-    $('tono').addEventListener('input', onTono);
+    $('tono').addEventListener('input', () => {
+      onTono();
+      if (_tonoDebounce) clearTimeout(_tonoDebounce);
+      _tonoDebounce = setTimeout(() => { _tonoDebounce = null; onTonoSend(); }, 40);
+    });
     renderFx();
     onTono(); // pinta la etiqueta inicial
   }
@@ -647,6 +652,8 @@
   function onTono() {
     const v = parseFloat($('tono').value);
     $('tonoVal').textContent = v < 33 ? 'grave' : (v > 66 ? 'agudo' : 'medio');
+  }
+  function onTonoSend() {
     const p = FX_PRESETS.find((x) => x.id === activeFxPreset);
     if (p && p.filterType > 0) {
       const cutoff = tonoCutoff();

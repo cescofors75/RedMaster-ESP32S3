@@ -2700,7 +2700,7 @@ void WebInterface::update() {
   
   // Broadcast audio levels for all WS clients (main UI + /adm)
   static unsigned long lastAudioLevels = 0;
-  if (!pageLoading && now - lastAudioLevels >= 150 && ws->count() > 0) {
+  if (!pageLoading && now - lastAudioLevels >= 400 && ws->count() > 0) {
     lastAudioLevels = now;
 
     // Peak data is polled by SPIMaster::process() on Core1 —
