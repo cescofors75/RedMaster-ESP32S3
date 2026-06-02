@@ -747,7 +747,35 @@
     jamCanvas.addEventListener('pointerleave', jamUp);
     $('jamModeSamples').addEventListener('click', () => setJamMode('samples'));
     $('jamModeSynth').addEventListener('click', () => setJamMode('synth'));
+    $('jamCamBtn').addEventListener('click', toggleJamCamera);
     window.addEventListener('resize', () => { if (jamRunning) jamResize(); });
+  }
+  let _jamCamStream = null;
+  async function toggleJamCamera() {
+    const video = $('jamVideo');
+    const btn = $('jamCamBtn');
+    if (_jamCamStream) {
+      // Apagar camara
+      _jamCamStream.getTracks().forEach(t => t.stop());
+      _jamCamStream = null;
+      video.srcObject = null;
+      video.classList.remove('on');
+      btn.classList.remove('active');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false
+      });
+      _jamCamStream = stream;
+      video.srcObject = stream;
+      video.play().catch(() => {});
+      video.classList.add('on');
+      btn.classList.add('active');
+    } catch (err) {
+      alert('Camara no disponible: ' + (err.message || err));
+    }
   }
   function setJamMode(m) {
     jamReleaseAll();
@@ -785,7 +813,7 @@
       return null;
     }
     const note = JAM_NOTES[zone];
-    send({ cmd: 'synthNoteOnEx', engine: PIANO_ENGINE, note, velocity: 110, accent: false, slide: false });
+    send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: false });
     return note;
   }
   function jamPos(e) {
@@ -807,19 +835,19 @@
     const { x, y } = jamPos(e);
     const zone = jamZoneAt(x, y);
     if (zone === st.zone) return; // mismo sitio ÔåÆ no re-disparar
-    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
+    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
     st.note = jamTrigger(zone, x, y);
     st.zone = zone;
   }
   function jamUp(e) {
     const st = jamTouch.get(e.pointerId);
     if (!st) return;
-    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
+    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
     jamTouch.delete(e.pointerId);
   }
   function jamReleaseAll() {
     jamTouch.forEach((st) => {
-      if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
+      if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
     });
     jamTouch.clear();
   }
