@@ -42,6 +42,9 @@ $webRoot = (Join-Path $workspace "RedMaster_ESP32S3\data\web").Replace('\','/')
 $caddyContent = @"
 {
     admin off
+    servers {
+        protocols h1 h2
+    }
 }
 
 https://${localIp}:${ListenPort} https://localhost:${ListenPort} {
@@ -49,6 +52,11 @@ https://${localIp}:${ListenPort} https://localhost:${ListenPort} {
     encode gzip
 
     root $webRoot
+
+    handle /mobile {
+        rewrite * /mobile.html
+        file_server
+    }
 
     handle /gesture {
         rewrite * /gesture.html
@@ -63,6 +71,12 @@ https://${localIp}:${ListenPort} https://localhost:${ListenPort} {
     handle /ws* {
         reverse_proxy http://${EspHost}:80 {
             header_up Host {upstream_hostport}
+            flush_interval -1
+            transport http {
+                versions 1.1
+                keepalive off
+                dial_timeout 10s
+            }
         }
     }
 
@@ -84,10 +98,10 @@ Write-Host ""
 Write-Host "Proxy HTTPS RED808 listo para iniciar"
 Write-Host "ESP target: http://${EspHost}"
 Write-Host "Web root  : ${webRoot}"
-Write-Host "URL movil: https://${localIp}:${ListenPort}/gesture"
-Write-Host "URL local : https://localhost:${ListenPort}/gesture"
-Write-Host "URL movil PRO: https://${localIp}:${ListenPort}/gesture-pro"
-Write-Host "URL local PRO : https://localhost:${ListenPort}/gesture-pro"
+Write-Host "URL mobile  : https://${localIp}:${ListenPort}/mobile"
+Write-Host "URL local   : https://localhost:${ListenPort}/mobile"
+Write-Host "URL gesture : https://${localIp}:${ListenPort}/gesture"
+Write-Host "URL gesture PRO: https://${localIp}:${ListenPort}/gesture-pro"
 Write-Host ""
 Write-Host "IMPORTANTE: para camara en movil, instala el certificado CA local de Caddy:"
 Write-Host "  $env:APPDATA\Caddy\pki\authorities\local\root.crt"

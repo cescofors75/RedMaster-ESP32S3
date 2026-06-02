@@ -1,5 +1,8 @@
 {
     admin off
+    servers {
+        protocols h1 h2
+    }
 }
 
 https://192.168.4.2:8443 https://localhost:8443 {
@@ -7,6 +10,11 @@ https://192.168.4.2:8443 https://localhost:8443 {
     encode gzip
 
     root C:/Users/cesco/Documents/Arduino/XboxBLE/RedMaster_ESP32S3/data/web
+
+    handle /mobile {
+        rewrite * /mobile.html
+        file_server
+    }
 
     handle /gesture {
         rewrite * /gesture.html
@@ -21,6 +29,12 @@ https://192.168.4.2:8443 https://localhost:8443 {
     handle /ws* {
         reverse_proxy http://192.168.4.1:80 {
             header_up Host {upstream_hostport}
+            flush_interval -1
+            transport http {
+                versions 1.1
+                keepalive off
+                dial_timeout 10s
+            }
         }
     }
 
