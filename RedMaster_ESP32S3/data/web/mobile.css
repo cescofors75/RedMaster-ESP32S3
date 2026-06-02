@@ -47,6 +47,12 @@ body {
   border-radius: 10px; border: 1px solid var(--r808-border);
   background: var(--r808-bg-elevated); font-size: 20px; line-height: 1;
 }
+.m-proxy-btn {
+  flex: 0 0 auto; height: 40px; padding: 0 12px; margin-left: auto; margin-right: 8px;
+  border-radius: 10px; border: 1px solid var(--r808-accent-cyan);
+  background: rgba(0,229,255,0.14); color: var(--r808-accent-cyan);
+  font-size: 13px; font-weight: 800;
+}
 .m-brand { display: flex; align-items: center; gap: 8px; }
 .m-logo { font-weight: 700; letter-spacing: 1px; font-size: 17px; }
 .m-logo b { color: var(--r808-red-light); }

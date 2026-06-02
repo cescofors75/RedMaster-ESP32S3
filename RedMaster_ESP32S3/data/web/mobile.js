@@ -735,7 +735,9 @@
   let jamVideo = null, jamHands = null, jamCamOn = false, jamCamLoading = false;
   const jamFinger = new Map();          // 'h-f' -> { x, y, lastHit }
   const JAM_TIPS = [4, 8, 12, 16, 20];  // pulgar..meñique (5 dedos = 5 pads/mano)
-  const JAM_TRIG_COOLDOWN = 110, JAM_MOVE_THRESH = 0.030;
+  const JAM_TAP_VY = 0.045;             // golpe = movimiento brusco hacia ABAJO (frac. alto/frame)
+  const JAM_TAP_COOLDOWN = 180;         // ms mínimos entre golpes del mismo dedo
+  const JAM_PIANO_ENGINE = 3;           // un solo engine en piano (como un piano de verdad)
   const JAM_WORDS = ['BOMBO','CAJA','HAT','OPEN','CRASH','CLAP','RIM','COW',
     'TOM','TOM','TOM','SHAKE','CLAVE','CONGA','BONGO','BLOCK'];
   const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
@@ -836,59 +838,49 @@
     else jamProcessDrum(hands);
   }
   // DRUM: cada dedo = un pad. Mover un dedo rápido = golpe. Varios dedos = varios sonidos.
+  // Detecta un "golpe": el dedo se mueve bruscamente hacia ABAJO. Devuelve true
+  // una sola vez por golpe (respetando el cooldown). `pref` separa el estado
+  // drum/piano para que no se pisen.
+  function jamTap(pref, h, f, x, y, now) {
+    const key = pref + h + '-' + f;
+    const st = jamFinger.get(key) || { x, y, lastHit: 0 };
+    const vy = (y - st.y) / jamH;                  // + = hacia abajo (frac. alto/frame)
+    let hit = false;
+    if (vy > JAM_TAP_VY && now - st.lastHit > JAM_TAP_COOLDOWN) { hit = true; st.lastHit = now; }
+    st.x = x; st.y = y; jamFinger.set(key, st);
+    return hit;
+  }
+  // DRUM: cada dedo = un pad. GOLPE hacia abajo dispara su pad (sin spam).
   function jamProcessDrum(hands) {
     const now = performance.now();
     for (let h = 0; h < hands.length; h++) {
       for (let f = 0; f < JAM_TIPS.length; f++) {
         const lm = hands[h][JAM_TIPS[f]]; if (!lm) continue;
         const x = (1 - lm.x) * jamW, y = lm.y * jamH;
-        const key = h + '-' + f;
-        const st = jamFinger.get(key) || { x, y, lastHit: 0 };
-        const dist = Math.hypot(x - st.x, y - st.y) / jamW;
-        if (dist > JAM_MOVE_THRESH && now - st.lastHit > JAM_TRIG_COOLDOWN) { jamHit(jamFingerPad(h, f), x, y); st.lastHit = now; }
-        st.x = x; st.y = y; jamFinger.set(key, st);
+        if (jamTap('d', h, f, x, y, now)) jamHit(jamFingerPad(h, f), x, y);
       }
     }
   }
-  // PIANO: una mano toca notas (X del índice), la OTRA cambia engine (nº de dedos
-  // 1..4 → 303/WT/SH101/FM). La altura del dedo hace bend de tono.
+  // PIANO (un solo engine, como un piano real): cada dedo toca una nota según su
+  // posición X al GOLPEAR hacia abajo. Varios dedos a la vez = acordes.
   function jamProcessPiano(hands) {
-    if (!hands.length) { jamReleasePianoHand(); return; }
-    let noteHand = hands[0], engHand = null;
-    if (hands.length >= 2 && hands[0][8] && hands[1][8]) {
-      const ix0 = 1 - hands[0][8].x, ix1 = 1 - hands[1][8].x;
-      if (ix1 > ix0) { noteHand = hands[1]; engHand = hands[0]; } else { engHand = hands[1]; }
-    }
-    if (engHand) {
-      const n = jamCountFingers(engHand);
-      if (n >= 1 && n <= 4) {
-        const eng = PIANO_ENGINES[n - 1].id;
-        if (eng !== pianoEngine) {
-          if (jamPianoNote >= 0) { send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamPianoNote }); jamPianoNote = -1; }
-          pianoEngine = eng; jamPianoEngLabel = PIANO_ENGINES[n - 1].label;
-          document.querySelectorAll('#engineSel button').forEach((b) => b.classList.toggle('active', +b.dataset.engine === eng));
-        }
+    const now = performance.now();
+    for (let h = 0; h < hands.length; h++) {
+      for (let f = 0; f < JAM_TIPS.length; f++) {
+        const lm = hands[h][JAM_TIPS[f]]; if (!lm) continue;
+        const x = (1 - lm.x) * jamW, y = lm.y * jamH;
+        if (!jamTap('p', h, f, x, y, now)) continue;
+        const idx = Math.max(0, Math.min(JAM_NOTES.length - 1, Math.floor((x / jamW) * JAM_NOTES.length)));
+        const note = JAM_NOTES[idx];
+        send({ cmd: 'synthNoteOnEx', engine: JAM_PIANO_ENGINE, note, velocity: 110, accent: false, slide: false });
+        setTimeout(() => send({ cmd: 'synthNoteOff', engine: JAM_PIANO_ENGINE, track: 255, note }), 320);
+        const rgb = hexToRgb(currentPalette[idx]);
+        spawnJamBurst(x, y, rgb);
+        jamShowText(jamNoteName(note), rgb);
       }
     }
-    const lm = noteHand[8]; if (!lm) { jamReleasePianoHand(); return; }
-    const x = (1 - lm.x) * jamW, y = lm.y * jamH;
-    const idx = Math.max(0, Math.min(JAM_NOTES.length - 1, Math.floor((x / jamW) * JAM_NOTES.length)));
-    const note = JAM_NOTES[idx];
-    if (note !== jamPianoNote) {
-      if (jamPianoNote >= 0) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamPianoNote });
-      send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: true });
-      jamPianoNote = note;
-      const rgb = hexToRgb(currentPalette[idx]);
-      spawnJamBurst(x, y, rgb); jamShowText(jamNoteName(note) + (jamPianoEngLabel ? ' · ' + jamPianoEngLabel : ''), rgb);
-    }
-    const pitch = Math.max(0.5, Math.min(2.0, 2.0 - (y / jamH) * 1.5));
-    const now = performance.now();
-    if (Math.abs(pitch - jamPitch) > 0.015 && now - jamPitchT > 45) { jamPitch = pitch; jamPitchT = now; send({ cmd: 'setLivePitch', pitch }); }
   }
-  function jamReleasePianoHand() {
-    if (jamPianoNote >= 0) { send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamPianoNote }); jamPianoNote = -1; }
-    if (jamPitch !== 1) { jamPitch = 1; send({ cmd: 'setLivePitch', pitch: 1 }); }
-  }
+  function jamReleasePianoHand() { /* notas pulsadas se auto-sueltan; nada que sostener */ }
   function jamNoteName(midi) { return NOTE_NAMES[midi % 12] + (Math.floor(midi / 12) - 1); }
   function jamCountFingers(hand) {
     const d = (a, b) => Math.hypot(hand[a].x - hand[b].x, hand[a].y - hand[b].y);
@@ -938,6 +930,7 @@
   function setJamMode(m) {
     jamReleaseAll();
     jamReleasePianoHand();
+    jamFinger.clear();
     jamMode = m;
     $('jamModeSamples').classList.toggle('active', m === 'samples');
     $('jamModeSynth').classList.toggle('active', m === 'synth');
@@ -1238,6 +1231,39 @@
   }
 
   // =====================================================================
+  // Link al proxy HTTPS (para cámara). Si servimos por HTTP (ESP en
+  // 192.168.4.1), busca el PC con Caddy en .2/.3/.4 probando su favicon por
+  // HTTPS y muestra un botón "📷 Cámara (HTTPS)".
+  // =====================================================================
+  function initProxyLink() {
+    if (location.protocol === 'https:') return;       // ya estamos en el proxy
+    const net = location.hostname.replace(/\.\d+$/, '');
+    if (!/^\d+\.\d+\.\d+$/.test(net)) return;          // no es IPv4 → nada que hacer
+    let saved = null; try { saved = localStorage.getItem('r808_proxy_ip'); } catch (_) {}
+    const cands = [2, 3, 4].map((n) => `${net}.${n}`);
+    const order = saved ? [saved, ...cands.filter((c) => c !== saved)] : cands;
+    let done = false;
+    order.forEach((ip) => {
+      const img = new Image();
+      img.onload = () => { if (!done) { done = true; showProxyBtn(ip); } };
+      img.src = `https://${ip}:8443/favicon.ico?_=${Date.now()}`;
+    });
+  }
+  function showProxyBtn(ip) {
+    if ($('proxyBtn')) return;
+    try { localStorage.setItem('r808_proxy_ip', ip); } catch (_) {}
+    const b = document.createElement('button');
+    b.id = 'proxyBtn'; b.className = 'm-proxy-btn';
+    b.textContent = '📷 Cámara';
+    b.title = `Abrir con cámara (HTTPS) — ${ip}`;
+    b.onclick = () => { location.href = `https://${ip}:8443/mobile`; };
+    const row1 = document.querySelector('.m-top-row1');
+    const themeBtn = $('themeBtn');
+    if (row1 && themeBtn) row1.insertBefore(b, themeBtn);
+    else if (row1) row1.appendChild(b);
+  }
+
+  // =====================================================================
   // Init
   // =====================================================================
   function init() {
@@ -1250,6 +1276,7 @@
     initJam();
     initSeq();
     initFx();
+    initProxyLink();
     connect();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
