@@ -258,7 +258,6 @@
   // =====================================================================
   // Pads
   // =====================================================================
-  let _lpTimer = null;
   // Roll/tremolo: 0 = OFF, o nº de golpes por compás (16=semicorchea … 1=redonda)
   const ROLL_RATES = [0, 16, 8, 4, 2, 1];
   let rollRate = 0;
@@ -302,18 +301,13 @@
       pad.textContent = TRACK_NAMES[i];
       let rollTimer = null;
       let rollHue = (i * 23) % 360;
-      let startX = 0, startY = 0;
       const stopRoll = () => {
         if (rollTimer) { clearInterval(rollTimer); rollTimer = null; }
         pad.classList.remove('rolling');
         pad.style.removeProperty('--party');
       };
-      const startLP = () => { _lpTimer = setTimeout(() => { _lpTimer = null; openSampleSheet(i); }, 500); };
-      const cancelLP = () => { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } };
       const down = (e) => {
         e.preventDefault();
-        const t = e.touches ? e.touches[0] : e;
-        startX = t.clientX; startY = t.clientY;
         triggerPad(i); flash(pad);
         if (rollRate) {
           // Modo roll: retrigea mientras se mantiene; fiesta de colores + ring neón.
@@ -326,26 +320,24 @@
           };
           tick();
           rollTimer = setInterval(tick, rollInterval());
-        } else {
-          startLP();
         }
       };
-      // Cancela el long-press solo si el dedo se desplaza de verdad (>14px).
-      const move = (e) => {
-        if (!_lpTimer) return;
-        const t = e.touches ? e.touches[0] : e;
-        if (Math.abs(t.clientX - startX) > 14 || Math.abs(t.clientY - startY) > 14) cancelLP();
-      };
-      const release = () => { cancelLP(); stopRoll(); };
+      const release = () => { stopRoll(); };
       pad.addEventListener('touchstart', down, { passive: false });
       pad.addEventListener('touchend', release);
-      pad.addEventListener('touchmove', move, { passive: true });
       pad.addEventListener('touchcancel', release);
       pad.addEventListener('mousedown', down);
       pad.addEventListener('mouseup', release);
       pad.addEventListener('mouseleave', release);
       grid.appendChild(pad);
     }
+    // Botón superior para cargar sonidos (mejor que mantener pulsado el pad)
+    const upBtn = document.createElement('button');
+    upBtn.className = 'm-pads-upload';
+    upBtn.textContent = '📁 Sonidos';
+    upBtn.addEventListener('click', () => openSampleSheet(samplePadDefault));
+    const rb = $('rollBar');
+    if (rb) rb.appendChild(upBtn);
   }
   function triggerPad(i) { sendBinary([0x90, i, 127]); }
   function flash(el) { el.classList.add('hit'); setTimeout(() => el.classList.remove('hit'), 90); }
@@ -713,8 +705,11 @@
   // MediaPipe Hands (cámara). Opcional, requiere internet en el móvil (CDN+modelo).
   let jamVideo = null, jamHands = null, jamCamOn = false, jamCamLoading = false;
   const jamFinger = new Map();       // 'hand-tip' -> { zone, t }
-  const JAM_TRIG_TIP = 8;            // dedo índice = el que dispara
+  const JAM_TRIG_TIPS = [8, 12];     // índice + corazón (más dedos = respuesta más rápida)
+  const JAM_COOLDOWN = 55;           // ms mínimos entre disparos por dedo (snappy)
   const JAM_TIPS = [4, 8, 12, 16, 20]; // puntas de los dedos (glow visual)
+  // Modo synth con manos: nota sostenida + variación de tono por altura de la mano.
+  let jamSynthNote = -1, jamSynthZone = -1, jamPitch = 1, jamPitchT = 0;
   const JAM_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],
     [10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
 
@@ -740,6 +735,7 @@
   }
   function setJamMode(m) {
     jamReleaseAll();
+    jamReleaseSynthHand();
     jamMode = m;
     $('jamModeSamples').classList.toggle('active', m === 'samples');
     $('jamModeSynth').classList.toggle('active', m === 'synth');
@@ -871,6 +867,7 @@
     const b = $('jamCamBtn'); if (b) b.classList.remove('active');
     if (jamCanvas) jamCanvas.style.background = '';
     jamFinger.clear();
+    jamReleaseSynthHand();
     if (jamVideo) {
       jamVideo.classList.remove('on');
       const s = jamVideo.srcObject;
@@ -885,19 +882,54 @@
     setTimeout(() => send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note }), 280);
   }
   function jamProcessHands(hands) {
+    if (jamMode === 'synth') { jamProcessHandsSynth(hands); return; }
+    // SAMPLES: cada punta de dedo dispara al entrar en una zona (rápido).
     const now = performance.now();
     for (let h = 0; h < hands.length; h++) {
-      const lm = hands[h][JAM_TRIG_TIP];
-      if (!lm) continue;
-      const x = (1 - lm.x) * jamW, y = lm.y * jamH; // espejo (selfie)
-      const zone = jamZoneAt(x, y);
-      const key = h + '-' + JAM_TRIG_TIP;
-      const st = jamFinger.get(key);
-      if (!st || st.zone !== zone) {
-        if (!st || now - st.t > 130) jamHandTrigger(zone, x, y);
-        jamFinger.set(key, { zone, t: now });
+      for (const tip of JAM_TRIG_TIPS) {
+        const lm = hands[h][tip];
+        if (!lm) continue;
+        const x = (1 - lm.x) * jamW, y = lm.y * jamH; // espejo (selfie)
+        const zone = jamZoneAt(x, y);
+        const key = h + '-' + tip;
+        const st = jamFinger.get(key);
+        if (!st || st.zone !== zone) {
+          if (!st || now - st.t > JAM_COOLDOWN) {
+            triggerPad(zone);
+            spawnJamBurst(x, y, hexToRgb(currentPalette[zone]));
+          }
+          jamFinger.set(key, { zone, t: now });
+        }
       }
     }
+  }
+  // SYNTH con manos: la nota se MANTIENE mientras el dedo esté en la zona
+  // ("estirar la nota"); cambiar de zona = nota nueva (glissando); la ALTURA de
+  // la mano hace variación de tono (bend) vía setLivePitch.
+  function jamProcessHandsSynth(hands) {
+    if (!hands.length) { jamReleaseSynthHand(); return; }
+    const lm = hands[0][8]; // índice de la primera mano
+    if (!lm) { jamReleaseSynthHand(); return; }
+    const x = (1 - lm.x) * jamW, y = lm.y * jamH;
+    const zone = jamZoneAt(x, y);
+    if (zone !== jamSynthZone) {
+      if (jamSynthNote >= 0) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamSynthNote });
+      const note = JAM_NOTES[zone];
+      send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: true });
+      jamSynthNote = note; jamSynthZone = zone;
+      spawnJamBurst(x, y, hexToRgb(currentPalette[zone]));
+    }
+    // Variación de tono: arriba = agudo, abajo = grave (0.5..2.0).
+    const pitch = Math.max(0.5, Math.min(2.0, 2.0 - (y / jamH) * 1.5));
+    const now = performance.now();
+    if (Math.abs(pitch - jamPitch) > 0.015 && now - jamPitchT > 45) {
+      jamPitch = pitch; jamPitchT = now;
+      send({ cmd: 'setLivePitch', pitch });
+    }
+  }
+  function jamReleaseSynthHand() {
+    if (jamSynthNote >= 0) { send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: jamSynthNote }); jamSynthNote = -1; jamSynthZone = -1; }
+    if (jamPitch !== 1) { jamPitch = 1; send({ cmd: 'setLivePitch', pitch: 1 }); }
   }
   function jamDrawHand(ctx, hand) {
     const px = (i) => [(1 - hand[i].x) * jamW, hand[i].y * jamH];
@@ -965,9 +997,30 @@
   // =====================================================================
   let sampleTargetPad = -1;
   let sampleFamily = '';
+  let samplePadDefault = 0;
   function openSampleSheet(pad) {
+    // Selector de PAD (chips): elige a qué pad va el sonido
+    const padChips = $('padChips');
+    if (padChips) {
+      padChips.innerHTML = '';
+      TRACK_NAMES.forEach((nm, idx) => {
+        const b = document.createElement('button');
+        b.textContent = (idx + 1) + ' ' + nm;
+        b.dataset.pad = String(idx);
+        b.addEventListener('click', () => setSamplePad(idx));
+        padChips.appendChild(b);
+      });
+    }
+    $('sampleSheet').hidden = false;
+    $('sampleBackdrop').hidden = false;
+    setSamplePad(pad);
+  }
+  function setSamplePad(pad) {
     sampleTargetPad = pad;
+    samplePadDefault = pad;
     $('sampleTargetName').textContent = `${pad + 1} · ${TRACK_NAMES[pad]}`;
+    document.querySelectorAll('#padChips button').forEach((b) =>
+      b.classList.toggle('active', +b.dataset.pad === pad));
     // Chips de familias
     const chips = $('famChips');
     chips.innerHTML = '';
@@ -979,8 +1032,6 @@
       chips.appendChild(b);
     });
     $('sampleList').innerHTML = '<div class="se-empty">Cargando…</div>';
-    $('sampleSheet').hidden = false;
-    $('sampleBackdrop').hidden = false;
     requestSamples(TRACK_NAMES[pad]); // familia por defecto = la del pad
   }
   function closeSampleSheet() {

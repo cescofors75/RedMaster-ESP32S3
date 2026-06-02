@@ -115,6 +115,22 @@ body {
   background: var(--r808-red-dark); border-color: var(--r808-red-light);
   color: #fff; box-shadow: 0 0 10px var(--r808-red-glow);
 }
+/* Botón superior de carga de sonidos (Pads) */
+.m-pads-upload {
+  margin-left: auto; flex: 0 0 auto;
+  height: 34px; padding: 0 14px; border-radius: 9px;
+  border: 1px solid var(--r808-red-light);
+  background: var(--r808-red-dark); color: #fff;
+  font-size: 13px; font-weight: 800;
+}
+/* Selector de pad dentro del sheet de sonidos */
+.m-pad-chips { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 8px; }
+.m-pad-chips button {
+  flex: 0 0 auto; height: 34px; padding: 0 10px; border-radius: 8px;
+  border: 1px solid var(--r808-border); background: var(--r808-bg-elevated);
+  color: var(--r808-text); font-size: 12px; font-weight: 700; white-space: nowrap;
+}
+.m-pad-chips button.active { background: var(--r808-red-dark); border-color: var(--r808-red-light); color: #fff; }
 
 /* ---------- Pads ---------- */
 .m-pads {
