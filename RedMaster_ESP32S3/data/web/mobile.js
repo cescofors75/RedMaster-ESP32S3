@@ -190,6 +190,7 @@
         document.querySelectorAll('.m-view').forEach((v) => {
           v.classList.toggle('is-active', v.id === 'view-' + view);
         });
+        jamSetActive(view === 'jam'); // arranca/para el loop del canvas
       });
     });
   }
@@ -685,6 +686,154 @@
   function closeThemeSheet() { $('themeSheet').hidden = true; $('sheetBackdrop').hidden = true; }
 
   // =====================================================================
+  // JAM — canvas multitouch (samples + synth) con efectos visuales
+  // =====================================================================
+  let jamCanvas = null, jamCtx = null, jamW = 0, jamH = 0, jamDpr = 1;
+  let jamRaf = 0, jamLastT = 0, jamRunning = false, jamMode = 'samples';
+  const jamParticles = [];
+  const jamRings = [];
+  const jamTouch = new Map(); // pointerId -> { zone, note|null }
+  const JAM_COLS = 4, JAM_ROWS = 4; // 16 zonas = 16 pads
+  // 16 notas (escala mayor, 2 octavas) para el modo synth.
+  const JAM_NOTES = [48, 50, 52, 53, 55, 57, 59, 60, 62, 64, 65, 67, 69, 71, 72, 74];
+
+  function hexToRgb(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function initJam() {
+    jamCanvas = $('jamCanvas');
+    jamCtx = jamCanvas.getContext('2d');
+    jamCanvas.addEventListener('pointerdown', jamDown);
+    jamCanvas.addEventListener('pointermove', jamMove);
+    jamCanvas.addEventListener('pointerup', jamUp);
+    jamCanvas.addEventListener('pointercancel', jamUp);
+    jamCanvas.addEventListener('pointerleave', jamUp);
+    $('jamModeSamples').addEventListener('click', () => setJamMode('samples'));
+    $('jamModeSynth').addEventListener('click', () => setJamMode('synth'));
+    window.addEventListener('resize', () => { if (jamRunning) jamResize(); });
+  }
+  function setJamMode(m) {
+    jamReleaseAll();
+    jamMode = m;
+    $('jamModeSamples').classList.toggle('active', m === 'samples');
+    $('jamModeSynth').classList.toggle('active', m === 'synth');
+  }
+  function jamResize() {
+    jamDpr = Math.min(window.devicePixelRatio || 1, 2);
+    const r = jamCanvas.getBoundingClientRect();
+    jamW = r.width; jamH = r.height;
+    jamCanvas.width = Math.round(jamW * jamDpr);
+    jamCanvas.height = Math.round(jamH * jamDpr);
+    jamCtx.setTransform(jamDpr, 0, 0, jamDpr, 0, 0);
+  }
+  function jamSetActive(on) {
+    if (on) {
+      jamResize();
+      if (!jamRunning) { jamRunning = true; jamLastT = performance.now(); jamRaf = requestAnimationFrame(jamLoop); }
+    } else {
+      jamRunning = false;
+      if (jamRaf) { cancelAnimationFrame(jamRaf); jamRaf = 0; }
+      jamReleaseAll();
+    }
+  }
+  function jamZoneAt(x, y) {
+    const col = Math.min(JAM_COLS - 1, Math.max(0, Math.floor(x / jamW * JAM_COLS)));
+    const row = Math.min(JAM_ROWS - 1, Math.max(0, Math.floor(y / jamH * JAM_ROWS)));
+    return row * JAM_COLS + col;
+  }
+  function jamTrigger(zone, x, y) {
+    spawnJamBurst(x, y, hexToRgb(PALETTE[zone]));
+    if (jamMode === 'samples') {
+      triggerPad(zone);
+      return null;
+    }
+    const note = JAM_NOTES[zone];
+    send({ cmd: 'synthNoteOnEx', engine: PIANO_ENGINE, note, velocity: 110, accent: false, slide: false });
+    return note;
+  }
+  function jamPos(e) {
+    const r = jamCanvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+  function jamDown(e) {
+    e.preventDefault();
+    const t = $('jamTip'); if (t) t.classList.add('hide');
+    const { x, y } = jamPos(e);
+    const zone = jamZoneAt(x, y);
+    const note = jamTrigger(zone, x, y);
+    jamTouch.set(e.pointerId, { zone, note });
+  }
+  function jamMove(e) {
+    const st = jamTouch.get(e.pointerId);
+    if (!st) return;
+    e.preventDefault();
+    const { x, y } = jamPos(e);
+    const zone = jamZoneAt(x, y);
+    if (zone === st.zone) return; // mismo sitio → no re-disparar
+    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
+    st.note = jamTrigger(zone, x, y);
+    st.zone = zone;
+  }
+  function jamUp(e) {
+    const st = jamTouch.get(e.pointerId);
+    if (!st) return;
+    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
+    jamTouch.delete(e.pointerId);
+  }
+  function jamReleaseAll() {
+    jamTouch.forEach((st) => {
+      if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
+    });
+    jamTouch.clear();
+  }
+  function spawnJamBurst(x, y, rgb) {
+    jamRings.push({ x, y, r: 8, life: 1, rgb });
+    for (let i = 0; i < 16; i++) {
+      const a = (Math.PI * 2 * i) / 16 + Math.random() * 0.4;
+      const sp = 60 + Math.random() * 200;
+      jamParticles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, r: 3 + Math.random() * 4, rgb });
+    }
+  }
+  function jamLoop(t) {
+    if (!jamRunning) { jamRaf = 0; return; }
+    jamRaf = requestAnimationFrame(jamLoop);
+    const dt = Math.min(0.05, (t - jamLastT) / 1000); jamLastT = t;
+    const ctx = jamCtx;
+    // estela: capa semitransparente para que los trazos se desvanezcan
+    ctx.fillStyle = 'rgba(8,11,16,0.28)';
+    ctx.fillRect(0, 0, jamW, jamH);
+    // guías suaves en el centro de cada zona
+    const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
+    for (let z = 0; z < JAM_COLS * JAM_ROWS; z++) {
+      const cx = ((z % JAM_COLS) + 0.5) * cw, cy = (Math.floor(z / JAM_COLS) + 0.5) * ch;
+      const c = hexToRgb(PALETTE[z]);
+      ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.18)`; ctx.fill();
+    }
+    // anillos
+    for (let i = jamRings.length - 1; i >= 0; i--) {
+      const rg = jamRings[i];
+      rg.r += dt * 260; rg.life -= dt * 1.6;
+      if (rg.life <= 0) { jamRings.splice(i, 1); continue; }
+      ctx.beginPath(); ctx.arc(rg.x, rg.y, rg.r, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${rg.rgb[0]},${rg.rgb[1]},${rg.rgb[2]},${rg.life * 0.6})`;
+      ctx.lineWidth = 3 * rg.life + 0.5; ctx.stroke();
+    }
+    // partículas
+    for (let i = jamParticles.length - 1; i >= 0; i--) {
+      const p = jamParticles[i];
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.94;
+      p.life -= dt * 1.1;
+      if (p.life <= 0) { jamParticles.splice(i, 1); continue; }
+      ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.5, p.r * p.life), 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${p.rgb[0]},${p.rgb[1]},${p.rgb[2]},${p.life * 0.9})`;
+      ctx.fill();
+    }
+  }
+
+  // =====================================================================
   // Cargar sample en un pad (long-press)
   // =====================================================================
   let sampleTargetPad = -1;
@@ -847,12 +996,18 @@
     }
     return new Blob([buffer], { type: 'audio/wav' });
   }
+
+  // =====================================================================
+  // Init
+  // =====================================================================
+  function init() {
     initTheme();
     initNav();
     initTransport();
     initRollBar();
     initPads();
     initPiano();
+    initJam();
     initSeq();
     initFx();
     connect();

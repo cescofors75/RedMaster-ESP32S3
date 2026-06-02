@@ -86,6 +86,16 @@
         <input type="range" id="tono" min="0" max="100" step="1" value="50">
       </label>
     </section>
+
+    <!-- JAM (toca con los dedos: samples + synth, mucho efecto visual) -->
+    <section class="m-view m-view-jam" id="view-jam">
+      <canvas id="jamCanvas" class="m-jam-canvas"></canvas>
+      <div class="m-jam-pills">
+        <button class="m-jam-pill active" id="jamModeSamples">🥁</button>
+        <button class="m-jam-pill" id="jamModeSynth">🎹</button>
+      </div>
+      <div class="m-jam-tip" id="jamTip">👆 ¡Toca con los dedos!</div>
+    </section>
   </main>
 
   <!-- Theme picker (bottom sheet) -->
@@ -110,6 +120,7 @@
   <nav class="m-nav">
     <button class="m-tab is-active" data-view="pads">🥁<span>Pads</span></button>
     <button class="m-tab" data-view="piano">🎹<span>Piano</span></button>
+    <button class="m-tab" data-view="jam">🎉<span>Jam</span></button>
     <button class="m-tab" data-view="seq">🟢<span>Seq</span></button>
     <button class="m-tab" data-view="fx">🎛️<span>Filtros</span></button>
   </nav>
