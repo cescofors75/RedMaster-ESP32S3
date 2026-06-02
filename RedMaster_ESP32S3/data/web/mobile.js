@@ -191,6 +191,7 @@
           v.classList.toggle('is-active', v.id === 'view-' + view);
         });
         jamSetActive(view === 'jam'); // arranca/para el loop del canvas
+        if (view === 'seq') requestAnimationFrame(layoutSeq); // recalcula tamaño puntos
       });
     });
   }
@@ -476,6 +477,7 @@
     $('seqClear').addEventListener('click', clearPattern);
     $('seqMuteAll').addEventListener('click', () => setAllMute(true));
     $('seqUnmuteAll').addEventListener('click', () => setAllMute(false));
+    window.addEventListener('resize', layoutSeq);
     buildSeqGrid();
   }
   function applyStepCount(c) {
@@ -522,6 +524,18 @@
       }
       grid.appendChild(row);
     }
+    layoutSeq();
+  }
+  // Tamaño de punto responsive: rellena el ancho disponible (iPhone 12 → tablet).
+  function layoutSeq() {
+    const scroll = document.querySelector('.m-seq-scroll');
+    if (!scroll) return;
+    const w = scroll.clientWidth;
+    if (w < 60) return; // vista oculta: aún sin ancho
+    const overhead = 24 + 24 + 24 + stepCount; // label + mute + solo + gaps (~1px)
+    let d = Math.floor((w - overhead) / stepCount);
+    d = Math.max(11, Math.min(40, d));
+    $('seqGrid').style.setProperty('--dot', d + 'px');
   }
   function toggleMute(t) {
     muteState[t] = !muteState[t];
@@ -696,6 +710,13 @@
   const JAM_COLS = 4, JAM_ROWS = 4; // 16 zonas = 16 pads
   // 16 notas (escala mayor, 2 octavas) para el modo synth.
   const JAM_NOTES = [48, 50, 52, 53, 55, 57, 59, 60, 62, 64, 65, 67, 69, 71, 72, 74];
+  // MediaPipe Hands (cámara). Opcional, requiere internet en el móvil (CDN+modelo).
+  let jamVideo = null, jamHands = null, jamCamOn = false, jamCamLoading = false;
+  const jamFinger = new Map();       // 'hand-tip' -> { zone, t }
+  const JAM_TRIG_TIP = 8;            // dedo índice = el que dispara
+  const JAM_TIPS = [4, 8, 12, 16, 20]; // puntas de los dedos (glow visual)
+  const JAM_CONN = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],
+    [10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
 
   function hexToRgb(hex) {
     const n = parseInt(hex.slice(1), 16);
@@ -712,6 +733,9 @@
     jamCanvas.addEventListener('pointerleave', jamUp);
     $('jamModeSamples').addEventListener('click', () => setJamMode('samples'));
     $('jamModeSynth').addEventListener('click', () => setJamMode('synth'));
+    jamVideo = $('jamVideo');
+    const camBtn = $('jamCamBtn');
+    if (camBtn) camBtn.addEventListener('click', toggleJamCam);
     window.addEventListener('resize', () => { if (jamRunning) jamResize(); });
   }
   function setJamMode(m) {
@@ -736,6 +760,7 @@
       jamRunning = false;
       if (jamRaf) { cancelAnimationFrame(jamRaf); jamRaf = 0; }
       jamReleaseAll();
+      stopJamCam(); // libera cámara al salir de la pestaña
     }
   }
   function jamZoneAt(x, y) {
@@ -750,7 +775,7 @@
       return null;
     }
     const note = JAM_NOTES[zone];
-    send({ cmd: 'synthNoteOnEx', engine: PIANO_ENGINE, note, velocity: 110, accent: false, slide: false });
+    send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: false });
     return note;
   }
   function jamPos(e) {
@@ -772,19 +797,19 @@
     const { x, y } = jamPos(e);
     const zone = jamZoneAt(x, y);
     if (zone === st.zone) return; // mismo sitio → no re-disparar
-    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
+    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
     st.note = jamTrigger(zone, x, y);
     st.zone = zone;
   }
   function jamUp(e) {
     const st = jamTouch.get(e.pointerId);
     if (!st) return;
-    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
+    if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
     jamTouch.delete(e.pointerId);
   }
   function jamReleaseAll() {
     jamTouch.forEach((st) => {
-      if (st.note !== null) send({ cmd: 'synthNoteOff', engine: PIANO_ENGINE, track: 255, note: st.note });
+      if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
     });
     jamTouch.clear();
   }
@@ -796,21 +821,121 @@
       jamParticles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 1, r: 3 + Math.random() * 4, rgb });
     }
   }
+  // ---- Cámara + MediaPipe Hands ----
+  function jamTip(txt, show) {
+    const el = $('jamTip'); if (!el) return;
+    if (txt != null) el.textContent = txt;
+    el.classList.toggle('hide', show === false);
+  }
+  async function toggleJamCam() {
+    if (jamCamLoading) return;
+    if (jamCamOn) { stopJamCam(); jamTip('👆 ¡Toca con los dedos!', true); return; }
+    await startJamCam();
+  }
+  async function startJamCam() {
+    jamCamLoading = true;
+    $('jamCamBtn').classList.add('active');
+    try {
+      jamTip('📷 Iniciando cámara…', true);
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 640, height: 480 }, audio: false });
+      jamVideo.srcObject = stream;
+      jamVideo.classList.add('on');
+      await jamVideo.play().catch(() => {});
+      jamTip('⬇️ Cargando MediaPipe (necesita internet)…', true);
+      const CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+      const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+      const withTimeout = (p, ms, msg) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(msg)), ms))]);
+      const { FilesetResolver, HandLandmarker } = await withTimeout(import(CDN + '/vision_bundle.mjs'), 30000, 'CDN sin respuesta (¿WiFi sin internet?)');
+      const vision = await withTimeout(FilesetResolver.forVisionTasks(CDN + '/wasm'), 20000, 'Timeout WASM');
+      const opts = { runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: .45, minHandPresenceConfidence: .45, minTrackingConfidence: .4 };
+      try {
+        jamHands = await withTimeout(HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'GPU' }, ...opts }), 25000, 'Timeout GPU');
+      } catch (_) {
+        jamTip('GPU falló, probando CPU…', true);
+        jamHands = await withTimeout(HandLandmarker.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' }, ...opts }), 30000, 'Timeout CPU (revisa internet)');
+      }
+      jamCamOn = true;
+      jamCanvas.style.background = 'transparent'; // dejar ver el vídeo detrás
+      jamTip('✋ ¡Mueve las manos!', true);
+      setTimeout(() => { if (jamCamOn) jamTip(null, false); }, 1800);
+    } catch (e) {
+      stopJamCam();
+      jamTip('❌ ' + ((e && e.message) || 'cámara/red'), true);
+      setTimeout(() => jamTip(null, false), 3500);
+    } finally {
+      jamCamLoading = false;
+    }
+  }
+  function stopJamCam() {
+    jamCamOn = false;
+    const b = $('jamCamBtn'); if (b) b.classList.remove('active');
+    if (jamCanvas) jamCanvas.style.background = '';
+    jamFinger.clear();
+    if (jamVideo) {
+      jamVideo.classList.remove('on');
+      const s = jamVideo.srcObject;
+      if (s) { s.getTracks().forEach((tr) => tr.stop()); jamVideo.srcObject = null; }
+    }
+  }
+  function jamHandTrigger(zone, x, y) {
+    spawnJamBurst(x, y, hexToRgb(currentPalette[zone]));
+    if (jamMode === 'samples') { triggerPad(zone); return; }
+    const note = JAM_NOTES[zone];
+    send({ cmd: 'synthNoteOnEx', engine: pianoEngine, note, velocity: 110, accent: false, slide: false });
+    setTimeout(() => send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note }), 280);
+  }
+  function jamProcessHands(hands) {
+    const now = performance.now();
+    for (let h = 0; h < hands.length; h++) {
+      const lm = hands[h][JAM_TRIG_TIP];
+      if (!lm) continue;
+      const x = (1 - lm.x) * jamW, y = lm.y * jamH; // espejo (selfie)
+      const zone = jamZoneAt(x, y);
+      const key = h + '-' + JAM_TRIG_TIP;
+      const st = jamFinger.get(key);
+      if (!st || st.zone !== zone) {
+        if (!st || now - st.t > 130) jamHandTrigger(zone, x, y);
+        jamFinger.set(key, { zone, t: now });
+      }
+    }
+  }
+  function jamDrawHand(ctx, hand) {
+    const px = (i) => [(1 - hand[i].x) * jamW, hand[i].y * jamH];
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.shadowColor = 'rgba(0,229,255,0.9)'; ctx.shadowBlur = 12;
+    for (const [a, b] of JAM_CONN) { const p = px(a), q = px(b); ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke(); }
+    ctx.shadowBlur = 0;
+    for (const tip of JAM_TIPS) { const p = px(tip); ctx.beginPath(); ctx.arc(p[0], p[1], 7, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 14; ctx.fill(); }
+    ctx.restore();
+  }
+
   function jamLoop(t) {
     if (!jamRunning) { jamRaf = 0; return; }
     jamRaf = requestAnimationFrame(jamLoop);
     const dt = Math.min(0.05, (t - jamLastT) / 1000); jamLastT = t;
     const ctx = jamCtx;
-    // estela: capa semitransparente para que los trazos se desvanezcan
-    ctx.fillStyle = 'rgba(8,11,16,0.28)';
-    ctx.fillRect(0, 0, jamW, jamH);
-    // guías suaves en el centro de cada zona
-    const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
-    for (let z = 0; z < JAM_COLS * JAM_ROWS; z++) {
-      const cx = ((z % JAM_COLS) + 0.5) * cw, cy = (Math.floor(z / JAM_COLS) + 0.5) * ch;
-      const c = hexToRgb(PALETTE[z]);
-      ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.18)`; ctx.fill();
+    // Cámara activa: detectar manos y disparar por zonas
+    let hands = null;
+    if (jamCamOn && jamHands && jamVideo && jamVideo.readyState >= 2 && jamVideo.videoWidth > 0) {
+      try { const res = jamHands.detectForVideo(jamVideo, t); hands = res && res.landmarks; } catch (_) {}
+      if (hands && hands.length) jamProcessHands(hands);
+    }
+    if (jamCamOn) {
+      ctx.clearRect(0, 0, jamW, jamH); // transparente: se ve el vídeo detrás
+    } else {
+      // estela: capa semitransparente para que los trazos se desvanezcan
+      ctx.fillStyle = 'rgba(8,11,16,0.28)';
+      ctx.fillRect(0, 0, jamW, jamH);
+      // guías suaves en el centro de cada zona
+      const cw = jamW / JAM_COLS, ch = jamH / JAM_ROWS;
+      for (let z = 0; z < JAM_COLS * JAM_ROWS; z++) {
+        const cx = ((z % JAM_COLS) + 0.5) * cw, cy = (Math.floor(z / JAM_COLS) + 0.5) * ch;
+        const c = hexToRgb(currentPalette[z]);
+        ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},0.18)`; ctx.fill();
+      }
     }
     // anillos
     for (let i = jamRings.length - 1; i >= 0; i--) {
@@ -831,6 +956,8 @@
       ctx.fillStyle = `rgba(${p.rgb[0]},${p.rgb[1]},${p.rgb[2]},${p.life * 0.9})`;
       ctx.fill();
     }
+    // esqueletos de las manos (encima de todo)
+    if (jamCamOn && hands) { for (const hand of hands) jamDrawHand(ctx, hand); }
   }
 
   // =====================================================================

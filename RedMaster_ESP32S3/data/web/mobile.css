@@ -290,7 +290,7 @@ body {
 .m-trk-mute.on { background: #ff3b30; border-color: #ff8a7a; color: #fff; box-shadow: 0 0 8px #ff3b30; }
 .m-trk-solo.on { background: #ffcc00; border-color: #ffe066; color: #1a1300; box-shadow: 0 0 8px #ffcc00; }
 .m-dot-cell {
-  width: 14px; height: 14px; flex: 0 0 14px;
+  width: var(--dot, 14px); height: var(--dot, 14px); flex: 0 0 var(--dot, 14px);
   border-radius: 50%;
   background: rgba(255,255,255,.07);
   border: 1px solid rgba(255,255,255,.06);
@@ -341,14 +341,25 @@ body {
 
 /* ---------- JAM (touch canvas) ---------- */
 .m-view-jam { padding: 0; overflow: hidden; }
+.m-jam-video {
+  position: absolute; inset: 0; z-index: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);            /* selfie: espejo */
+  filter: brightness(.5) saturate(1.15);
+  display: none;
+}
+.m-jam-video.on { display: block; }
 .m-jam-canvas {
-  position: absolute; inset: 0;
+  position: absolute; inset: 0; z-index: 1;
   width: 100%; height: 100%;
   touch-action: none;
   background:
     radial-gradient(120% 80% at 50% 0%, rgba(255,255,255,.04), transparent 60%),
     var(--r808-bg-base);
 }
+/* Con cámara activa el canvas debe ser transparente para ver el vídeo */
+.m-view-jam:has(.m-jam-video.on) .m-jam-canvas { background: transparent; }
 .m-jam-pills {
   position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
   display: flex; gap: 8px; z-index: 3;
