@@ -258,55 +258,45 @@
   // Pads
   // =====================================================================
   let _lpTimer = null;
-  // Roll/tremolo: 0 = OFF, o nº de golpes por compás (16=semicorchea … 1=redonda)
-  const ROLL_RATES = [0, 16, 8, 4, 2, 1];
-  let rollRate = 0;
-  // Intervalo en ms entre golpes según BPM y subdivisión.
-  function rollInterval() {
-    if (!rollRate) return 0;
-    return (240000 / bpm) / rollRate; // 240000 = 4 beats * 60000 ms
+  // Cuántos pads se muestran en pantalla. Menos pads = pads más grandes.
+  const PAD_COUNTS = [16, 8, 4, 2, 1];
+  let padCount = 16;
+  // Columnas del grid según el número de pads visibles.
+  function padCols(n) {
+    if (n >= 16) return 4;
+    if (n >= 8) return 2;
+    if (n >= 4) return 2;
+    return 1; // 2 y 1 pad => una sola columna
   }
-  function initRollBar() {
+  function initPadCountBar() {
     const bar = $('rollBar');
-    ROLL_RATES.forEach((r) => {
+    bar.innerHTML = '<span class="m-roll-label">🥁 Pads</span>';
+    PAD_COUNTS.forEach((n) => {
       const b = document.createElement('button');
       b.className = 'm-roll-btn';
-      b.textContent = r === 0 ? 'OFF' : '1/' + r;
-      b.dataset.rate = String(r);
-      b.classList.toggle('active', r === rollRate);
+      b.textContent = String(n);
+      b.dataset.count = String(n);
+      b.classList.toggle('active', n === padCount);
       b.addEventListener('click', () => {
-        rollRate = r;
+        padCount = n;
         document.querySelectorAll('#rollBar .m-roll-btn').forEach((x) =>
-          x.classList.toggle('active', +x.dataset.rate === r));
-        applyRollArmed();
+          x.classList.toggle('active', +x.dataset.count === n));
+        buildPads();
       });
       bar.appendChild(b);
     });
-    applyRollArmed();
   }
-  // Refleja el estado del roll en los pads: si hay velocidad activa, los pads
-  // se "arman" visualmente (borde neón pulsante) y la etiqueta lo indica.
-  function applyRollArmed() {
+  function buildPads() {
     const grid = $('padsGrid');
-    if (grid) grid.classList.toggle('roll-armed', rollRate !== 0);
-    const label = document.querySelector('.m-roll-label');
-    if (label) label.textContent = rollRate ? '🥁 Roll 1/' + rollRate : '🥁 Roll';
-  }
-  function initPads() {
-    const grid = $('padsGrid');
-    for (let i = 0; i < 16; i++) {
+    grid.innerHTML = '';
+    grid.style.gridTemplateColumns = `repeat(${padCols(padCount)}, 1fr)`;
+    grid.classList.toggle('few', padCount <= 4);
+    for (let i = 0; i < padCount; i++) {
       const pad = document.createElement('button');
       pad.className = 'm-pad';
       pad.style.setProperty('--pad-c', currentPalette[i]);
       pad.textContent = TRACK_NAMES[i];
-      let rollTimer = null;
-      let rollHue = (i * 23) % 360;
       let startX = 0, startY = 0;
-      const stopRoll = () => {
-        if (rollTimer) { clearInterval(rollTimer); rollTimer = null; }
-        pad.classList.remove('rolling');
-        pad.style.removeProperty('--party');
-      };
       const startLP = () => { _lpTimer = setTimeout(() => { _lpTimer = null; openSampleSheet(i); }, 500); };
       const cancelLP = () => { if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; } };
       const down = (e) => {
@@ -314,20 +304,7 @@
         const t = e.touches ? e.touches[0] : e;
         startX = t.clientX; startY = t.clientY;
         triggerPad(i); flash(pad);
-        if (rollRate) {
-          // Modo roll: retrigea mientras se mantiene; fiesta de colores + ring neón.
-          stopRoll();
-          pad.classList.add('rolling');
-          const tick = () => {
-            triggerPad(i); flash(pad);
-            rollHue = (rollHue + 47) % 360;            // fiesta de colores
-            pad.style.setProperty('--party', `hsl(${rollHue} 100% 55%)`);
-          };
-          tick();
-          rollTimer = setInterval(tick, rollInterval());
-        } else {
-          startLP();
-        }
+        startLP();
       };
       // Cancela el long-press solo si el dedo se desplaza de verdad (>14px).
       const move = (e) => {
@@ -335,7 +312,7 @@
         const t = e.touches ? e.touches[0] : e;
         if (Math.abs(t.clientX - startX) > 14 || Math.abs(t.clientY - startY) > 14) cancelLP();
       };
-      const release = () => { cancelLP(); stopRoll(); };
+      const release = () => { cancelLP(); };
       pad.addEventListener('touchstart', down, { passive: false });
       pad.addEventListener('touchend', release);
       pad.addEventListener('touchmove', move, { passive: true });
@@ -1004,8 +981,8 @@
     initTheme();
     initNav();
     initTransport();
-    initRollBar();
-    initPads();
+    initPadCountBar();
+    buildPads();
     initPiano();
     initJam();
     initSeq();

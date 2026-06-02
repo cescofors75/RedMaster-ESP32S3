@@ -124,37 +124,9 @@ body {
   grid-auto-rows: 1fr;
   gap: 8px;
 }
-/* Pad en modo roll: ring de neón pulsante + fiesta de colores */
-.m-pad.rolling {
-  z-index: 3;
-  background: var(--party, var(--pad-c));
-  border-color: #fff;
-  animation: m-roll-pulse .12s steps(2) infinite;
-  box-shadow:
-    0 0 0 3px var(--party, var(--pad-c)),
-    0 0 14px var(--party, var(--pad-c)),
-    0 0 30px var(--party, var(--pad-c)),
-    inset 0 0 18px rgba(255,255,255,.55);
-}
-@keyframes m-roll-pulse {
-  0%   { filter: brightness(1.5) saturate(1.6); transform: scale(1.0); }
-  100% { filter: brightness(2.4) saturate(2.0); transform: scale(.965); }
-}
-/* Modo roll armado (velocidad ≠ OFF): todos los pads muestran un borde
-   neón pulsante para indicar que al MANTENER pulsado harán redoble. */
-.m-pads.roll-armed .m-pad {
-  box-shadow:
-    inset 0 -4px 8px rgba(0,0,0,.5),
-    inset 0 1px 0 rgba(255,255,255,.18),
-    0 0 0 2px var(--pad-c),
-    0 0 12px var(--pad-c);
-  animation: m-roll-armed 1s ease-in-out infinite;
-}
-.m-pads.roll-armed .m-pad.rolling { animation: m-roll-pulse .12s steps(2) infinite; }
-@keyframes m-roll-armed {
-  0%, 100% { filter: brightness(1.0); }
-  50%      { filter: brightness(1.35) saturate(1.25); }
-}
+/* Con pocos pads (4/2/1) hueco mayor y texto más grande. */
+.m-pads.few { gap: 12px; }
+.m-pads.few .m-pad { font-size: 26px; border-radius: 20px; }
 .m-pad {
   position: relative;
   border: none; border-radius: 14px;
