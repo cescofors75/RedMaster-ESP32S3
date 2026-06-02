@@ -104,6 +104,7 @@ body {
   margin-bottom: 10px;
 }
 .m-roll-label { font-size: 13px; font-weight: 700; color: var(--r808-text-dim); margin-right: 2px; }
+.m-roll-rates { display: flex; gap: 6px; flex: 1 1 auto; min-width: 0; }
 .m-roll-btn {
   flex: 1 1 0; height: 34px; border-radius: 9px;
   border: 1px solid var(--r808-border);
@@ -145,16 +146,17 @@ body {
   z-index: 3;
   background: var(--party, var(--pad-c));
   border-color: #fff;
-  animation: m-roll-pulse .12s steps(2) infinite;
+  animation: m-roll-pulse .1s steps(2) infinite;
   box-shadow:
-    0 0 0 3px var(--party, var(--pad-c)),
-    0 0 14px var(--party, var(--pad-c)),
-    0 0 30px var(--party, var(--pad-c)),
-    inset 0 0 18px rgba(255,255,255,.55);
+    0 0 0 4px #fff,
+    0 0 18px var(--party, var(--pad-c)),
+    0 0 40px var(--party, var(--pad-c)),
+    0 0 70px var(--party, var(--pad-c)),
+    inset 0 0 24px rgba(255,255,255,.7);
 }
 @keyframes m-roll-pulse {
-  0%   { filter: brightness(1.5) saturate(1.6); transform: scale(1.0); }
-  100% { filter: brightness(2.4) saturate(2.0); transform: scale(.965); }
+  0%   { filter: brightness(1.6) saturate(1.8); transform: scale(1.06) rotate(-1.5deg); }
+  100% { filter: brightness(2.8) saturate(2.2); transform: scale(.92) rotate(1.5deg); }
 }
 /* Modo roll armado (velocidad ≠ OFF): todos los pads muestran un borde
    neón pulsante para indicar que al MANTENER pulsado harán redoble. */

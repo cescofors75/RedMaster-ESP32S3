@@ -63,7 +63,7 @@
     { id: 'bright', name: 'Brillante', emoji: '✨', color: '#ffcc00', type: 2,  cutoff: 3500, res: 6   },
     { id: 'phone',  name: 'Teléfono',  emoji: '📞', color: '#ff9500', type: 3,  cutoff: 1200, res: 8   },
     { id: 'robot',  name: 'Robot',     emoji: '🤖', color: '#34c759', type: 9,  cutoff: 700,  res: 14  },
-    { id: 'tunnel', name: 'Túnel',     emoji: '🕳️', color: '#bf5af2', type: 14, cutoff: 800,  res: 4   }
+    { id: 'wah',    name: 'Wah',       emoji: '🐸', color: '#bf5af2', type: 3,  cutoff: 750,  res: 18  }
   ];
   const STEP_COUNTS = [16, 32, 64];
   // Piano: una octava = 12 semitonos. Patrón de teclas negras.
@@ -300,27 +300,31 @@
       pad.style.setProperty('--pad-c', currentPalette[i]);
       pad.textContent = TRACK_NAMES[i];
       let rollTimer = null;
+      let holdTimer = null;
       let rollHue = (i * 23) % 360;
       const stopRoll = () => {
         if (rollTimer) { clearInterval(rollTimer); rollTimer = null; }
+        if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
         pad.classList.remove('rolling');
         pad.style.removeProperty('--party');
+      };
+      const startTremolo = () => {
+        pad.classList.add('rolling');
+        const rate = rollRate || 16;                    // 1/16 por defecto
+        const ms = Math.max(45, (240000 / bpm) / rate); // ms entre golpes
+        const tick = () => {
+          triggerPad(i); flash(pad);
+          rollHue = (rollHue + 47) % 360;               // fiesta de colores
+          pad.style.setProperty('--party', `hsl(${rollHue} 100% 55%)`);
+        };
+        tick();
+        rollTimer = setInterval(tick, ms);
       };
       const down = (e) => {
         e.preventDefault();
         triggerPad(i); flash(pad);
-        if (rollRate) {
-          // Modo roll: retrigea mientras se mantiene; fiesta de colores + ring neón.
-          stopRoll();
-          pad.classList.add('rolling');
-          const tick = () => {
-            triggerPad(i); flash(pad);
-            rollHue = (rollHue + 47) % 360;            // fiesta de colores
-            pad.style.setProperty('--party', `hsl(${rollHue} 100% 55%)`);
-          };
-          tick();
-          rollTimer = setInterval(tick, rollInterval());
-        }
+        // Tap = un golpe; MANTENER pulsado = tremolo espectacular (siempre).
+        holdTimer = setTimeout(startTremolo, 160);
       };
       const release = () => { stopRoll(); };
       pad.addEventListener('touchstart', down, { passive: false });
@@ -331,13 +335,9 @@
       pad.addEventListener('mouseleave', release);
       grid.appendChild(pad);
     }
-    // Botón superior para cargar sonidos (mejor que mantener pulsado el pad)
-    const upBtn = document.createElement('button');
-    upBtn.className = 'm-pads-upload';
-    upBtn.textContent = '📁 Sonidos';
-    upBtn.addEventListener('click', () => openSampleSheet(samplePadDefault));
-    const rb = $('rollBar');
-    if (rb) rb.appendChild(upBtn);
+    // Botón superior de carga (estático en HTML → no se duplica)
+    const upBtn = $('padsUploadBtn');
+    if (upBtn) upBtn.onclick = () => openSampleSheet(samplePadDefault);
   }
   function triggerPad(i) { sendBinary([0x90, i, 127]); }
   function flash(el) { el.classList.add('hit'); setTimeout(() => el.classList.remove('hit'), 90); }
@@ -535,8 +535,15 @@
     refreshTrackButtons();
   }
   function toggleSolo(t) {
-    soloState[t] = !soloState[t];
-    send({ cmd: 'solo', track: t, value: soloState[t] });
+    const turningOn = !soloState[t];
+    if (turningOn) {
+      // Solo es SOLO: solo una pista a la vez (apaga las demás).
+      for (let i = 0; i < 16; i++) {
+        if (i !== t && soloState[i]) { soloState[i] = false; send({ cmd: 'solo', track: i, value: false }); }
+      }
+    }
+    soloState[t] = turningOn;
+    send({ cmd: 'solo', track: t, value: turningOn });
     refreshTrackButtons();
   }
   function setAllMute(on) {
