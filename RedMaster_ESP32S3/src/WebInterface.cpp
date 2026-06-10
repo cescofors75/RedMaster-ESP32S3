@@ -1133,6 +1133,11 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     sendWebAsset(request, "/app.js", "application/javascript", "no-cache");
   });
 
+  // Navegación común + indicador de conexión (cargado por todas las páginas)
+  server->on("/nav.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/nav.js", "application/javascript", "no-cache");
+  });
+
   server->on("/sample-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
     sendWebAsset(request, "/sample-editor.js", "application/javascript", "no-cache");
   });
@@ -1232,6 +1237,25 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
   server->on("/gesture-styles.css", HTTP_GET, [](AsyncWebServerRequest *request){
     sendWebAsset(request, "/gesture-styles.css", "text/css", "no-cache");
+  });
+
+  // Mobile page — los assets existían en el FS pero no había ruta que los
+  // sirviera (solo era accesible vía bridge externo). Con esto /mobile
+  // funciona directo desde el ESP32 y entra en la navegación común.
+  server->on("/mobile", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
+  });
+
+  server->on("/mobile.html", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
+  });
+
+  server->on("/mobile.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.css", "text/css", "no-cache");
+  });
+
+  server->on("/mobile.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.js", "application/javascript", "no-cache");
   });
 
   // Admin page

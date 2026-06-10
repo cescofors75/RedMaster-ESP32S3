@@ -176,9 +176,22 @@ mobile/gesture no usan `navigator.wakeLock`: la pantalla se apaga en plena sesi�
 | B6 | Los 3 sliders vivos con envío directo (`setDistortion`, `setBitCrush`, `setSampleRate`) usan el `sendWebSocketThrottled` ya existente | `app.js` |
 | B8/M1 | Polling pausado con pestaña oculta: admin (stop/start + refresh al volver) y monitor de gesture (guard `document.hidden`) | `admin.js`, `gesture.js` |
 
-Sintaxis JS validada con `node --check`. **No aplicado aún:** B7 (limpieza de código
-muerto), B9, M2-M5 y las propuestas visuales V1-V10 (pendientes de confirmación de
-diseño).
+Sintaxis JS validada con `node --check`.
+
+**Lote visual aplicado (V1/V2/V6/V7/V8 + ruta mobile):**
+
+| ID | Cambio | Archivos |
+|---|---|---|
+| V1 | **Navegación común**: nuevo `nav.js` cargado por las 7 páginas — botón flotante "808" (inferior derecha) con menú a Sequencer/Patchbay/Multiview/Gesture/Mobile/Admin, página actual resaltada | `nav.js` (nuevo), 7 HTML, ruta `/nav.js` en `WebInterface.cpp` |
+| V2 | **Indicador de conexión unificado**: punto de estado en el botón (verde=conectado, ámbar=conectando, rojo parpadeante=caído). Intercepta el constructor `WebSocket` de la página — **no abre conexiones extra** (cada cliente WS cuesta heap al ESP32) | `nav.js` |
+| V6 | `:focus-visible` global (outline cian) para navegación por teclado | `nav.js` (estilos inyectados) |
+| V7 | Scrollbar oscura coherente en todas las páginas | `nav.js` (estilos inyectados) |
+| V8 | Eliminado `maximum-scale`/`user-scalable=no` de index/admin/patchbay (accesibilidad); se mantiene en mobile/gesture (performance táctil) | 3 HTML |
+| — | **Ruta `/mobile` añadida al servidor**: los assets existían en el FS pero ninguna ruta los servía (solo accesible vía bridge externo); ahora `/mobile`, `/mobile.css`, `/mobile.js` funcionan directos del ESP32 | `WebInterface.cpp` |
+| M3 (parcial) | `theme-vars.css` enlazado en las páginas gesture | 2 HTML |
+
+**No aplicado aún:** B7 (limpieza de código muerto), B9, M2/M4/M5 y V4/V5/V9/V10
+(consolidación CSS y polish de animaciones — voluminosos, mejor en pasada dedicada).
 
 ## Priorización sugerida
 
