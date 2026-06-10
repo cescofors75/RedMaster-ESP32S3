@@ -456,9 +456,11 @@ public:
     void process();
     
 private:
-    uint16_t seqNumber;
+    uint16_t seqNumber;          // solo se muta bajo spiMutex
     uint32_t spiErrorCount;
-    bool stm32Connected;
+    // volatile: escrito desde Core1 (ping/requestPeaks en process) y leido
+    // desde Core0 via isConnected().
+    volatile bool stm32Connected;
     float lastPingRttMs = -1.0f;
     
     // TX/RX buffers

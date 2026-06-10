@@ -7,6 +7,20 @@
 #include "SPIMaster.h"
 #include <esp_heap_caps.h>    // ps_calloc / heap_caps_malloc
 
+// PRNG local (xorshift32) para el hot path de audio. El random() de Arduino
+// usa un estado global compartido (no thread-safe entre nucleos: tambien lo
+// llama codigo en Core0) y es mas costoso; aqui se llama hasta
+// MAX_TRACKS x ratchet veces por step. Calidad sobrada para humanize/probability.
+static inline uint32_t seqFastRand() {
+  static uint32_t s = 0;
+  if (s == 0) s = (uint32_t)micros() | 1u;   // seed lazy, nunca 0
+  s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+  return s;
+}
+// Equivalentes a random(n) / random(min, max): rango [0,n) y [min,max)
+static inline long seqRand(long n) { return n > 0 ? (long)(seqFastRand() % (uint32_t)n) : 0; }
+static inline long seqRand(long mn, long mx) { return mn + seqRand(mx - mn); }
+
 Sequencer::Sequencer() : 
   playing(false), 
   currentPattern(0), 
@@ -170,7 +184,7 @@ void Sequencer::update() {
     }
 
     if (humanizeTimingMs > 0) {
-      int32_t jitterUs = (int32_t)random(-(int)humanizeTimingMs, (int)humanizeTimingMs + 1) * 1000;
+      int32_t jitterUs = (int32_t)seqRand(-(long)humanizeTimingMs, (long)humanizeTimingMs + 1) * 1000;
       int32_t candidate = (int32_t)stepInterval + jitterUs;
       int32_t minStep = (int32_t)stepInterval / 2;
       if (candidate < minStep) candidate = minStep;
@@ -227,7 +241,7 @@ void Sequencer::processStep() {
     if (snap[track].active && !trackMuted[track]) {
       uint8_t probability = snap[track].probability;
       if (probability < 100) {
-        long roll = random(0, 100);
+        long roll = seqRand(0, 100);
         if (roll >= probability) {
           continue;
         }
@@ -268,7 +282,7 @@ void Sequencer::processStep() {
           uint8_t outVelocity = velocity;
           if (humanizeVelocityAmount > 0) {
             int maxDelta = (int)((127 * humanizeVelocityAmount) / 100);
-            int jitter = random(-maxDelta, maxDelta + 1);
+            int jitter = (int)seqRand(-maxDelta, maxDelta + 1);
             int v = (int)velocity + jitter;
             if (v < 1) v = 1;
             if (v > 127) v = 127;
@@ -1014,7 +1028,7 @@ void Sequencer::processLoops() {
           break;
         case LOOP_ARRHYTHMIC:
           // Random trigger ~40% chance per step
-          shouldTrigger = (random(100) < 40);
+          shouldTrigger = (seqRand(100) < 40);
           break;
       }
       

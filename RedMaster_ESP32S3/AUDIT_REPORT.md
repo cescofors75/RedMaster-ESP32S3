@@ -331,9 +331,34 @@ Aplicadas en esta rama (cambios de bajo riesgo, sin tocar el firmware de la Dais
 | C2 | `dsqUploadPattern` usa `snapshotTrackForUpload()`: copia la pista bajo un solo lock y hace el SPI fuera del mutex → fin de los uploads desgarrados | `main.cpp`, `Sequencer.h/.cpp` |
 | H5 | Locking uniforme: TODOS los getters/setters que tocan `pd->` toman `patternMutex` (ahora recursivo, para los accessors que se delegan entre sí) | `Sequencer.cpp/.h` |
 | M15 | Param-locks usan las flags `enabled` reales del snapshot en vez de inferirlas del valor (ya no se pierde cutoff=1000Hz ni volumen=0) | `main.cpp` |
+| C3 | Mutex `_jsonBufMutex` serializa `_stateBuf`/`_patternBuf` entre AsyncTCP y systemTask (4 sitios) | `WebInterface.cpp` |
+| C4 | `/api/sampledata`: snapshot PSRAM con `shared_ptr` propiedad de la respuesta — fin del use-after-free si el pad se recarga durante la descarga | `WebInterface.cpp` |
+| H4 | `seqNumber++` movido dentro de `spiMutex` en `sendCommandDirect`/`sendAndReceive` | `SPIMaster.cpp` |
+| H7 | `gPadTrigOff*`/`gSeqMelodicHeld*` protegidos con `portMUX` (reclamo atómico; SPI siempre fuera de la sección crítica) | `main.cpp` |
+| M4 | Polling de ping/peaks/status se salta cuando hay backlog en la cola SPI (transfer bulk en curso) → menos contención de `spiMutex` y uploads más rápidos | `SPIMaster.cpp` |
+| M7 | Globales `gMaster*` marcados `volatile` | `WebInterface.cpp` |
+| M9 | `random()` sustituido por PRNG local xorshift32 en el hot path de audio (Sequencer + LFO S&H) | `Sequencer.cpp`, `LFOEngine.cpp` |
+| M12 | Trigger binario WS valida `pad < MAX_PADS` | `WebInterface.cpp` |
+| M16 | `begin()` documenta el `return true` intencional + warning por Serial si la Daisy no responde al boot | `SPIMaster.cpp` |
+| M17 | `selectPattern` resuelve `index`/`pattern` con `isNull()` explícito (el encadenado `\|` hacía OR bitwise) | `WebInterface.cpp` |
+| L2 | `stm32Connected` → `volatile` | `SPIMaster.h` |
+| L3 | `KitManager::scanKits` usa `sizeof` y descarta paths truncados | `KitManager.cpp` |
+| L4 | `loadMappings` valida `note` (0-127) y `pad` (-1..15) por entrada | `MIDIController.cpp` |
+| L6 | Heap guard responde `{"type":"error","msg":"low_heap"}` en vez de dejar la UI colgada | `WebInterface.cpp` |
+| L7 | `/midi/*` rechaza traversal (`..`) y exige prefijo `/midi/` | `WebInterface.cpp` |
+| L10 | Comentario PULLUP/PULLDOWN corregido | `PhysControlButtons.h` |
+| M8 | Escrituras de SysLog (rotación + append) serializadas con mutex; `syslogPanic` sigue sin lockear (shutdown handler) | `SysLog.cpp` |
 
-**Pendiente de confirmación (requieren coordinación con firmware Daisy o decisiones de diseño):**
-C3/C4, H3/H4/H7/H8/H9, M1/M3/M4/M6/M7/M8/M9/M11/M12/M16/M17 y los LOW.
+**Notas sobre lo no aplicado:**
+- **M3** (drain 8/tick): se mantiene a propósito — el cap está ajustado para no acaparar
+  Core1 (documentado en el código); M4 elimina la contención real.
+- **M11**: no-bug — los getters del Sequencer ya validan rangos internamente.
+- **H8/M6** (busy-wait en uploads / loadSample síncrono en AsyncTCP): requieren rediseñar
+  el flujo de upload y probarse con hardware; no tocar a ciegas.
+
+**Pendiente (requieren coordinación con firmware Daisy o pruebas con hardware):**
+H3/H9/M1 (protocolo SPI: handshake, colisiones magic, checksum), H2-completo (teardown
+USB), H8/M6 (flujo de upload) y LOW menores (L11/L12).
 H2 completo (secuencia `usb_host_endpoint_halt/flush` antes de `usb_host_transfer_free`)
 no se aplicó por no poder compilar-verificar las APIs USB en este entorno.
 

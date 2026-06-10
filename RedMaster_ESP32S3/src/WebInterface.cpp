@@ -11,6 +11,7 @@
 #include <esp_wifi.h>
 #include <esp_heap_caps.h>
 #include <esp_task_wdt.h>
+#include <memory>   // std::shared_ptr (snapshot de sample en /api/sampledata)
 
 #ifndef ENABLE_PHYSICAL_BUTTONS
 #define ENABLE_PHYSICAL_BUTTONS 1
@@ -119,6 +120,19 @@ static constexpr size_t kStateBufSize = 8192;  // serialized JSON fits in ~5-6KB
 // Pre-allocated PSRAM buffer for pattern JSON (selectPattern/getPattern)
 static char* _patternBuf = nullptr;
 static constexpr size_t kPatternBufSize = 40960;  // pattern JSON ~18-32KB (with melody data)
+
+// Serializa el acceso a _stateBuf/_patternBuf. broadcastSequencerState() se
+// invoca desde la tarea AsyncTCP (processCommand) Y desde systemTask
+// (update/handleUdp); sin esto dos tareas podian serializar JSON sobre el
+// mismo buffer a la vez y emitir frames corruptos. Un solo mutex para ambos
+// buffers: contencion baja y sin riesgo de orden de locks.
+static SemaphoreHandle_t _jsonBufMutex = nullptr;
+static inline bool jsonBufLock() {
+  return _jsonBufMutex && xSemaphoreTake(_jsonBufMutex, pdMS_TO_TICKS(150)) == pdTRUE;
+}
+static inline void jsonBufUnlock() {
+  if (_jsonBufMutex) xSemaphoreGive(_jsonBufMutex);
+}
 
 // Endpoint of the UDP packet currently being processed. WiFiUDP::remoteIP()
 // can become unreliable after nested command handling / additional UDP writes,
@@ -515,20 +529,23 @@ static void loadPersistedCleanTracksToDaisy() {
 
 // Page‐transition broadcast pause: set when '/' is served, cleared after 2s
 static volatile unsigned long pageTransitionMs = 0;
-static bool gMasterDelayActive = false;
-static uint8_t gGrooveSwingAmount = 0;
-static bool gMasterPhaserActive = false;
-static float gMasterDelayMix = 0.0f;
-static float gMasterPhaserDepth = 0.0f;
-static float gMasterReverbMix = 0.3f;
-static bool gMasterFlangerActive = false;
-static bool gMasterCompressorActive = false;
-static int gMasterFilterType = 0;
-static int gMasterBitCrushBits = 16;
-static int gMasterSampleRateReduction = SAMPLE_RATE;
-static float gMasterFilterCutoff = 20000.0f;
-static float gMasterFilterResonance = 1.0f;
-static float gMasterDistortion = 0.0f;
+// volatile: escritos por processCommand (corre tanto en la tarea AsyncTCP
+// como en systemTask via UDP) y leidos por los builders de estado. Son
+// escalares word-atomicos; volatile garantiza visibilidad entre tareas.
+static volatile bool gMasterDelayActive = false;
+static volatile uint8_t gGrooveSwingAmount = 0;
+static volatile bool gMasterPhaserActive = false;
+static volatile float gMasterDelayMix = 0.0f;
+static volatile float gMasterPhaserDepth = 0.0f;
+static volatile float gMasterReverbMix = 0.3f;
+static volatile bool gMasterFlangerActive = false;
+static volatile bool gMasterCompressorActive = false;
+static volatile int gMasterFilterType = 0;
+static volatile int gMasterBitCrushBits = 16;
+static volatile int gMasterSampleRateReduction = SAMPLE_RATE;
+static volatile float gMasterFilterCutoff = 20000.0f;
+static volatile float gMasterFilterResonance = 1.0f;
+static volatile float gMasterDistortion = 0.0f;
 extern void dsqUploadPattern(int pattern);           // upload one pattern to Daisy sequencer (Core1 only)
 extern void dsqUploadPatternDeferred(int pattern);   // safe from Core0: sets flag for Core1
 extern void dsqSelectPatternDeferred(int pattern);   // select-only path (1 SPI cmd, no reupload)
@@ -1454,6 +1471,12 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
   server->on("/midi/*", HTTP_GET, [](AsyncWebServerRequest *request){
     String path = request->url();  // e.g. /midi/filename.mid
+    // Contencion de path: solo servir desde /midi/ y rechazar traversal,
+    // como ya hace /api/waveform.
+    if (!path.startsWith("/midi/") || path.indexOf("..") >= 0) {
+      request->send(400, "text/plain", "Bad path");
+      return;
+    }
     if (!LittleFS.exists(path)) {
       request->send(404, "text/plain", "Not found");
       return;
@@ -2018,9 +2041,9 @@ refresh();if(auto_)startAuto();
       return;
     }
 
-    int16_t* buffer = sampleManager.getSampleBuffer(pad);
+    int16_t* liveBuffer = sampleManager.getSampleBuffer(pad);
     uint32_t length = sampleManager.getSampleLength(pad);
-    if (!buffer || length == 0) {
+    if (!liveBuffer || length == 0) {
       request->send(404, "application/json", "{\"error\":\"Empty sample\"}");
       return;
     }
@@ -2029,8 +2052,20 @@ refresh();if(auto_)startAuto();
     uint32_t dataSize = length * 2; // 16-bit = 2 bytes per sample
     uint32_t fileSize = 44 + dataSize;
 
+    // El lambda chunked vive durante muchos callbacks async. Capturar el
+    // puntero vivo del SampleManager era use-after-free si el pad se
+    // recargaba/recortaba/liberaba durante la descarga. Copiamos a un buffer
+    // PSRAM propiedad de la respuesta: el shared_ptr se libera cuando la
+    // respuesta (y su lambda) se destruyen.
+    std::shared_ptr<uint8_t> snapshot((uint8_t*)ps_malloc(dataSize), free);
+    if (!snapshot) {
+      request->send(503, "application/json", "{\"error\":\"Insufficient PSRAM\"}");
+      return;
+    }
+    memcpy(snapshot.get(), liveBuffer, dataSize);
+
     AsyncWebServerResponse *response = request->beginChunkedResponse("audio/wav",
-      [buffer, length, dataSize, fileSize](uint8_t *buf, size_t maxLen, size_t index) -> size_t {
+      [snapshot, dataSize, fileSize](uint8_t *buf, size_t maxLen, size_t index) -> size_t {
         if (index >= fileSize) return 0;
 
         size_t written = 0;
@@ -2072,7 +2107,7 @@ refresh();if(auto_)startAuto();
           size_t pcmRemaining = dataSize - pcmOffset;
           size_t toCopy = maxLen - written;
           if (toCopy > pcmRemaining) toCopy = pcmRemaining;
-          memcpy(buf + written, ((uint8_t*)buffer) + pcmOffset, toCopy);
+          memcpy(buf + written, snapshot.get() + pcmOffset, toCopy);
           written += toCopy;
         }
 
@@ -2087,6 +2122,10 @@ refresh();if(auto_)startAuto();
   
   server->begin();
 
+  // Mutex de los buffers JSON compartidos (creado antes que cualquier uso)
+  if (!_jsonBufMutex) {
+    _jsonBufMutex = xSemaphoreCreateMutex();
+  }
   // Pre-allocate state broadcast buffer in PSRAM (one-time, never freed)
   if (!_stateBuf) {
     _stateBuf = (char*)ps_malloc(kStateBufSize);
@@ -2245,7 +2284,11 @@ void WebInterface::onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient
       if (len == 3 && data[0] == 0x90) {
          int pad = data[1];
          int velocity = data[2];
-         triggerPadWithLED(pad, velocity);
+         // Acotar como en los caminos JSON: data[1] es 0-255 y aguas abajo
+         // se usa como indice/pad sin mas validacion.
+         if (pad >= 0 && pad < MAX_PADS) {
+           triggerPadWithLED(pad, velocity);
+         }
       }
     }
     // 2. MANEJO DE TEXTO (JSON normal)
@@ -2468,7 +2511,7 @@ void WebInterface::onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient
             
             // Serialize to PSRAM buffer to avoid String heap fragmentation
             if (!_patternBuf) _patternBuf = (char*)ps_malloc(kPatternBufSize);
-            if (_patternBuf) {
+            if (_patternBuf && jsonBufLock()) {
               size_t len = serializeJson(responseDoc, _patternBuf, kPatternBufSize);
               syslog("CMD", "getPat JSON len=%u heap=%u", (unsigned)len, ESP.getFreeHeap());
               if (len > 0 && len < kPatternBufSize) {
@@ -2478,6 +2521,7 @@ void WebInterface::onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient
                   ws->textAll(_patternBuf, len);
                 }
               }
+              jsonBufUnlock();
             }
             syslog("CMD", "getPat DONE heap=%u", ESP.getFreeHeap());
           }
@@ -2611,13 +2655,14 @@ void WebInterface::broadcastSequencerState() {
   lastBroadcast = now;
   
   // All memory lives in PSRAM — zero heap allocation in this path
-  if (_stateDoc && _stateBuf) {
+  if (_stateDoc && _stateBuf && jsonBufLock()) {
     _stateDoc->clear();
     populateStateDocument(*_stateDoc);
     size_t len = serializeJson(*_stateDoc, _stateBuf, kStateBufSize);
     if (len > 0 && len < kStateBufSize) {
       ws->textAll(_stateBuf, len);
     }
+    jsonBufUnlock();
   }
 }
 
@@ -2743,11 +2788,13 @@ void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
 
   if (!_stateBuf) _stateBuf = (char*)ps_malloc(kStateBufSize);
   if (!_stateBuf) return;
+  if (!jsonBufLock()) return;
   size_t len = serializeJson(doc, _stateBuf, kUdpMaxPacketBytes);
-  if (len == 0 || len >= kUdpMaxPacketBytes) return;
+  if (len == 0 || len >= kUdpMaxPacketBytes) { jsonBufUnlock(); return; }
   udp.beginPacket(ip, port);
   udp.write((uint8_t*)_stateBuf, len);
   udp.endPacket();
+  jsonBufUnlock();
 
   // v2.9 — also push the current authoritative melody state to this slave so
   // newly-joined or reconnected slaves immediately see the right grid/pad.
@@ -3249,6 +3296,12 @@ void WebInterface::processCommand(const JsonDocument& doc) {
   // ── Heap guard: si queda poca memoria, descartamos el comando ──
   if (ESP.getFreeHeap() < 20000) {
     syslog("CMD", "DROPPED cmd heap=%u", ESP.getFreeHeap());
+    // Avisar a la UI: comandos request/response (getPattern, etc.) quedaban
+    // colgados sin respuesta y la web parecia congelada. String estatico,
+    // sin allocs intermedios significativos.
+    if (ws && ws->count() > 0) {
+      ws->textAll("{\"type\":\"error\",\"msg\":\"low_heap\"}");
+    }
     return;
   }
 
@@ -3476,7 +3529,13 @@ void WebInterface::processCommand(const JsonDocument& doc) {
     }
   }
   else if (cmd == "selectPattern") {
-    int pattern = doc["index"] | doc["pattern"] | sequencer.getCurrentPattern();
+    // No encadenar `doc["a"] | doc["b"] | default`: el primer `|` de
+    // ArduinoJson ya resuelve a int y el resto es OR bitwise (p.ej.
+    // {"index":0,"pattern":5} daba 0|5=5). Resolver presencia explicitamente.
+    int pattern;
+    if (!doc["index"].isNull())        pattern = doc["index"].as<int>();
+    else if (!doc["pattern"].isNull()) pattern = doc["pattern"].as<int>();
+    else                               pattern = sequencer.getCurrentPattern();
     syslog("CMD", "selPat idx=%d heap=%u", pattern, ESP.getFreeHeap());
     sequencer.selectPattern(pattern);
     // Reliability first: refresh Daisy slot on selection to avoid silent
@@ -3583,12 +3642,13 @@ void WebInterface::processCommand(const JsonDocument& doc) {
     
     // Serialize to PSRAM buffer to avoid String heap fragmentation
     if (!_patternBuf) _patternBuf = (char*)ps_malloc(kPatternBufSize);
-    if (_patternBuf) {
+    if (_patternBuf && jsonBufLock()) {
       size_t len = serializeJson(patternDoc, _patternBuf, kPatternBufSize);
       syslog("CMD", "selPat JSON len=%u heap=%u", (unsigned)len, ESP.getFreeHeap());
       if (len > 0 && len < kPatternBufSize && ws && ws->count() > 0) {
         ws->textAll(_patternBuf, len);
       }
+      jsonBufUnlock();
     }
     syslog("CMD", "selPat DONE heap=%u", ESP.getFreeHeap());
   }

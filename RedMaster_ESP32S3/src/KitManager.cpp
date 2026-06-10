@@ -62,17 +62,19 @@ int KitManager::scanKits() {
       filename.toUpperCase();
       
       if (!file.isDirectory() && filename.endsWith(".WAV")) {
-        // Construir path completo
+        // Construir path completo (saltar si no cabe: un path truncado
+        // produciria un load fallido o del archivo equivocado)
         char fullPath[128];
-        snprintf(fullPath, 127, "%s/%s", folders[i], file.name());
-        
-        // Agregar al kit
-        kit.samples[kit.sampleCount].padIndex = i;
-        strncpy(kit.samples[kit.sampleCount].filename, fullPath, 63);
-        kit.samples[kit.sampleCount].filename[63] = '\0';
-        kit.sampleCount++;
-        
-        found = true;
+        int w = snprintf(fullPath, sizeof(fullPath), "%s/%s", folders[i], file.name());
+        if (w > 0 && w < (int)sizeof(fullPath)) {
+          // Agregar al kit
+          kit.samples[kit.sampleCount].padIndex = i;
+          strncpy(kit.samples[kit.sampleCount].filename, fullPath, 63);
+          kit.samples[kit.sampleCount].filename[63] = '\0';
+          kit.sampleCount++;
+
+          found = true;
+        }
       }
       
       file = dir.openNextFile();

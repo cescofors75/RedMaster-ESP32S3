@@ -662,9 +662,16 @@ void MIDIController::loadMappings() {
     snprintf(keyNote, sizeof(keyNote), "n%d", i);
     snprintf(keyPad,  sizeof(keyPad),  "p%d", i);
     snprintf(keyEn,   sizeof(keyEn),   "e%d", i);
-    noteMappings[i].note    = prefs.getUChar(keyNote, 0);
-    noteMappings[i].pad     = prefs.getChar (keyPad,  -1);
-    noteMappings[i].enabled = prefs.getBool (keyEn,   false);
+    uint8_t note = prefs.getUChar(keyNote, 0);
+    int8_t  pad  = prefs.getChar (keyPad,  -1);
+    // Validar por entrada: una NVS corrupta podia devolver pads fuera de
+    // 0-15 que luego indexan arrays de pad aguas abajo.
+    if (note > 127 || pad < -1 || pad > 15) {
+      continue;  // descartar entrada corrupta
+    }
+    noteMappings[mappingCount].note    = note;
+    noteMappings[mappingCount].pad     = pad;
+    noteMappings[mappingCount].enabled = prefs.getBool(keyEn, false);
     mappingCount++;
   }
   prefs.end();

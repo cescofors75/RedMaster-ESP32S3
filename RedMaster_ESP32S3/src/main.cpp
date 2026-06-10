@@ -121,6 +121,14 @@ static bool   gSeqMelodicHeld[16] = {false};
 static int8_t gSeqMelodicHeldEngine[16] = {-1, -1, -1, -1, -1, -1, -1, -1,
                                            -1, -1, -1, -1, -1, -1, -1, -1};
 
+// Protege gSeqMelodicHeld*/gPadTrigOff*: se mutan desde Core0 (web/MIDI via
+// triggerPadWithLED; comando stop de WebInterface llama
+// releaseSequencerMelodicHolds desde AsyncTCP) y Core1 (callbacks del
+// sequencer, drainPadTriggerAutoOff en loop()). El read-modify-write sin
+// proteccion podia mandar NoteOffs espurios o dejar voces colgadas.
+// Las llamadas SPI se hacen SIEMPRE fuera de la seccion critica.
+static portMUX_TYPE gPadNoteMux = portMUX_INITIALIZER_UNLOCKED;
+
 /* ─────────────────────────────────────────────────────────────────────────
  *  Pad-trigger auto note-off (web UI / MIDI / live pad taps).
  *  triggerPadWithLED() fires CMD_SYNTH_NOTE_ON_EX for engines >= 4
@@ -139,10 +147,14 @@ static const uint32_t kPadTrigAutoOffMs = 220;
 
 static void releasePadTriggerNote(int track) {
     if (track < 0 || track >= 16) return;
+    // Reclamar la entrada atomicamente: solo UN contexto (Core0 trigger o
+    // Core1 drain) obtiene el par engine/note y manda el NoteOff.
+    portENTER_CRITICAL(&gPadNoteMux);
     int8_t eng = gPadTrigOffEngine[track];
     uint8_t note = gPadTrigOffNote[track];
     gPadTrigOffAtMs[track]   = 0;
     gPadTrigOffEngine[track] = -1;
+    portEXIT_CRITICAL(&gPadNoteMux);
     if (eng < 0) return;
     if (eng == 3) {
         spiMaster.synth303NoteOff();
@@ -153,9 +165,11 @@ static void releasePadTriggerNote(int track) {
 
 static void schedulePadTriggerAutoOff(int track, int8_t engine, uint8_t note) {
     if (track < 0 || track >= 16) return;
+    portENTER_CRITICAL(&gPadNoteMux);
     gPadTrigOffEngine[track] = engine;
     gPadTrigOffNote[track]   = note;
     gPadTrigOffAtMs[track]   = millis() + kPadTrigAutoOffMs;
+    portEXIT_CRITICAL(&gPadNoteMux);
 }
 
 static void drainPadTriggerAutoOff() {
@@ -170,10 +184,16 @@ static void drainPadTriggerAutoOff() {
 
 void releaseSequencerMelodicHolds() {
     for (int track = 0; track < 16; track++) {
-        if (!gSeqMelodicHeld[track]) continue;
+        // Reclamo atomico por track; el NoteOff (SPI) va fuera del mux.
+        portENTER_CRITICAL(&gPadNoteMux);
+        bool held = gSeqMelodicHeld[track];
         int8_t engine = gSeqMelodicHeldEngine[track];
-        gSeqMelodicHeld[track] = false;
-        gSeqMelodicHeldEngine[track] = -1;
+        if (held) {
+            gSeqMelodicHeld[track] = false;
+            gSeqMelodicHeldEngine[track] = -1;
+        }
+        portEXIT_CRITICAL(&gPadNoteMux);
+        if (!held) continue;
         if (engine == 3) {
             spiMaster.synth303NoteOff();
         } else if (engine >= 4 && engine <= 8) {
@@ -805,12 +825,19 @@ void setup() {
             bool accent = (flags & 0x01) != 0;
             bool slide  = (flags & 0x02) != 0;
             bool anyNote = false;
-            if (gSeqMelodicHeld[track]) {
-                int8_t prevEngine = gSeqMelodicHeldEngine[track];
-                if (prevEngine == 3) spiMaster.synth303NoteOff();
-                else if (prevEngine >= 4 && prevEngine <= 8) spiMaster.synthNoteOff((uint8_t)prevEngine, (uint8_t)track);
+            // Reclamo atomico del hold previo (compite con el comando stop de
+            // la web, que llama releaseSequencerMelodicHolds desde AsyncTCP).
+            portENTER_CRITICAL(&gPadNoteMux);
+            bool prevHeld = gSeqMelodicHeld[track];
+            int8_t prevEngine = gSeqMelodicHeldEngine[track];
+            if (prevHeld) {
                 gSeqMelodicHeld[track] = false;
                 gSeqMelodicHeldEngine[track] = -1;
+            }
+            portEXIT_CRITICAL(&gPadNoteMux);
+            if (prevHeld) {
+                if (prevEngine == 3) spiMaster.synth303NoteOff();
+                else if (prevEngine >= 4 && prevEngine <= 8) spiMaster.synthNoteOff((uint8_t)prevEngine, (uint8_t)track);
             }
             for (int voice = 0; voice < MELODY_STEP_VOICES; voice++) {
                 uint8_t note = sequencer.getStepNoteVoice(pat, track, step, voice);
@@ -819,8 +846,10 @@ void setup() {
                 spiMaster.synthNoteOnEx((uint8_t)engine, note, synthVel, accent, slide);
             }
             if (!anyNote) return;
+            portENTER_CRITICAL(&gPadNoteMux);
             gSeqMelodicHeld[track] = true;
             gSeqMelodicHeldEngine[track] = engine;
+            portEXIT_CRITICAL(&gPadNoteMux);
         } else {
             // Percussion engines (808/909/505): trigger by instrument
             spiMaster.synthTrigger((uint8_t)engine, (uint8_t)track, synthVel);
