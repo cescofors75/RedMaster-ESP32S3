@@ -145,11 +145,20 @@ bool SampleManager::parseWavFile(fs::File& file, int padIndex, String& errOut) {
     } else if (memcmp(hdr, "data", 4) == 0) {
       dataPos  = pos + 8;   // posición justo después del header del chunk
       dataSize = chunkSize;
+      // Clamp a los bytes realmente disponibles: un WAV corrupto puede declarar
+      // un data chunk mayor que el archivo.
+      if (dataPos > (uint32_t)fileSize) { errOut = "Bad data chunk offset"; return false; }
+      if (dataSize > (uint32_t)fileSize - dataPos) dataSize = (uint32_t)fileSize - dataPos;
       dataFound = true;
       break;  // ya tenemos lo que necesitamos
     }
 
-    pos += 8 + chunkSize + (chunkSize & 1);  // alineado a 2 bytes
+    // Avance con proteccion de overflow: chunkSize lo controla el archivo
+    // (uint32 sin firmar). Sin esto, un valor enorme desbordaba `pos`, hacia
+    // wrap el guard `pos + 8 <= fileSize` y podia provocar bucle infinito.
+    uint32_t advance = chunkSize + (chunkSize & 1);
+    if (chunkSize > (uint32_t)fileSize || advance > (uint32_t)fileSize - pos - 8) break;
+    pos += 8 + advance;  // alineado a 2 bytes
   }
 
   if (!fmtFound)  { errOut = "No fmt chunk found";  return false; }
@@ -254,8 +263,14 @@ bool SampleManager::parseWavFile(fs::File& file, int padIndex, String& errOut) {
 }
 
 bool SampleManager::allocateSampleBuffer(int padIndex, uint32_t size) {
+  // Comprobar el limite ANTES de multiplicar: size lo deriva el archivo y
+  // `size * 2` podia desbordar size_t (32-bit) y pasar el check con un `bytes`
+  // minusculo, provocando un overrun al copiar las muestras.
+  if (size > MAX_SAMPLE_SIZE / sizeof(int16_t)) {
+    return false;
+  }
   size_t bytes = size * sizeof(int16_t);
-  
+
   if (bytes > MAX_SAMPLE_SIZE) {
     return false;
   }
@@ -442,7 +457,10 @@ bool SampleManager::parseWavFromBuffer(const uint8_t* buf, size_t size, int padI
       dataFound = true;
       break;
     }
-    pos += 8 + chunkSize + (chunkSize & 1);
+    // Avance con proteccion de overflow (chunkSize controlado por el archivo).
+    uint32_t advance = chunkSize + (chunkSize & 1);
+    if (chunkSize > (uint32_t)size || advance > (uint32_t)size - pos - 8) break;
+    pos += 8 + advance;
   }
 
   if (!fmtFound)  { errOut = "No fmt chunk found";  return false; }
@@ -456,8 +474,9 @@ bool SampleManager::parseWavFromBuffer(const uint8_t* buf, size_t size, int padI
   if (numChannels < 1 || numChannels > 2) {
     errOut = "Bad channel count " + String(numChannels); return false;
   }
-  if (dataPos + dataSize > (uint32_t)size) {
-    dataSize = (uint32_t)size - dataPos;  // truncar si el tamaño del chunk excede el buffer
+  if (dataPos > (uint32_t)size) { errOut = "Bad data chunk offset"; return false; }
+  if (dataSize > (uint32_t)size - dataPos) {
+    dataSize = (uint32_t)size - dataPos;  // truncar si el tamaño del chunk excede el buffer (sin overflow)
   }
 
   uint32_t bytesPerSample = bitsPerSample / 8;

@@ -213,14 +213,17 @@ private:
   inline void lockPattern()   { if (patternMutex) xSemaphoreTake(patternMutex, portMAX_DELAY); }
   inline void unlockPattern() { if (patternMutex) xSemaphoreGive(patternMutex); }
   
-  bool playing;
+  // volatile: leidos/escritos desde Core1 (loop → update/processStep) y Core0
+  // (start/stop/selectPattern/setTempo desde web). Evita que el compilador los
+  // cachee en registro dentro del while(true) y garantiza visibilidad cruzada.
+  volatile bool playing;
   int patternLength;  // Active step count: 16, 32, or 64
-  int currentPattern;
-  int currentStep;
+  volatile int currentPattern;
+  volatile int currentStep;
   float tempo; // BPM
   uint32_t lastStepTime;
-  uint32_t stepInterval; // microseconds
-  uint32_t nextStepInterval;
+  volatile uint32_t stepInterval; // microseconds
+  volatile uint32_t nextStepInterval;
   uint8_t humanizeTimingMs;
   uint8_t humanizeVelocityAmount;
   bool trackMuted[MAX_TRACKS];

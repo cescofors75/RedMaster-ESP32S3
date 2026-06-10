@@ -58,6 +58,8 @@ public:
   
   // Waveform data access (for visualizer)
   int16_t* getSampleBuffer(int padIndex);
+  // Escribe 2 valores int8 por punto (pico +/-). outPeaks DEBE tener espacio
+  // para maxPoints*2 bytes. Devuelve el numero de puntos (cada uno = 2 bytes).
   int getWaveformPeaks(int padIndex, int8_t* outPeaks, int maxPoints);
   
   // Memory info

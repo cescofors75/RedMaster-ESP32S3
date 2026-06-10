@@ -72,7 +72,7 @@ public:
   void clearMapping(uint8_t note);                 // Eliminar mapeo
   void resetToDefaultMapping();                    // Resetear a mapeo por defecto (36-43)
   const MIDINoteMapping* getAllMappings(int& count) const;  // Obtener todos los mapeos
-  void saveMappings();                             // Guardar mapeo en NVS
+  void saveMappings();                             // Guardar mapeo en NVS (escritura real)
   void loadMappings();                             // Cargar mapeo desde NVS
 
   // Get recent messages (for web display)
@@ -94,6 +94,7 @@ private:
   bool openMidiDevice(uint8_t deviceAddress);
   void closeMidiDevice();
   void readMidiData();
+  void markMappingsDirty();  // marca pendiente de flush (debounce a NVS)
 
   // USB Host variables
   usb_host_client_handle_t clientHandle;
@@ -128,6 +129,13 @@ private:
   // Note Mapping
   MIDINoteMapping noteMappings[MAX_MIDI_MAPPINGS];
   int mappingCount;
+
+  // Debounce de escritura a NVS: las ediciones marcan dirty y se vuelcan una
+  // sola vez tras un periodo de calma, evitando desgaste de flash al editar
+  // mapeos pad a pad desde la web.
+  bool mappingsDirty;
+  uint32_t mappingsDirtyAt;
+  static const uint32_t kMappingsFlushDelayMs = 1500;
 
   // Scan control
   volatile bool scanEnabled;

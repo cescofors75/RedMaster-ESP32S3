@@ -1374,8 +1374,23 @@ void setup() {
         webInterface.broadcastRaw(out.c_str());
     });
 
+    // ── Task Watchdog: 10s timeout, panic on timeout ──
+    // IMPORTANTE: inicializar ANTES de crear las tasks. spiAudioTask (prio 24) y
+    // systemTask (prio 5) tienen mayor prioridad que loopTask (prio 1, donde corre
+    // setup()), por lo que arrancan de inmediato y llaman esp_task_wdt_add() en su
+    // entrada. Si el TWDT no esta inicializado en ese momento, el add() devuelve
+    // ESP_ERR_INVALID_STATE y la task NUNCA queda suscrita — dejando el nucleo de
+    // audio/SPI sin watchdog (justo lo contrario del diseno de recuperacion).
+    // La carga de samples (que tardaba) ya ocurrio antes en setup(), asi que
+    // arrancar el watchdog aqui no provoca un reset espurio durante el boot.
+    esp_task_wdt_config_t twdtConfig = {};
+    twdtConfig.timeout_ms = 10000;
+    twdtConfig.idle_core_mask = 0;
+    twdtConfig.trigger_panic = true;
+    esp_task_wdt_init(&twdtConfig);
+
     // --- DUAL-CORE TASKS ---
-    
+
     // CORE 1: SPI Audio Task (Sequencer + SPI) - Prioridad máxima
     xTaskCreatePinnedToCore(
         spiAudioTask,
@@ -1398,14 +1413,8 @@ void setup() {
         0       // CORE 0: WiFi, Web, MIDI, LED
     );
 
-    // ── Task Watchdog: 10s timeout, panic on timeout ──
-    // Initialized AFTER setup completes to avoid WDT reset during sample loading
-    esp_task_wdt_config_t twdtConfig = {};
-    twdtConfig.timeout_ms = 10000;
-    twdtConfig.idle_core_mask = 0;
-    twdtConfig.trigger_panic = true;
-    esp_task_wdt_init(&twdtConfig);
-    esp_task_wdt_add(NULL);  // subscribe loopTask
+    // El TWDT ya quedo inicializado antes de crear las tasks (ver arriba).
+    esp_task_wdt_add(NULL);  // subscribe loopTask (setup corre aqui)
 
     Serial.println("=== RED808 BOOT COMPLETE ===");
     syslog("BOOT", "COMPLETE heap=%u min=%u block=%u psram=%u samples=%d",

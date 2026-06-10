@@ -27,11 +27,18 @@ void syslog(const char* tag, const char* fmt, ...) {
     unsigned long sec = elapsedMs / 1000;
     unsigned long ms  = elapsedMs % 1000;
     offset = snprintf(line, sizeof(line), "[%lu.%03lu][%s] ", sec, ms, tag);
+    // snprintf/vsnprintf devuelven los chars que SE HABRIAN escrito (sin contar
+    // el nul): en truncamiento `offset` puede exceder el buffer. Sin acotar,
+    // `f.write(line, offset)` leeria fuera del array de 256 bytes (OOB read).
+    if (offset < 0) offset = 0;
+    if (offset > (int)sizeof(line) - 1) offset = (int)sizeof(line) - 1;
 
     va_list args;
     va_start(args, fmt);
-    offset += vsnprintf(line + offset, sizeof(line) - offset, fmt, args);
+    int wrote = vsnprintf(line + offset, sizeof(line) - offset, fmt, args);
     va_end(args);
+    if (wrote > 0) offset += wrote;
+    if (offset > (int)sizeof(line) - 1) offset = (int)sizeof(line) - 1;
 
     // Ensure newline
     if (offset < (int)sizeof(line) - 1) {

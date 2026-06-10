@@ -311,6 +311,29 @@ dependiente de versión y puede no respetar la presencia/valor 0 esperados.
   de heap antes de asignaciones pesadas; el manejo de overflow de `millis()` en
   `drainPadTriggerAutoOff` es correcto (resta con signo).
 
+## Estado de correcciones (lote seguro aplicado)
+
+Aplicadas en esta rama (cambios de bajo riesgo, sin tocar el firmware de la Daisy):
+
+| ID | Fix | Archivo |
+|----|-----|---------|
+| C1 | `esp_task_wdt_init()` movido antes de crear las tasks → el núcleo audio/SPI queda vigilado | `main.cpp` |
+| H6 | `playing/currentPattern/currentStep/stepInterval/nextStepInterval` marcados `volatile` | `Sequencer.h` |
+| C5 | Historial/contadores MIDI protegidos con `portMUX` + fórmula de índice robusta | `MIDIController.cpp` |
+| H1 | Recuperación tras STALL USB (`s_transferSubmitted=false` cuando no se reenvía) | `MIDIController.cpp` |
+| H2 (parcial) | `s_transferSubmitted` → `volatile` (teardown USB endpoint queda como follow-up) | `MIDIController.cpp` |
+| H10 | Overflow de enteros al recorrer chunks WAV + clamp de `dataSize` (file y buffer) | `SampleManager.cpp` |
+| M10 | Check de límite antes de `size*2` en `allocateSampleBuffer` | `SampleManager.cpp` |
+| M2 | `getFilterPreset` busca por `.type` en vez de indexar (no más OOB read) | `SPIMaster.cpp` |
+| M5 | Debounce de escritura NVS de mapeos MIDI (1.5s) + persiste `clearMapping` | `MIDIController.cpp/.h` |
+| M13 | Clamp de `offset` tras snprintf/vsnprintf en SysLog (no más OOB read) | `SysLog.cpp` |
+| M14 | Contrato de `getWaveformPeaks` documentado (no era bug activo) | `SampleManager.h` |
+
+**Pendiente de confirmación (requieren coordinación con firmware Daisy o decisiones de diseño):**
+C2/C3/C4, H3/H4/H5/H7/H8/H9, M1/M3/M4/M6/M7/M8/M9/M11/M12/M15/M16/M17 y los LOW.
+H2 completo (secuencia `usb_host_endpoint_halt/flush` antes de `usb_host_transfer_free`)
+no se aplicó por no poder compilar-verificar las APIs USB en este entorno.
+
 ## Prioridad de corrección sugerida
 1. **C1** (watchdog) — cambio pequeño, alto impacto en fiabilidad.
 2. **C2/H5/H6** (locking uniforme del Sequencer + `volatile`) — raíz de "patrones parciales".

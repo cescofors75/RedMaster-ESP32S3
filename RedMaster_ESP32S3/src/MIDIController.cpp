@@ -2,7 +2,13 @@
 
 // Static callback wrapper
 static MIDIController* s_midiInstance = nullptr;
-static bool s_transferSubmitted = false;
+// volatile: escrito desde el callback USB (contexto USB host) y leido/escrito
+// desde readMidiData()/closeMidiDevice() en la task principal.
+static volatile bool s_transferSubmitted = false;
+// Protege el ring buffer de historial + contadores, que se escriben desde el
+// callback USB (Core0) y se leen desde la task web (AsyncTCP, Core0) — tasks
+// distintas que se pueden expropiar entre si.
+static portMUX_TYPE s_midiHistMux = portMUX_INITIALIZER_UNLOCKED;
 
 // Transfer callback — se llama cuando USB Host completa una lectura
 static void transferCallback(usb_transfer_t* transfer) {
@@ -17,6 +23,12 @@ static void transferCallback(usb_transfer_t* transfer) {
   if (transfer->status != USB_TRANSFER_STATUS_CANCELED &&
       transfer->status != USB_TRANSFER_STATUS_STALL) {
     usb_host_transfer_submit(transfer);
+  } else {
+    // STALL/CANCELED: el transfer NO vuelve a estar en vuelo. Sin esto el flag
+    // quedaba en true para siempre y readMidiData() abortaba en cada llamada,
+    // matando la entrada MIDI hasta reiniciar. Liberamos el flag para que
+    // readMidiData() pueda reenviar (recuperacion automatica tras un STALL).
+    s_transferSubmitted = false;
   }
 }
 
@@ -37,6 +49,8 @@ MIDIController::MIDIController()
   , lastSecondTime(0)
   , messagesThisSecond(0)
   , mappingCount(0)
+  , mappingsDirty(false)
+  , mappingsDirtyAt(0)
 {
   deviceInfo.connected = false;
   deviceInfo.deviceName = "No device";
@@ -170,16 +184,25 @@ void MIDIController::clientEventCallback(const usb_host_client_event_msg_t* even
 }
 
 void MIDIController::update() {
+  // Flush diferido de mapeos a NVS (debounce). Se ejecuta aunque el escaneo
+  // este desactivado, para no perder ediciones hechas desde la web.
+  if (mappingsDirty && (millis() - mappingsDirtyAt) >= kMappingsFlushDelayMs) {
+    mappingsDirty = false;
+    saveMappings();
+  }
+
   if (!initialized || !scanEnabled) return;
 
   // Update messages per second counter
   uint32_t now = millis();
   if (now - lastSecondTime >= 1000) {
+    portENTER_CRITICAL(&s_midiHistMux);
     messagesPerSecond = messagesThisSecond;
     messagesThisSecond = 0;
+    portEXIT_CRITICAL(&s_midiHistMux);
     lastSecondTime = now;
   }
-  
+
   // Read MIDI data from USB device
   if (deviceHandle && midiTransfer) {
     readMidiData();
@@ -217,18 +240,18 @@ void MIDIController::processMIDIMessage(uint8_t status, uint8_t data1, uint8_t d
   msg.data2 = data2;
   msg.timestamp = millis();
   
-  // Add to history
+  // Add to history + estadisticas bajo seccion critica (lado escritor).
+  portENTER_CRITICAL(&s_midiHistMux);
   messageHistory[historyIndex] = msg;
   historyIndex = (historyIndex + 1) % MAX_HISTORY;
   if (historyCount < MAX_HISTORY) {
     historyCount++;
   }
-  
-  // Update statistics
   totalMessages++;
   messagesThisSecond++;
-  
-  // Notify callback
+  portEXIT_CRITICAL(&s_midiHistMux);
+
+  // Notify callback (fuera de la seccion critica: ejecuta codigo de usuario)
   if (messageCallback) {
     messageCallback(msg);
   }
@@ -247,14 +270,16 @@ void MIDIController::processMIDIMessage(uint8_t status, uint8_t data1, uint8_t d
 }
 
 void MIDIController::getRecentMessages(MIDIMessage* buffer, size_t& count, size_t maxCount) {
+  // Snapshot bajo la misma seccion critica que el escritor para evitar leer un
+  // indice/contador inconsistente o una MIDIMessage a medio escribir.
+  portENTER_CRITICAL(&s_midiHistMux);
   count = min(historyCount, maxCount);
-  
-  size_t startIdx = historyIndex >= count ? historyIndex - count : MAX_HISTORY - (count - historyIndex);
-  
+  size_t startIdx = (historyIndex + MAX_HISTORY - count) % MAX_HISTORY;
   for (size_t i = 0; i < count; i++) {
     size_t idx = (startIdx + i) % MAX_HISTORY;
     buffer[i] = messageHistory[idx];
   }
+  portEXIT_CRITICAL(&s_midiHistMux);
 }
 
 void MIDIController::notifyDeviceChange(bool connected) {
@@ -482,7 +507,7 @@ void MIDIController::setPadMapping(int8_t pad, uint8_t newNote) {
     if (noteMappings[i].pad == pad) {
       noteMappings[i].note    = newNote;
       noteMappings[i].enabled = true;
-      saveMappings();
+      markMappingsDirty();
       return;
     }
   }
@@ -496,18 +521,18 @@ void MIDIController::setNoteMapping(uint8_t note, int8_t pad) {
     if (noteMappings[i].note == note) {
       noteMappings[i].pad = pad;
       noteMappings[i].enabled = (pad >= 0);
-      saveMappings();
+      markMappingsDirty();
       return;
     }
   }
-  
+
   // Agregar nuevo mapeo si hay espacio
   if (mappingCount < MAX_MIDI_MAPPINGS) {
     noteMappings[mappingCount].note = note;
     noteMappings[mappingCount].pad = pad;
     noteMappings[mappingCount].enabled = (pad >= 0);
     mappingCount++;
-    saveMappings();
+    markMappingsDirty();
   } else {
   }
 }
@@ -525,6 +550,7 @@ void MIDIController::clearMapping(uint8_t note) {
   for (int i = 0; i < mappingCount; i++) {
     if (noteMappings[i].note == note) {
       noteMappings[i].enabled = false;
+      markMappingsDirty();  // antes no se persistia: el cambio se perdia al reiniciar
       return;
     }
   }
@@ -532,7 +558,12 @@ void MIDIController::clearMapping(uint8_t note) {
 
 void MIDIController::resetToDefaultMapping() {
   initializeDefaultMappings();
-  saveMappings();
+  markMappingsDirty();
+}
+
+void MIDIController::markMappingsDirty() {
+  mappingsDirty = true;
+  mappingsDirtyAt = millis();
 }
 
 void MIDIController::initializeDefaultMappings() {

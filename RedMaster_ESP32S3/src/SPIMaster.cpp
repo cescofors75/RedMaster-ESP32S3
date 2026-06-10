@@ -1802,10 +1802,17 @@ bool SPIMaster::drainEvents() {
 // ═══════════════════════════════════════════════════════
 
 const FilterPreset* SPIMaster::getFilterPreset(FilterType type) {
-    if (type >= 0 && type <= FILTER_STUTTER) {
-        return &filterPresets[type];
+    // El enum FilterType tiene huecos (LADDER=10, SVF=11..13, COMB=14,
+    // REVERSE=17, HALFSPEED=18, STUTTER=19) pero filterPresets[] es denso.
+    // Indexar por el valor del enum leia fuera de limites (tipos 13-19) o
+    // devolvia el preset equivocado (10-12). Buscamos por .type.
+    const size_t n = sizeof(filterPresets) / sizeof(filterPresets[0]);
+    for (size_t i = 0; i < n; i++) {
+        if (filterPresets[i].type == type) {
+            return &filterPresets[i];
+        }
     }
-    return &filterPresets[0];
+    return &filterPresets[0];  // "None" como fallback seguro
 }
 
 const char* SPIMaster::getFilterName(FilterType type) {
