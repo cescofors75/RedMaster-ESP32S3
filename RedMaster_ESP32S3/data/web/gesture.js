@@ -629,6 +629,7 @@ document.addEventListener('keydown', e => {
 
 // ── WebSocket Status Monitor ─────────────────────────
 setInterval(() => {
+  if (document.hidden) return;  // no trabajar en pestañas ocultas
   const status = document.getElementById('wsStatus');
   if (!status) return;
   if (!gestureWs) {

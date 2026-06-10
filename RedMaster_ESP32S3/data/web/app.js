@@ -415,7 +415,15 @@ function initWebSocket() {
             return;
         }
         if (typeof event.data !== 'string') return;
-        const data = JSON.parse(event.data);
+        // Un frame malformado (p.ej. truncado bajo presion de heap del servidor)
+        // no debe tumbar el handler: descartar y seguir.
+        let data;
+        try {
+            data = JSON.parse(event.data);
+        } catch (err) {
+            console.warn('[WS] Frame no-JSON descartado:', err.message);
+            return;
+        }
         // Handle bulk ACK for MIDI import
         if (data.type === 'bulkAck' && typeof window._bulkAckCallback === 'function') {
             window._bulkAckCallback(data.p);
@@ -491,6 +499,40 @@ function handleWebSocketMessage(data) {
             break;
         case 'step':
             updateCurrentStep(data.step);
+            break;
+        case 'error':
+            // El servidor descarta comandos bajo presion (p.ej. low_heap);
+            // sin esto la UI parecia "congelada" sin explicacion.
+            if (window.showToast && window.TOAST_TYPES) {
+                window.showToast(`⚠️ ESP32: ${data.msg || 'error'}`, window.TOAST_TYPES.ERROR, 4000);
+            } else {
+                console.warn('[WS] Server error:', data.msg);
+            }
+            break;
+        case 'trackSolo':
+            // Solo remoto (otro cliente / patchbay): reflejar el estado visual.
+            // No tocamos los mutes locales — el cambio de audio ya lo aplico el
+            // servidor; duplicarlo aqui entraria en conflicto con el solo local
+            // basado en mutes de setSoloTrack().
+            if (data.track !== undefined) {
+                trackSoloState = data.solo ? data.track : -1;
+                document.querySelectorAll('.solo-btn').forEach(btn => {
+                    btn.classList.toggle('active', parseInt(btn.dataset.track) === trackSoloState);
+                });
+            }
+            break;
+        case 'patternSelected':
+            // Fallback minimo del servidor cuando no puede mandar el patron
+            // completo (heap bajo): sincronizar al menos indice y nombre.
+            if (data.pattern !== undefined) {
+                currentPatternIndex = data.pattern;
+                const psName = data.pattern < PATTERN_NAMES.length
+                    ? PATTERN_NAMES[data.pattern] : `PATTERN ${data.pattern + 1}`;
+                const psEl = document.getElementById('currentPatternName');
+                if (psEl) psEl.textContent = psName;
+                const psCirc = document.getElementById('circularPatternName');
+                if (psCirc) psCirc.textContent = psName;
+            }
             break;
         case 'songPattern':
             handleSongPatternChange(data.pattern, data.songLength);
@@ -4880,7 +4922,7 @@ function setupFXControls() {
     if (distortion) {
         distortion.addEventListener('input', (e) => {
             if (distortionValue) distortionValue.textContent = e.target.value;
-            sendWebSocket({ cmd: 'setDistortion', value: parseFloat(e.target.value) });
+            sendWebSocketThrottled('fx:setDistortion', { cmd: 'setDistortion', value: parseFloat(e.target.value) });
         });
     }
     
@@ -4909,7 +4951,7 @@ function setupFXControls() {
     if (bitCrush) {
         bitCrush.addEventListener('input', (e) => {
             if (bitCrushValue) bitCrushValue.textContent = e.target.value;
-            sendWebSocket({ cmd: 'setBitCrush', value: parseInt(e.target.value) });
+            sendWebSocketThrottled('fx:setBitCrush', { cmd: 'setBitCrush', value: parseInt(e.target.value) });
         });
     }
     
@@ -4918,7 +4960,7 @@ function setupFXControls() {
     if (sampleRate) {
         sampleRate.addEventListener('input', (e) => {
             if (sampleRateValue) sampleRateValue.textContent = e.target.value;
-            sendWebSocket({ cmd: 'setSampleRate', value: parseInt(e.target.value) });
+            sendWebSocketThrottled('fx:setSampleRate', { cmd: 'setSampleRate', value: parseInt(e.target.value) });
         });
     }
     

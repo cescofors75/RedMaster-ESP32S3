@@ -163,6 +163,23 @@ mobile/gesture no usan `navigator.wakeLock`: la pantalla se apaga en plena sesi�
 
 ---
 
+## Estado de correcciones (aplicadas)
+
+| ID | Fix | Archivos |
+|---|---|---|
+| 0 | **Pipeline arreglado**: `data/web` resincronizado desde la verdad flasheada, artefactos `.gz` eliminados de las fuentes, y nuevo `scripts/sync_web_fs.sh` (`data/web` → `data_gz`, ejecutar antes de `uploadfs`) | `data/web/*`, `data_gz/web/*`, `scripts/sync_web_fs.sh` |
+| B1 | Sección "clean tracks" duplicada eliminada (quedan los IDs únicos del tab STEMS) | `index.html` |
+| B2 | El branch `scratch` del chat-agent ya no envía el comando inexistente; avisa en el chat de que no está soportado | `chat-agent.js` |
+| B3 | `JSON.parse` del onmessage protegido con try/catch (frame malformado se descarta con warn) | `app.js` |
+| B4 | `case 'error'` → toast rojo con el mensaje del servidor (low_heap, etc.) | `app.js` |
+| B5 | Handlers de `trackSolo` (visual, sin duplicar lógica de mutes) y `patternSelected` (índice+nombre) | `app.js` |
+| B6 | Los 3 sliders vivos con envío directo (`setDistortion`, `setBitCrush`, `setSampleRate`) usan el `sendWebSocketThrottled` ya existente | `app.js` |
+| B8/M1 | Polling pausado con pestaña oculta: admin (stop/start + refresh al volver) y monitor de gesture (guard `document.hidden`) | `admin.js`, `gesture.js` |
+
+Sintaxis JS validada con `node --check`. **No aplicado aún:** B7 (limpieza de código
+muerto), B9, M2-M5 y las propuestas visuales V1-V10 (pendientes de confirmación de
+diseño).
+
 ## Priorización sugerida
 
 | Orden | Item | Esfuerzo | Impacto |

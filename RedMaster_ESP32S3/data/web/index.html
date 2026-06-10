@@ -1457,11 +1457,10 @@
                 </div>
             </section>
 
-            <section id="section-clean-tracks" class="device-info" data-section="clean-tracks" data-title="Clean Tracks">
-                <div class="info-title">🎚️ CLEAN TRACKS</div>
-                <div class="clean-tracks-summary" id="cleanTracksSummary">0/4 ocupadas • modelo híbrido en preparación</div>
-                <div class="clean-tracks-grid" id="cleanTracksGrid"></div>
-            </section>
+            <!-- Seccion "clean tracks" duplicada eliminada: los IDs
+                 cleanTracksGrid/cleanTracksSummary ya existen en el tab STEMS
+                 (el unico que app.js actualiza); este bloque legacy quedaba
+                 congelado con el texto placeholder. -->
 
             <!-- Instruments Info Section -->
         <section id="section-instruments" class="device-info" data-section="instruments" data-title="Instrument Map">

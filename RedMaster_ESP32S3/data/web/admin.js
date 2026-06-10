@@ -25,6 +25,16 @@ document.addEventListener('DOMContentLoaded', () => {
   initChart();
   startAutoRefresh();
   fetchSysinfo();
+  // Pausar el polling cuando la pestaña esta oculta: una pestaña de admin
+  // olvidada en background cargaba el ESP32 con /api/sysinfo cada 3s.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      stopAutoRefresh();
+    } else if (autoRefreshEnabled) {
+      startAutoRefresh();
+      fetchSysinfo();  // refresco inmediato al volver
+    }
+  });
   document.getElementById('logPauseChk').addEventListener('change', e => {
     logPaused = e.target.checked;
   });
