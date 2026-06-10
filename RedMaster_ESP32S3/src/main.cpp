@@ -304,14 +304,21 @@ void dsqUploadPattern(int pattern) {
     const int stepCount = sequencer.getPatternLength();  // longitud global
     const int clampedLen = (stepCount >= 64) ? 64 : (stepCount >= 32) ? 32 : 16;
     DsqStepPkt pkt[DSQ_MAX_STEPS];
+    // static: dsqUploadPattern solo se invoca desde spiAudioTask (Core1), nunca
+    // de forma reentrante, asi que un buffer estatico evita ~700B de stack.
+    static StepUploadData snap[STEPS_PER_PATTERN];
     spiMaster.dsqSetLength((uint8_t)clampedLen);
     vTaskDelay(pdMS_TO_TICKS(5));
     for (int trk = 0; trk < DSQ_TRACKS; trk++) {
+        // Copia consistente de la pista bajo un solo lock. Antes se leia con
+        // getters sin lock mientras la web editaba el patron, produciendo
+        // uploads desgarrados (sintoma: pistas/patrones parciales).
+        sequencer.snapshotTrackForUpload(pattern, trk, clampedLen, snap);
         for (int s = 0; s < clampedLen; s++) {
-            pkt[s].active      = sequencer.getStep(pattern, trk, s) ? 1 : 0;
-            pkt[s].velocity    = sequencer.getStepVelocity(pattern, trk, s);
-            pkt[s].noteLenDiv  = sequencer.getStepNoteLen(pattern, trk, s);
-            pkt[s].probability = sequencer.getStepProbability(pattern, trk, s);
+            pkt[s].active      = snap[s].active ? 1 : 0;
+            pkt[s].velocity    = snap[s].velocity;
+            pkt[s].noteLenDiv  = snap[s].noteLenDiv;
+            pkt[s].probability = snap[s].probability;
         }
         if (!spiMaster.dsqUploadTrack((uint8_t)pattern, (uint8_t)trk, pkt, (uint8_t)clampedLen)) {
             Serial.printf("[DSQ] upload track %d pattern %d failed\n", trk, pattern);
@@ -320,14 +327,16 @@ void dsqUploadPattern(int pattern) {
         // y vaciar su SPI RX ring antes del siguiente. Evita spiRingDrops y
         // tracks parciales (síntoma: patrones con pistas vacías).
         vTaskDelay(pdMS_TO_TICKS(8));
-        // Param locks
+        // Param locks: usar las flags 'enabled' reales del snapshot. Antes se
+        // inferia del valor (ch!=1000, rv!=0, vl!=0), lo que descartaba un
+        // cutoff legitimo de 1000 Hz o un volumen 0 (bug M15).
         for (int s = 0; s < clampedLen; s++) {
-            uint16_t ch = sequencer.getStepCutoffLock(pattern, trk, s);
-            bool ce = (ch != 0 && ch != 1000);
-            uint8_t rv = sequencer.getStepReverbSendLock(pattern, trk, s);
-            bool re = (rv != 0);
-            uint8_t vl = sequencer.getStepVolumeLock(pattern, trk, s);
-            bool ve = (vl != 0);
+            bool     ce = snap[s].cutoffEn;
+            uint16_t ch = snap[s].cutoffHz;
+            bool     re = snap[s].reverbEn;
+            uint8_t  rv = snap[s].reverbSend;
+            bool     ve = snap[s].volumeEn;
+            uint8_t  vl = snap[s].volume;
             if (ce || re || ve) {
                 spiMaster.dsqSetParamLock(
                     (uint8_t)pattern, (uint8_t)trk, (uint8_t)s,

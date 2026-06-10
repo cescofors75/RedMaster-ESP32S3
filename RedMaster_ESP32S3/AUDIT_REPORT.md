@@ -328,9 +328,12 @@ Aplicadas en esta rama (cambios de bajo riesgo, sin tocar el firmware de la Dais
 | M5 | Debounce de escritura NVS de mapeos MIDI (1.5s) + persiste `clearMapping` | `MIDIController.cpp/.h` |
 | M13 | Clamp de `offset` tras snprintf/vsnprintf en SysLog (no más OOB read) | `SysLog.cpp` |
 | M14 | Contrato de `getWaveformPeaks` documentado (no era bug activo) | `SampleManager.h` |
+| C2 | `dsqUploadPattern` usa `snapshotTrackForUpload()`: copia la pista bajo un solo lock y hace el SPI fuera del mutex → fin de los uploads desgarrados | `main.cpp`, `Sequencer.h/.cpp` |
+| H5 | Locking uniforme: TODOS los getters/setters que tocan `pd->` toman `patternMutex` (ahora recursivo, para los accessors que se delegan entre sí) | `Sequencer.cpp/.h` |
+| M15 | Param-locks usan las flags `enabled` reales del snapshot en vez de inferirlas del valor (ya no se pierde cutoff=1000Hz ni volumen=0) | `main.cpp` |
 
 **Pendiente de confirmación (requieren coordinación con firmware Daisy o decisiones de diseño):**
-C2/C3/C4, H3/H4/H5/H7/H8/H9, M1/M3/M4/M6/M7/M8/M9/M11/M12/M15/M16/M17 y los LOW.
+C3/C4, H3/H4/H7/H8/H9, M1/M3/M4/M6/M7/M8/M9/M11/M12/M16/M17 y los LOW.
 H2 completo (secuencia `usb_host_endpoint_halt/flush` antes de `usb_host_transfer_free`)
 no se aplicó por no poder compilar-verificar las APIs USB en este entorno.
 

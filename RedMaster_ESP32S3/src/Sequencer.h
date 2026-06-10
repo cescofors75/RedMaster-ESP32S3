@@ -48,6 +48,22 @@ struct PatternData {
 };
 // sizeof(PatternData) ≈ 229 KB  →  allocated from 8 MB PSRAM, not DRAM
 
+// Snapshot consistente de un step para subir a la Daisy. Permite que
+// dsqUploadPattern copie una pista entera bajo un solo lock y luego haga el
+// transfer SPI (con sus vTaskDelay) sin mantener el mutex tomado.
+struct StepUploadData {
+  bool     active;
+  uint8_t  velocity;
+  uint8_t  noteLenDiv;
+  uint8_t  probability;
+  bool     cutoffEn;
+  uint16_t cutoffHz;
+  bool     reverbEn;
+  uint8_t  reverbSend;
+  bool     volumeEn;
+  uint8_t  volume;
+};
+
 class Sequencer {
 public:
   Sequencer();
@@ -71,6 +87,10 @@ public:
   void clearPattern(int pattern);
   void clearPattern(); // Clear current pattern
   void clearTrack(int track);
+
+  // Copia consistente (bajo un solo lock) de los datos de una pista de un
+  // patron para subirlos a la Daisy sin races con ediciones de la web.
+  void snapshotTrackForUpload(int pattern, int track, int stepCount, StepUploadData* out);
   
   // Velocity editing per step
   void setStepVelocity(int track, int step, uint8_t velocity);
@@ -209,9 +229,13 @@ private:
 
   // Protege pd[] entre la tarea de audio/secuencia (loop → processStep)
   // y la tarea AsyncTCP (callbacks WebSocket que editan patrones).
+  // Mutex RECURSIVO: muchos accessors se delegan entre si (p.ej.
+  // getStepVolumeLock -> hasStepVolumeLock, o las variantes de 1 patron ->
+  // variante con patron). Con un mutex normal eso provocaria deadlock; el
+  // recursivo permite que la misma task lo tome anidado.
   SemaphoreHandle_t patternMutex = nullptr;
-  inline void lockPattern()   { if (patternMutex) xSemaphoreTake(patternMutex, portMAX_DELAY); }
-  inline void unlockPattern() { if (patternMutex) xSemaphoreGive(patternMutex); }
+  inline void lockPattern()   { if (patternMutex) xSemaphoreTakeRecursive(patternMutex, portMAX_DELAY); }
+  inline void unlockPattern() { if (patternMutex) xSemaphoreGiveRecursive(patternMutex); }
   
   // volatile: leidos/escritos desde Core1 (loop → update/processStep) y Core0
   // (start/stop/selectPattern/setTempo desde web). Evita que el compilador los
