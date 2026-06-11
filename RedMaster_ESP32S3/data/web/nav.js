@@ -145,4 +145,26 @@
   } else {
     buildUi();
   }
+
+  /* ── 4. Wake lock en páginas de performance táctil ───────────────────
+   * En /mobile y /gesture* la pantalla se apagaba en plena sesión. Se
+   * solicita al primer toque (los navegadores exigen gesto de usuario)
+   * y se re-adquiere al volver de background. Sin soporte → no-op.     */
+  var path = window.location.pathname;
+  var isTouchPerf = path.indexOf('/mobile') === 0 || path.indexOf('/gesture') === 0;
+  if (isTouchPerf && 'wakeLock' in navigator) {
+    var wakeLock = null;
+    var requestWakeLock = function () {
+      navigator.wakeLock.request('screen').then(function (wl) {
+        wakeLock = wl;
+      }).catch(function () { /* denegado/no disponible: ignorar */ });
+    };
+    document.addEventListener('pointerdown', function onFirstTouch() {
+      document.removeEventListener('pointerdown', onFirstTouch);
+      requestWakeLock();
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && wakeLock !== null) requestWakeLock();
+    });
+  }
 })();

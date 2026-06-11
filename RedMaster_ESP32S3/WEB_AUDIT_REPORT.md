@@ -190,8 +190,17 @@ Sintaxis JS validada con `node --check`.
 | — | **Ruta `/mobile` añadida al servidor**: los assets existían en el FS pero ninguna ruta los servía (solo accesible vía bridge externo); ahora `/mobile`, `/mobile.css`, `/mobile.js` funcionan directos del ESP32 | `WebInterface.cpp` |
 | M3 (parcial) | `theme-vars.css` enlazado en las páginas gesture | 2 HTML |
 
-**No aplicado aún:** B7 (limpieza de código muerto), B9, M2/M4/M5 y V4/V5/V9/V10
-(consolidación CSS y polish de animaciones — voluminosos, mejor en pasada dedicada).
+| M5 | **Wake lock** en /mobile y /gesture*: se solicita al primer toque y se re-adquiere al volver de background — la pantalla ya no se apaga en plena sesión | `nav.js` |
+
+**Revisado y descartado:**
+- **B9** — el botón `:8443` de mobile.js es intencional ("📷 Cámara": salta al proxy
+  HTTPS porque las APIs de cámara requieren contexto seguro). No es bug.
+- **V10** — multiview no abre WebSocket propio (compone paneles); el badge de nav.js
+  ya cubre el estado de conexión de cada panel embebido.
+
+**No aplicado aún:** B7 (limpieza de código muerto en app.js), M2/M4 y V4/V5/V9
+(consolidación de style.css y polish de animaciones — voluminosos, mejor en pasada
+dedicada con pruebas en dispositivo).
 
 ## Priorización sugerida
 
