@@ -54,6 +54,8 @@ struct CleanTrackSlotState {
 struct CleanTrackUploadState {
   bool active;
   bool error;
+  AsyncWebServerRequest* owner;
+  uint32_t lastActivityMs;
   int slot;
   size_t bytesWritten;
   char filename[64];
@@ -162,38 +164,37 @@ extern SPIMaster spiMaster;
 extern Sequencer sequencer;
 extern WebInterface webInterface;
 
-// WAV upload header scratch in PSRAM (8MB available). Large enough to skip past
-// JUNK/bext/LIST/cue chunks some DAWs place before the `data` chunk; the
-// streaming path only needs to locate the `data` header to begin PCM, after
-// which it uses fileOffset to place bytes. The old 4096-byte inline buffer
-// rejected such WAVs ("WAV header too large") while the xtra/file path (which
-// seeks the whole file on LittleFS) accepted them.
-static constexpr size_t kDaisyHeaderCap = 256 * 1024;
-static uint8_t* daisyUploadHeaderBuf() {
-  static uint8_t* buf = (uint8_t*)ps_malloc(kDaisyHeaderCap);
-  return buf;
-}
-
+// Pad uploads are first staged on LittleFS. The async HTTP callback only writes
+// bytes and returns; update() performs WAV parsing/conversion and SPI transfer in
+// small bounded slices. This keeps AsyncTCP responsive and gives every request a
+// clear owner instead of sharing a live conversion buffer between clients.
+static constexpr const char* kDaisyUploadTempPath = "/.pad-upload.tmp";
+static constexpr uint32_t kUploadReceiveTimeoutMs = 30000;
+static constexpr uint32_t kDaisyUploadNoProgressTimeoutMs = 30000;
 struct DaisyUploadStreamState {
   int pad = -1;
+  bool receiving = false;
   bool active = false;
   bool begun = false;
   bool error = false;
   char errorMsg[96] = "";
-  uint8_t* header = nullptr;   // -> daisyUploadHeaderBuf() (PSRAM, kDaisyHeaderCap)
-  size_t headerLen = 0;
-  uint32_t dataPos = 0;
+  AsyncWebServerRequest* owner = nullptr;
+  size_t totalSize = 0;
+  size_t bytesWritten = 0;
+  uint32_t dataOffset = 0;
   uint32_t dataSize = 0;
+  uint32_t bytesRemaining = 0;
+  uint32_t totalSamples = 0;
   uint16_t channels = 0;
   uint16_t bits = 0;
-  size_t fileOffset = 0;
-  uint8_t carry[8] = {};
-  size_t carryLen = 0;
   uint32_t samplesSent = 0;
+  uint32_t startedMs = 0;
+  uint32_t lastProgressMs = 0;
   char filename[64] = "";
 };
 
 static DaisyUploadStreamState s_daisyUpload;
+static File s_daisyUploadFile;
 
 static void pumpDaisyUpload();
 static void pumpCleanTrackStream();
@@ -313,28 +314,43 @@ static int findFirstFreeCleanTrackSlot() {
 }
 
 static bool parseWavFileHeader(File& file, uint16_t& channels, uint16_t& bits, uint32_t& dataOffset, uint32_t& dataSize, char* err, size_t errLen) {
-  uint8_t header[4096] = {};
-  size_t headerLen = file.read(header, sizeof(header));
-  if (headerLen < 44) {
+  const size_t fileSize = file.size();
+  uint8_t riff[12] = {};
+  if (fileSize < sizeof(riff) || !file.seek(0, SeekSet) || file.read(riff, sizeof(riff)) != sizeof(riff)) {
     strlcpy(err, "WAV header too small", errLen);
     return false;
   }
-  if (memcmp(header, "RIFF", 4) != 0 || memcmp(header + 8, "WAVE", 4) != 0) {
+  if (memcmp(riff, "RIFF", 4) != 0 || memcmp(riff + 8, "WAVE", 4) != 0) {
     strlcpy(err, "Not a WAV file", errLen);
     return false;
   }
 
-  uint32_t pos = 12;
+  size_t pos = 12;
   bool fmtFound = false;
   bool dataFound = false;
-  while (pos + 8 <= headerLen) {
-    uint32_t chunkSize = le32(header + pos + 4);
-    if (memcmp(header + pos, "fmt ", 4) == 0) {
-      if (chunkSize < 16 || pos + 24 > headerLen) {
+  while (pos <= fileSize && fileSize - pos >= 8) {
+    uint8_t chunkHeader[8] = {};
+    if (!file.seek(pos, SeekSet) || file.read(chunkHeader, sizeof(chunkHeader)) != sizeof(chunkHeader)) {
+      strlcpy(err, "Truncated WAV chunk header", errLen);
+      return false;
+    }
+    const uint32_t chunkSize = le32(chunkHeader + 4);
+    const size_t paddedSize = (size_t)chunkSize + (chunkSize & 1u);
+    if (paddedSize > fileSize - pos - 8) {
+      strlcpy(err, "WAV chunk exceeds file size", errLen);
+      return false;
+    }
+
+    if (memcmp(chunkHeader, "fmt ", 4) == 0) {
+      if (chunkSize < 16) {
         strlcpy(err, "Invalid fmt chunk", errLen);
         return false;
       }
-      const uint8_t* fmt = header + pos + 8;
+      uint8_t fmt[16] = {};
+      if (file.read(fmt, sizeof(fmt)) != sizeof(fmt)) {
+        strlcpy(err, "Truncated fmt chunk", errLen);
+        return false;
+      }
       uint16_t audioFormat = le16(fmt);
       channels = le16(fmt + 2);
       bits = le16(fmt + 14);
@@ -343,13 +359,17 @@ static bool parseWavFileHeader(File& file, uint16_t& channels, uint16_t& bits, u
         return false;
       }
       fmtFound = true;
-    } else if (memcmp(header + pos, "data", 4) == 0) {
-      dataOffset = pos + 8;
+    } else if (memcmp(chunkHeader, "data", 4) == 0) {
+      if (!fmtFound) {
+        strlcpy(err, "data chunk precedes fmt chunk", errLen);
+        return false;
+      }
+      dataOffset = (uint32_t)(pos + 8);
       dataSize = chunkSize;
       dataFound = true;
       break;
     }
-    pos += 8 + chunkSize + (chunkSize & 1);
+    pos += 8 + paddedSize;
   }
 
   if (!fmtFound || !dataFound) {
@@ -358,6 +378,11 @@ static bool parseWavFileHeader(File& file, uint16_t& channels, uint16_t& bits, u
   }
   if ((bits != 16 && bits != 24) || channels < 1 || channels > 2) {
     strlcpy(err, "Need mono/stereo 16/24-bit WAV", errLen);
+    return false;
+  }
+  const uint32_t frameBytes = (bits / 8u) * channels;
+  if (frameBytes == 0 || dataSize == 0 || (dataSize % frameBytes) != 0) {
+    strlcpy(err, "Invalid WAV data size", errLen);
     return false;
   }
   if (!file.seek(dataOffset, SeekSet)) {
