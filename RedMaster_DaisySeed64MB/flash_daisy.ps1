@@ -228,10 +228,34 @@ if($SkipSamples -or -not (Test-Path $wavblob)) {
 
 # El listado inicial consume casi toda la ventana de 2 s. Armamos una descarga
 # vigilada y pedimos un RESET cuando dfu-util ya esta esperando la enumeracion.
-$resApp = Invoke-DfuDownloadWithTimeout -Address $appAddress -FilePath $fw `
-    -TimeoutSeconds 30 -PromptReset
+# En algunos intentos aparece un fallo transitorio de ERASE_PAGE/get_status;
+# reintentamos automaticamente para no abortar todo el flujo por un glitch USB.
+$appFlashOk = $false
+$maxAppAttempts = 3
+for($appTry = 1; $appTry -le $maxAppAttempts; $appTry++) {
+    if($appTry -gt 1) {
+        Write-Host "Reintentando firmware (intento $appTry/$maxAppAttempts)..." -ForegroundColor Yellow
+        "APP_FLASH_RETRY=$appTry" | Tee-Object -FilePath $log -Append | Out-Null
+    }
 
-if($resApp -notmatch 'Download done') {
+    $resApp = Invoke-DfuDownloadWithTimeout -Address $appAddress -FilePath $fw `
+        -TimeoutSeconds 30 -PromptReset
+
+    if($resApp -match 'Download done') {
+        $appFlashOk = $true
+        break
+    }
+
+    if($resApp -match 'ERASE_PAGE|get_status|LIBUSB_ERROR|No DFU capable USB device') {
+        Start-Sleep -Milliseconds 500
+        continue
+    }
+
+    # Error no reconocido: no merece repetir muchas veces.
+    break
+}
+
+if(-not $appFlashOk) {
     'RESULT=FLASH_FAIL' | Tee-Object -FilePath $log -Append
     Write-Host 'FLASH_FAIL (firmware)' -ForegroundColor Red
     exit 4

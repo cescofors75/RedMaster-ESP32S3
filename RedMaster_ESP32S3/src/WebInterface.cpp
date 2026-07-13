@@ -1128,6 +1128,25 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   WiFi.mode(WIFI_OFF);
   delay(100);
 
+  auto startAp = [&](uint8_t channel) {
+    IPAddress local_IP(192, 168, 4, 1);
+    IPAddress gateway(192, 168, 4, 1);
+    IPAddress subnet(255, 255, 255, 0);
+    WiFi.softAPConfig(local_IP, gateway, subnet);
+
+    bool apOk = false;
+    for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
+      apOk = WiFi.softAP(apSsid, apPassword, channel, 0, 4);
+      if (!apOk) delay(120);
+    }
+    delay(200);
+    if (!apOk || WiFi.softAPIP() == IPAddress((uint32_t)0)) {
+      Serial.printf("[WiFi] AP start failed (ssid=%s ch=%u)\n", apSsid, channel);
+      return false;
+    }
+    return true;
+  };
+
   // ── Decide mode: STA+AP if home SSID provided, AP-only otherwise ──
   bool tryStation = (staSSID && staSSID[0] != '\0');
 
@@ -1137,12 +1156,7 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     delay(50);
 
     // Start AP first so it's always reachable
-    IPAddress local_IP(192, 168, 4, 1);
-    IPAddress gateway(192, 168, 4, 1);
-    IPAddress subnet(255, 255, 255, 0);
-    WiFi.softAPConfig(local_IP, gateway, subnet);
-    WiFi.softAP(apSsid, apPassword, 11, 0, 4);
-    delay(200);
+    startAp(11);
 
     // Now try STA with static IP (192.168.1.80 — the "808" IP!)
     IPAddress staIP(192, 168, 1, 80);
@@ -1163,8 +1177,7 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
       // (channel hopping causes hardware interrupts that jitter Core1 audio)
       uint8_t staCh = WiFi.channel();
       if (staCh > 0 && staCh != 1) {
-        WiFi.softAP(apSsid, apPassword, staCh, 0, 4);
-        delay(100);
+        startAp(staCh);
       }
       Serial.printf("[WiFi] STA connected: %s  IP: %s  ch=%d\n",
                     staSSID, WiFi.localIP().toString().c_str(), staCh);
@@ -1177,12 +1190,7 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     WiFi.mode(WIFI_AP);
     delay(50);
 
-    IPAddress local_IP(192, 168, 4, 1);
-    IPAddress gateway(192, 168, 4, 1);
-    IPAddress subnet(255, 255, 255, 0);
-    WiFi.softAPConfig(local_IP, gateway, subnet);
-    WiFi.softAP(apSsid, apPassword, 11, 0, 4);
-    delay(200);
+    startAp(11);
   }
 
   // Protocolo b/g/n y beacon 100ms
@@ -3460,9 +3468,9 @@ void WebInterface::update() {
     lastCleanup = now;
   }
   
-  // WiFi health check cada 30 segundos (no-blocking)
+  // WiFi health check cada 5 segundos (no-blocking)
   static unsigned long lastWifiCheck = 0;
-  if (now - lastWifiCheck > 30000) {
+  if (now - lastWifiCheck > 5000) {
     lastWifiCheck = now;
 
     if (_staConnected) {
@@ -3473,9 +3481,25 @@ void WebInterface::update() {
       // AP should stay alive automatically in AP_STA mode
     } else {
       // ── AP-only: verify AP is active ──
-      if (WiFi.getMode() != WIFI_AP && WiFi.getMode() != WIFI_AP_STA) {
+      bool wrongMode = (WiFi.getMode() != WIFI_AP && WiFi.getMode() != WIFI_AP_STA);
+      bool missingIp = (WiFi.softAPIP() == IPAddress((uint32_t)0));
+      bool missingSsid = WiFi.softAPSSID().length() == 0;
+      if (wrongMode || missingIp || missingSsid) {
         WiFi.mode(WIFI_AP);
-        WiFi.softAP("RED808", "red808esp32", 1, 0, 4);
+        delay(50);
+        IPAddress local_IP(192, 168, 4, 1);
+        IPAddress gateway(192, 168, 4, 1);
+        IPAddress subnet(255, 255, 255, 0);
+        WiFi.softAPConfig(local_IP, gateway, subnet);
+        bool apOk = false;
+        for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
+          apOk = WiFi.softAP("RED808", "red808esp32", 11, 0, 4);
+          if (!apOk) delay(120);
+        }
+        if (!apOk) {
+          syslog("WIFI", "AP recover failed mode=%d ip=%s ssid='%s'", (int)WiFi.getMode(),
+                 WiFi.softAPIP().toString().c_str(), WiFi.softAPSSID().c_str());
+        }
         WiFi.setSleep(false);
       }
     }
