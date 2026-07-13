@@ -4017,172 +4017,317 @@ static void DsqReleaseHeldNotes(uint8_t track)
     memset(&held, 0, sizeof(held));
 }
 
-/* Autonomous presentation arrangement. Unlike the diagnostic self-test this
- * starts as music, develops over eight scenes and loops continuously. */
+/* Dedicated presentation program. It lives in the audio sequencer instead of
+ * running a second millisecond clock in main(), so every hit is sample-accurate
+ * and the Master cannot play a second arrangement over it. The musical design
+ * is one coherent 32-bar club piece: sample-first drums, two restrained machine
+ * layers and two melodic voices. */
+enum ShowcaseTrack : uint8_t {
+    SHOW_BD = 0, SHOW_SD, SHOW_CH, SHOW_OH, SHOW_CY, SHOW_CP, SHOW_RS, SHOW_CB,
+    SHOW_LT, SHOW_MT, SHOW_HT, SHOW_MA, SHOW_CL, SHOW_HC, SHOW_BASS, SHOW_PAD
+};
+
+static constexpr uint8_t SHOWCASE_SCENES = 8;
+
+static void ShowcaseHit(uint8_t pattern, uint8_t track, uint8_t step,
+                        uint8_t velocity, uint8_t probability = 100,
+                        uint8_t ratchet = 1, uint8_t noteLenDiv = 1)
+{
+    if(pattern >= SHOWCASE_SCENES || track >= DSQ_TRACKS || step >= DSQ_MAX_STEPS) return;
+    DsqStepFull& s = dsqSteps[pattern][track][step];
+    memset(&s, 0, sizeof(s));
+    s.active = 1;
+    s.velocity = velocity;
+    s.noteLenDiv = noteLenDiv ? noteLenDiv : 1;
+    s.probability = probability;
+    s.ratchet = (ratchet >= 1 && ratchet <= 4) ? ratchet : 1;
+}
+
+static void ShowcaseNote(uint8_t pattern, uint8_t track, uint8_t step,
+                         uint8_t note, uint8_t velocity, uint8_t probability = 100)
+{
+    ShowcaseHit(pattern, track, step, velocity, probability, 1, 1);
+    dsqSteps[pattern][track][step].notes[0] = note;
+}
+
+static void ShowcaseChord(uint8_t pattern, uint8_t step,
+                          uint8_t root, uint8_t third, uint8_t fifth, uint8_t velocity)
+{
+    ShowcaseHit(pattern, SHOW_PAD, step, velocity, 100, 1, 1);
+    DsqStepFull& s = dsqSteps[pattern][SHOW_PAD][step];
+    s.notes[0] = root; s.notes[1] = third; s.notes[2] = fifth;
+}
+
+static void ShowcaseBackbeat(uint8_t pattern, uint8_t base, uint8_t velocity)
+{
+    ShowcaseHit(pattern, SHOW_SD, base + 4, velocity);
+    ShowcaseHit(pattern, SHOW_SD, base + 12, velocity + 3);
+    ShowcaseHit(pattern, SHOW_CP, base + 12, velocity > 18 ? velocity - 18 : velocity, 92);
+}
+
+static void ShowcaseFourFloor(uint8_t pattern, uint8_t base, uint8_t velocity)
+{
+    ShowcaseHit(pattern, SHOW_BD, base + 0, velocity);
+    ShowcaseHit(pattern, SHOW_BD, base + 4, velocity > 5 ? velocity - 5 : velocity);
+    ShowcaseHit(pattern, SHOW_BD, base + 8, velocity > 3 ? velocity - 3 : velocity);
+    ShowcaseHit(pattern, SHOW_BD, base + 12, velocity > 7 ? velocity - 7 : velocity);
+}
+
+static void ShowcaseSoftHats(uint8_t pattern, uint8_t base, uint8_t velocity)
+{
+    for(uint8_t st = 2; st < 16; st += 4)
+        ShowcaseHit(pattern, SHOW_CH, base + st, (uint8_t)(velocity + ((st == 14) ? 7 : 0)), 96);
+}
+
+static __attribute__((noinline, optimize("O1"))) void BuildStartupShowcaseProgram()
+{
+    if(!kStartupShowcaseDemo) return;
+    memset(dsqSteps, 0, sizeof(dsqSteps));
+    memset(dsqTrackEngine, (uint8_t)0xFF, sizeof(dsqTrackEngine));
+
+    /* Samples remain the body of the kit. CY and CB are quiet 909/808 colour;
+     * the last two tracks are a mono bass and a soft wavetable pad. */
+    dsqTrackEngine[SHOW_CY]   = SYNTH_ENGINE_909;
+    dsqTrackEngine[SHOW_CB]   = SYNTH_ENGINE_808;
+    dsqTrackEngine[SHOW_BASS] = SYNTH_ENGINE_SH101;
+    dsqTrackEngine[SHOW_PAD]  = SYNTH_ENGINE_WTOSC;
+    for(uint8_t track = 0; track < CLEAN_TRACK_COUNT; track++){
+        cleanTrackEnabled[track] = false;
+        cleanTrackActive[track] = false;
+        cleanTrackMuted[track] = true;
+        cleanTrackPlayhead[track] = 0;
+    }
+
+    static const uint8_t chordRoot[4]  = {53, 49, 51, 48}; /* Fm, Db, Eb, Cm */
+    static const uint8_t chordThird[4] = {56, 53, 55, 51};
+    static const uint8_t chordFifth[4] = {60, 56, 58, 55};
+
+    for(uint8_t bar = 0; bar < 4; bar++){
+        const uint8_t b = bar * 16;
+
+        /* 0 · AIR — establish room, samples and harmony before the pulse. */
+        ShowcaseSoftHats(0, b, 38);
+        ShowcaseHit(0, SHOW_RS, b + 4, 44, 86);
+        ShowcaseHit(0, SHOW_CP, b + 12, 54, 90);
+        ShowcaseChord(0, b, chordRoot[bar], chordThird[bar], chordFifth[bar], 42);
+        if(bar >= 2){
+            ShowcaseHit(0, SHOW_BD, b, 96);
+            ShowcaseHit(0, SHOW_BD, b + 10, 72, 88);
+            ShowcaseNote(0, SHOW_BASS, b, bar == 2 ? 29 : 27, 64);
+        }
+        if(bar == 0) ShowcaseHit(0, SHOW_CY, 0, 42);
+
+        /* 1 · PULSE — warm four-floor sample pocket, no wall of synths. */
+        ShowcaseFourFloor(1, b, 116);
+        ShowcaseBackbeat(1, b, 104);
+        ShowcaseSoftHats(1, b, 54);
+        ShowcaseHit(1, SHOW_OH, b + 6, 60, 88);
+        ShowcaseHit(1, SHOW_OH, b + 14, 68, 94);
+        ShowcaseNote(1, SHOW_BASS, b + 0, 29, 76);
+        ShowcaseNote(1, SHOW_BASS, b + 7, 36, 62, 86);
+        ShowcaseNote(1, SHOW_BASS, b + 10, bar & 1u ? 39 : 32, 70);
+
+        /* 2 · HOOK — broken club response with deliberate empty sixteenths. */
+        const uint8_t k2a[3] = {0, 6, 10};
+        const uint8_t k2b[4] = {0, 7, 11, 14};
+        const uint8_t* k2 = (bar & 1u) ? k2b : k2a;
+        const uint8_t k2n = (bar & 1u) ? 4 : 3;
+        for(uint8_t i = 0; i < k2n; i++) ShowcaseHit(2, SHOW_BD, b + k2[i], i ? 91 : 118);
+        ShowcaseBackbeat(2, b, 108);
+        const uint8_t h2[6] = {1, 3, 6, 9, 11, 14};
+        for(uint8_t i = 0; i < 6; i++) ShowcaseHit(2, SHOW_CH, b + h2[i], (uint8_t)(43 + (i & 1u) * 12), 94);
+        ShowcaseHit(2, SHOW_OH, b + 15, 63, 82);
+        if((bar & 1u) == 0) ShowcaseHit(2, SHOW_CB, b + 11, 38, 78);
+        ShowcaseNote(2, SHOW_BASS, b + 0, 29, 78);
+        ShowcaseNote(2, SHOW_BASS, b + 6, 36, 66);
+        ShowcaseNote(2, SHOW_BASS, b + 11, 32, 72, 90);
+
+        /* 3 · PRESSURE — same identity, denser hats and restrained machines. */
+        ShowcaseFourFloor(3, b, 121);
+        ShowcaseBackbeat(3, b, 110);
+        for(uint8_t st = 1; st < 16; st += 2)
+            ShowcaseHit(3, SHOW_CH, b + st, (uint8_t)(42 + ((st & 3u) == 3u ? 13 : 0)), 97);
+        ShowcaseHit(3, SHOW_OH, b + 6, 66);
+        ShowcaseHit(3, SHOW_OH, b + 14, 74);
+        if(bar == 0) ShowcaseHit(3, SHOW_CY, b, 48);
+        if(bar == 3) ShowcaseHit(3, SHOW_CB, b + 14, 42, 86, 2);
+        ShowcaseNote(3, SHOW_BASS, b + 0, 29, 82);
+        ShowcaseNote(3, SHOW_BASS, b + 10, (bar & 1u) ? 27 : 32, 68);
+
+        /* 4 · SPACE — two bars without kick, then a low broken re-entry. */
+        ShowcaseChord(4, b, chordRoot[bar], chordThird[bar], chordFifth[bar], 48);
+        ShowcaseHit(4, SHOW_RS, b + 3, 42, 78);
+        ShowcaseHit(4, SHOW_CP, b + 12, 60, 92);
+        ShowcaseHit(4, SHOW_MA, b + 6, 40, 72);
+        ShowcaseHit(4, SHOW_HC, b + 14, 46, 76);
+        if(bar >= 2){
+            ShowcaseHit(4, SHOW_BD, b, 102);
+            ShowcaseHit(4, SHOW_BD, b + 10, 82);
+            ShowcaseNote(4, SHOW_BASS, b, bar == 2 ? 29 : 27, 66);
+        }
+
+        /* 5 · RETURN — broken first half resolves into the club pulse. */
+        if(bar < 2){
+            ShowcaseHit(5, SHOW_BD, b, 118);
+            ShowcaseHit(5, SHOW_BD, b + 6, 92);
+            ShowcaseHit(5, SHOW_BD, b + 10, 102);
+        } else {
+            ShowcaseFourFloor(5, b, 119);
+        }
+        ShowcaseBackbeat(5, b, 109);
+        ShowcaseSoftHats(5, b, 57);
+        ShowcaseHit(5, SHOW_OH, b + 14, 70);
+        ShowcaseNote(5, SHOW_BASS, b, 29, 80);
+        ShowcaseNote(5, SHOW_BASS, b + 6, 36, 64);
+        ShowcaseNote(5, SHOW_BASS, b + 10, (bar & 1u) ? 39 : 32, 74);
+
+        /* 6 · PEAK — sample transients stay in front; machines only highlight. */
+        ShowcaseFourFloor(6, b, 123);
+        ShowcaseBackbeat(6, b, 114);
+        for(uint8_t st = 1; st < 16; st += 2)
+            ShowcaseHit(6, SHOW_CH, b + st, (uint8_t)(47 + ((st & 3u) == 3u ? 14 : 0)), 98);
+        ShowcaseHit(6, SHOW_OH, b + 6, 70);
+        ShowcaseHit(6, SHOW_OH, b + 14, 78);
+        if(bar == 0 || bar == 2) ShowcaseHit(6, SHOW_CY, b, 52);
+        if(bar == 1 || bar == 3) ShowcaseHit(6, SHOW_CB, b + 11, 43, 84);
+        ShowcaseNote(6, SHOW_BASS, b, 29, 84);
+        ShowcaseNote(6, SHOW_BASS, b + 7, 36, 67);
+        ShowcaseNote(6, SHOW_BASS, b + 10, bar & 1u ? 39 : 32, 76);
+        if(bar == 0) ShowcaseChord(6, b, 53, 56, 60, 38);
+
+        /* 7 · RELEASE — subtract, answer with a sample fill, return to AIR. */
+        if(bar < 2) ShowcaseFourFloor(7, b, 116);
+        else {
+            ShowcaseHit(7, SHOW_BD, b, 108);
+            if(bar == 2) ShowcaseHit(7, SHOW_BD, b + 10, 78);
+        }
+        ShowcaseBackbeat(7, b, bar < 2 ? 105 : 88);
+        ShowcaseSoftHats(7, b, bar < 2 ? 50 : 38);
+        if(bar < 3) ShowcaseNote(7, SHOW_BASS, b, bar & 1u ? 27 : 29, 66);
+        if(bar == 2) ShowcaseChord(7, b, 49, 53, 56, 43);
+        if(bar == 3){
+            ShowcaseHit(7, SHOW_LT, b + 12, 68);
+            ShowcaseHit(7, SHOW_MT, b + 13, 76);
+            ShowcaseHit(7, SHOW_HT, b + 14, 84);
+            ShowcaseHit(7, SHOW_SD, b + 15, 92, 100, 2);
+        }
+    }
+
+    ApplySynthPreset(SYNTH_ENGINE_808, 1);
+    ApplySynthPreset(SYNTH_ENGINE_909, 1);
+    ApplySynthPreset(SYNTH_ENGINE_SH101, 2);
+    ApplySynthPreset(SYNTH_ENGINE_WTOSC, 3);
+
+    for(uint8_t i = 0; i < SHOWCASE_SCENES; i++){
+        songChain[i].pattern = i;
+        songChain[i].repeats = 1;
+    }
+    songLength = SHOWCASE_SCENES;
+    songPlaying = false;
+    songIdx = 0;
+    songRepeatCnt = 0;
+    dseq.currentPattern = 0;
+    dseq.patternLength = 64;
+    dseq.currentStep = -1;
+    dseq.tempo = 126.0f;
+    dseq.swingAmount = 8;
+    dseq.humanizeTimingMs = 0;
+    dseq.humanizeVelAmt = 2;
+    DsqUpdateSamplesPerStep();
+}
+
+static bool ShowcaseBlocksMasterCommand(uint8_t cmd)
+{
+    if(!kStartupShowcaseDemo) return false;
+    if(cmd >= CMD_DSQ_UPLOAD_TRACK && cmd <= CMD_DSQ_SET_STEP_NOTES && cmd != CMD_DSQ_GET_POS)
+        return true;
+    if(cmd >= CMD_SYNTH_TRIGGER && cmd <= CMD_SYNTH_NOTE_ON_EX)
+        return true;
+    switch(cmd){
+        case CMD_TRIGGER_SEQ:
+        case CMD_TRIGGER_LIVE:
+        case CMD_TRIGGER_STOP:
+        case CMD_TRIGGER_STOP_ALL:
+        case CMD_TRIGGER_SIDECHAIN:
+        case CMD_BULK_TRIGGERS:
+        case CMD_SONG_UPLOAD:
+        case CMD_SONG_CONTROL:
+        case CMD_RESET:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static void RunStartupShowcaseDemo(uint32_t nowMs)
 {
     if(!kStartupShowcaseDemo) return;
-
     static bool started = false;
-    static bool acidHeld = false;
-    static uint16_t songStep = 0;
-    static uint32_t nextMs = 0;
+    if(started) return;
 
-    /* Esta imagen es una demo dedicada. El Master transmite SPI durante su
-     * propio arranque; usar `spiPktCnt > 0` como hand-off apagaba la música
-     * antes del primer step audible. Showcase conserva la autoridad de audio
-     * aunque el Master esté físicamente conectado. */
-    if(!started){
-        if(nowMs < 1200u) return;
-        started = true;
-        nextMs = nowMs;
-        limiterActive = true;
-        compActive = true;
-        delayActive = true;
-        reverbActive = true;
-        chorusActive = true;
-        delayMix = 0.12f;
-        delayFeedback = 0.34f;
-        reverbMix = 0.18f;
-        chorusMix = 0.10f;
-        masterDelay.SetDelay(0.1875f * (float)SAMPLE_RATE);
-        masterReverb.SetFeedback(0.82f);
-        masterReverb.SetLpFreq(7200.0f);
-    }
-    if((int32_t)(nowMs - nextMs) < 0) return;
+    uint8_t loaded = 0;
+    for(uint8_t track = 0; track < 14; track++)
+        if(sampleLoaded[track] && !padLoading[track]) loaded++;
 
-    const uint8_t section = (songStep >> 6) & 7u;
-    const uint8_t bar = (songStep >> 4) & 3u;
-    const uint8_t st = songStep & 15u;
+    /* With a Master attached, wait for its SD kit load. Standalone Showcase
+     * falls back quickly to the generated machines instead of staying silent. */
+    const bool masterPresent = spiPktCnt > 0;
+    if(nowMs < 2200u || kitMuteActive) return;
+    if(masterPresent && loaded < 8 && nowMs < 20000u) return;
 
-    /* Short musical gates keep mono synths clean between scenes. */
-    synthSH101.NoteOff();
-    synthFM2Op.NoteOff();
-    wtOsc.AllNotesOff();
-
-    if(st == 0u && bar == 0u){
-        static const uint8_t preset808[8] = {1,2,0,2,0,1,2,2};
-        static const uint8_t preset909[8] = {0,1,0,1,0,2,1,3};
-        static const uint8_t preset505[8] = {1,0,2,0,1,2,0,3};
-        ApplySynthPreset(SYNTH_ENGINE_808, preset808[section]);
-        ApplySynthPreset(SYNTH_ENGINE_909, preset909[section]);
-        ApplySynthPreset(SYNTH_ENGINE_505, preset505[section]);
-        ApplySynthPreset(SYNTH_ENGINE_303, section >= 6 ? 3 : (section >= 3 ? 2 : 0));
-        ApplySynthPreset(SYNTH_ENGINE_WTOSC, section == 4 ? 3 : 1);
-        ApplySynthPreset(SYNTH_ENGINE_SH101, section == 5 ? 2 : 1);
-        ApplySynthPreset(SYNTH_ENGINE_FM2OP, section >= 6 ? 3 : 1);
-
-        delayMix = (section == 4) ? 0.24f : ((section >= 6) ? 0.14f : 0.10f);
-        reverbMix = (section == 4) ? 0.32f : ((section >= 6) ? 0.14f : 0.19f);
-        chorusMix = (section == 0 || section == 4) ? 0.20f : 0.08f;
-        flangerActive = (section == 2 || section == 7);
-        flangerRate = 0.42f;
-        flangerDepth = 0.38f;
-        flangerMix = 0.14f;
-        acid303.SetResonance(section >= 3 ? 0.78f : 0.56f);
-        acid303.SetEnvMod(section >= 3 ? 0.72f : 0.46f);
-        acid303.SetDecay(section == 4 ? 0.38f : 0.18f);
-        if(section > 0) synth909.crash.Trigger(section >= 6 ? 0.58f : 0.38f);
+    for(uint8_t track = 0; track < 14; track++){
+        if(dsqTrackEngine[track] != -1 || sampleLoaded[track]) continue;
+        dsqTrackEngine[track] = (track <= SHOW_CY) ? SYNTH_ENGINE_909 : SYNTH_ENGINE_505;
     }
 
-    const float hatVel = ((st & 3u) == 3u) ? 0.62f : 0.42f;
-    switch(section){
-        case 0: /* cinematic/synthwave intro */
-            if(st == 0u || st == 8u) synth808.kick.Trigger(st == 0u ? 0.84f : 0.68f);
-            if(st == 4u || st == 12u) synth505.snare.Trigger(0.52f);
-            if((st & 3u) == 2u) synth505.hihatO.Trigger(0.32f);
-            if(st == 0u){
-                const uint8_t root = (bar & 1u) ? 41u : 36u;
-                wtOsc.NoteOn(root + 12, 0.42f); wtOsc.NoteOn(root + 15, 0.34f); wtOsc.NoteOn(root + 19, 0.34f);
-            }
-            if(st == 10u) synthFM2Op.NoteOn((bar & 1u) ? 65 : 60, 0.40f);
-            break;
-        case 1: /* Detroit drive */
-            if((st & 3u) == 0u) synth909.kick.Trigger(st == 0u ? 0.98f : 0.88f);
-            if(st == 4u || st == 12u) synth909.clap.Trigger(0.76f);
-            if(st & 1u) synth909.hihatC.Trigger(hatVel);
-            if(st == 6u || st == 14u) synth909.hihatO.Trigger(0.55f);
-            if(st == 2u || st == 10u) synthFM2Op.NoteOn((bar & 1u) ? 46 : 43, 0.54f);
-            break;
-        case 2: /* electro/freestyle switch */
-            if(st == 0u || st == 3u || st == 7u || st == 10u || (bar == 3u && st == 14u))
-                synth808.kick.Trigger(st == 0u ? 0.96f : 0.76f);
-            if(st == 4u || st == 12u) synth505.snare.Trigger(0.82f);
-            if(st & 1u) synth505.hihatC.Trigger(hatVel);
-            if(st == 6u || st == 14u) synth808.cowbell.Trigger(0.44f);
-            if(st == 0u || st == 7u || st == 10u) synthSH101.NoteOn((st == 7u) ? 43 : 36, 0.62f);
-            break;
-        case 3: /* acid warehouse build */
-            if((st & 3u) == 0u) synth909.kick.Trigger(0.96f);
-            if(st == 4u || st == 12u) synth909.clap.Trigger(0.72f);
-            if(st & 1u) synth909.hihatC.Trigger(hatVel + 0.08f * bar);
-            if(st == 6u || st == 14u) synth909.hihatO.Trigger(0.58f);
-            if(bar >= 2u && (st & 3u) == 2u) synth909.ride.Trigger(0.36f + 0.08f * bar);
-            break;
-        case 4: /* breathing breakdown */
-            if(bar >= 2u && (st == 0u || st == 10u)) synth808.kick.Trigger(0.72f);
-            if(st == 4u || st == 12u) synth808.clap.Trigger(0.44f);
-            if((st & 3u) == 2u) synth505.hihatO.Trigger(0.30f);
-            if(st == 0u || st == 8u){
-                const uint8_t root = (bar & 1u) ? 43u : 41u;
-                wtOsc.NoteOn(root + 12, 0.38f); wtOsc.NoteOn(root + 15, 0.30f); wtOsc.NoteOn(root + 19, 0.30f);
-            }
-            if(st == 14u && bar == 3u) synth909.snare.Trigger(0.82f);
-            break;
-        case 5: /* UK garage swing */
-            if(st == 0u || st == 6u || st == 10u || st == 13u) synth909.kick.Trigger(st == 0u ? 0.96f : 0.78f);
-            if(st == 4u || st == 12u) synth505.snare.Trigger(0.82f);
-            if(st == 7u || st == 15u) synth505.clap.Trigger(0.46f);
-            if(st & 1u) synth505.hihatC.Trigger(hatVel);
-            if(st == 2u || st == 9u || st == 14u) synthSH101.NoteOn((st == 9u) ? 43 : 36, 0.66f);
-            break;
-        case 6: /* peak-time hybrid */
-            if((st & 3u) == 0u) synth909.kick.Trigger(0.98f);
-            if(st == 0u || st == 8u) synth808.kick.Trigger(0.60f);
-            if(st == 4u || st == 12u){ synth909.snare.Trigger(0.76f); synth808.clap.Trigger(0.54f); }
-            if(st & 1u) synth909.hihatC.Trigger(hatVel + 0.10f);
-            if(st == 6u || st == 14u) synth909.hihatO.Trigger(0.62f);
-            if((st & 3u) == 2u) synth909.ride.Trigger(0.42f);
-            if(st == 2u || st == 10u) synthFM2Op.NoteOn((bar & 1u) ? 58 : 55, 0.58f);
-            break;
-        default: /* industrial finale + fills */
-            if((st & 3u) == 0u || st == 14u) synth909.kick.Trigger(st == 14u ? 0.72f : 1.0f);
-            if(st == 4u || st == 12u) synth505.snare.Trigger(0.90f);
-            if(st & 1u) synth909.hihatC.Trigger(hatVel + 0.12f);
-            if(st == 6u || st == 14u) synth909.hihatO.Trigger(0.66f);
-            if(bar == 3u && st >= 12u){
-                if(st == 12u) synth808.lowTom.Trigger(0.78f);
-                if(st == 13u) synth808.midTom.Trigger(0.80f);
-                if(st == 14u) synth808.hiTom.Trigger(0.84f);
-                if(st == 15u) synth909.snare.Trigger(0.96f);
-            }
-            if(st == 3u || st == 11u) synthFM2Op.NoteOn((st == 3u) ? 36 : 43, 0.62f);
-            break;
+    /* Conservative presentation mix: samples lead, machine layers are colour,
+     * and ambience remains behind the transient instead of washing it out. */
+    for(uint8_t track = 0; track < MAX_PADS; track++){
+        trackGain[track] = 0.72f;
+        trackPanF[track] = 0.0f;
+        trackReverbSend[track] = 0.03f;
+        trackDelaySend[track] = 0.0f;
+        trackChorusSend[track] = 0.0f;
+        trackMute[track] = false;
+        trackSolo[track] = false;
     }
+    trackGain[SHOW_BD] = 0.92f; trackGain[SHOW_SD] = 0.78f;
+    trackGain[SHOW_CH] = 0.52f; trackGain[SHOW_OH] = 0.56f;
+    trackGain[SHOW_CY] = 0.38f; trackGain[SHOW_CP] = 0.68f;
+    trackGain[SHOW_RS] = 0.58f; trackGain[SHOW_CB] = 0.34f;
+    trackGain[SHOW_BASS] = 0.50f; trackGain[SHOW_PAD] = 0.30f;
+    trackPanF[SHOW_CH] = 0.10f; trackPanF[SHOW_OH] = 0.24f;
+    trackPanF[SHOW_CP] = -0.10f; trackPanF[SHOW_RS] = 0.15f;
+    trackPanF[SHOW_LT] = -0.28f; trackPanF[SHOW_HT] = 0.28f;
+    trackReverbSend[SHOW_SD] = 0.10f; trackReverbSend[SHOW_CP] = 0.16f;
+    trackReverbSend[SHOW_PAD] = 0.25f; trackDelaySend[SHOW_BASS] = 0.06f;
 
-    static const uint8_t acidA[16] = {36,0,36,43,0,41,43,0,36,48,0,46,43,0,41,38};
-    static const uint8_t acidB[16] = {36,43,0,36,48,0,46,43,41,0,43,45,0,48,46,43};
-    if(section == 1 || section == 3 || section >= 6){
-        const uint8_t note = (section >= 6 ? acidB : acidA)[st];
-        if(note){
-            const bool slide = (st == 3u || st == 11u || st == 15u);
-            if(acidHeld && !slide) acid303.NoteOff();
-            float sweep = (float)((songStep & 63u)) / 63.0f;
-            acid303.SetCutoff(420.0f + sweep * (section >= 6 ? 7200.0f : 4300.0f));
-            acid303.NoteOn(note, st == 0u || st == 6u || st == 14u, slide);
-            acidHeld = true;
-        } else if(acidHeld){
-            acid303.NoteOff(); acidHeld = false;
-        }
-    } else if(acidHeld){
-        acid303.NoteOff(); acidHeld = false;
-    }
+    masterGain = 0.88f;
+    seqVolume = 0.92f;
+    limiterActive = true;
+    compActive = true;
+    reverbActive = true;
+    delayActive = true;
+    chorusActive = true;
+    flangerActive = false;
+    phaserActive = false;
+    reverbMix = 0.11f;
+    delayMix = 0.07f;
+    delayFeedback = 0.24f;
+    chorusMix = 0.035f;
+    masterDelay.SetDelay(0.1875f * (float)SAMPLE_RATE);
+    masterReverb.SetFeedback(0.76f);
+    masterReverb.SetLpFreq(6800.0f);
 
-    uint32_t interval = (section == 0 || section == 4) ? 125u : (section >= 6 ? 110u : 117u);
-    if(section == 5) interval = (st & 1u) ? 99u : 135u; /* 128 BPM, pair total constant */
-    nextMs += interval;
-    if((int32_t)(nowMs - nextMs) > 250) nextMs = nowMs + interval;
-    songStep = (songStep + 1u) & 511u;
+    anySolo = false;
+    dseq.currentPattern = songChain[0].pattern;
+    dseq.currentStep = -1;
+    dseq.samplesElapsed = 0;
+    songIdx = 0;
+    songRepeatCnt = 0;
+    songPlaying = true;
+    dseq.playing = true;
+    started = true;
 }
 
 static void DsqReleaseAllHeldNotes()
@@ -4454,7 +4599,30 @@ void AudioCallback(AudioHandle::InputBuffer  /*in*/,
         DSP_PROF_SCOPE(SEQ);
         if(dseq.playing){
             if(dseq.samplesElapsed == 0){
+                const int16_t previousStep = dseq.currentStep;
                 dseq.currentStep = (dseq.currentStep + 1) % (int16_t)dseq.patternLength;
+
+                /* Advance the song before firing step zero of the next cycle.
+                 * Previously the old pattern fired step 0 and only then changed
+                 * pattern, producing a one-step hybrid at every transition. */
+                const bool patternWrapped = previousStep >= 0 && dseq.currentStep == 0;
+                if(songPlaying && patternWrapped && songLength > 0){
+                    songRepeatCnt++;
+                    if(songRepeatCnt >= songChain[songIdx].repeats){
+                        songRepeatCnt = 0;
+                        songIdx++;
+                        if(songIdx >= songLength){
+                            if(kStartupShowcaseDemo){
+                                songIdx = 0;
+                                dseq.currentPattern = songChain[0].pattern;
+                            } else {
+                                songPlaying = false;
+                            }
+                        } else {
+                            dseq.currentPattern = songChain[songIdx].pattern;
+                        }
+                    }
+                }
                 DsqFireStep();
                 /* ── Stems: re-trigger enabled clean tracks from the top at each
                  *    pattern restart so a one-shot stem stays locked to the bar
@@ -4465,19 +4633,6 @@ void AudioCallback(AudioHandle::InputBuffer  /*in*/,
                         if(cleanTrackEnabled[ct] && cleanTrackLoaded[ct]){
                             cleanTrackPlayhead[ct] = 0;
                             cleanTrackActive[ct] = true;
-                        }
-                    }
-                }
-                /* ── Song mode: advance chain when pattern cycle restarts ── */
-                if(songPlaying && dseq.currentStep == 0 && songLength > 0){
-                    songRepeatCnt++;
-                    if(songRepeatCnt >= songChain[songIdx].repeats){
-                        songRepeatCnt = 0;
-                        songIdx++;
-                        if(songIdx >= songLength){
-                            songPlaying = false;   /* chain finished */
-                        } else {
-                            dseq.currentPattern = songChain[songIdx].pattern;
                         }
                     }
                 }
@@ -5251,6 +5406,12 @@ static void ProcessCommand()
     }
     spiPktCnt++;
     spiLastPacketMs = hw.system.GetNow();
+
+    /* Showcase is a dedicated presentation image. Keep transport, notes and
+     * sound-profile writes from the Master from becoming a second performance;
+     * SD/sample loading, diagnostics, mixer and normal query traffic remain
+     * available. Position queries are intentionally not blocked. */
+    if(ShowcaseBlocksMasterCommand(hdr->cmd)) return;
 
     switch(hdr->cmd){
 
@@ -8873,6 +9034,10 @@ int main()
     DsqInit();
     Log("DsqInit: %d patrones x %d tracks x %d steps en SDRAM",
         DSQ_PATTERNS, DSQ_TRACKS, DSQ_MAX_STEPS);
+    if(kStartupShowcaseDemo){
+        BuildStartupShowcaseProgram();
+        Log("Showcase programado: 8 escenas / 32 compases / sample-first");
+    }
 
     /* ── Start Audio ── */
     if(kEnableAudioStart)

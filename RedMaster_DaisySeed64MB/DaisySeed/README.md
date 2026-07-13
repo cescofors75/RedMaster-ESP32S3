@@ -191,16 +191,21 @@ El preset de sintetizador **909 / preset 5** mantiene kick, snare, clap, toms y 
 
 ## Demo autónoma para presentación
 
-Compila una versión que arranca con un showcase musical de ocho escenas:
+Compila una versión que arranca con un arreglo original de ocho escenas y 32
+compases:
 
 ```bash
 make RED808_STARTUP_SHOWCASE_DEMO=1 -j4
 ```
 
-La demo recorre intro synthwave, Detroit, electro, acid, breakdown, UK garage,
-peak-time e industrial. Se repite continuamente y conserva la autoridad de
-audio aunque el Master esté conectado; esta imagen está pensada exclusivamente
-para presentación.
+La demo usa el secuenciador sample-accurate de Daisy: los samples cargados desde
+el kit SD forman la batería principal, dos capas 808/909 aportan detalles y un
+bajo SH-101 con pad wavetable aparecen de forma contenida. Si no hay samples,
+los motores generados actúan como fallback. El arreglo mantiene una identidad
+única (AIR, PULSE, HOOK, PRESSURE, SPACE, RETURN, PEAK y RELEASE), se repite
+continuamente y bloquea comandos de transporte/notas del Master para impedir
+que dos secuenciadores suenen simultáneamente. Las cargas SD, diagnósticos y
+consultas continúan disponibles.
 El antiguo `RED808_STARTUP_808_SELF_TEST=1` se mantiene como diagnóstico de
 instrumentos y no debe usarse para una presentación.
 

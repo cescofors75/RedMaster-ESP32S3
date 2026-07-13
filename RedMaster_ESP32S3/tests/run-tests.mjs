@@ -216,11 +216,10 @@ test('professional bank exposes 16 named resident patterns with performance meta
   const bank = read('src/PatternBank.cpp');
   const header = read('src/PatternBank.h');
   const expected = [
-    'Boom Bap 90s', 'Detroit Techno', 'Jungle/Amen 90s', 'Chicago House',
-    'Synthpop Linn 80s', 'New Wave/Gated Drums', 'Italo Disco',
-    'Electro/Freestyle 80s', 'Acid House 1988', 'Miami Bass',
-    'New Jack Swing', 'Classic House 90s', 'UK Garage 90s', 'Trip-Hop',
-    'Rave/Breakbeat', 'Industrial/EBM',
+    'Pulse Bloom', 'Night Transit', 'Glass Garage', 'Warm Pressure',
+    'Carbon Breaks', 'Neon Motorik', 'Elastic Electro', 'Low Gravity',
+    'Acid Trace', 'Sub Signal', 'Pocket Chrome', 'Organ Dust',
+    'Night Bus', 'Afterglow', 'Peak Relay', 'Machine Ritual',
   ];
   assert.match(header, /BUILTIN_PATTERN_COUNT\s*=\s*16/);
   expected.forEach((name) => assert.match(bank, new RegExp(name.replace(/[\/]/g, '\\/'))));
@@ -230,7 +229,7 @@ test('professional bank exposes 16 named resident patterns with performance meta
   assert.match(bank, /setStepCutoffLock/);
 });
 
-test('professional bank drives generated engines and preserves expressive steps on Daisy', () => {
+test('professional bank is sample-first and preserves expressive steps on Daisy', () => {
   const bank = read('src/PatternBank.cpp');
   const sequencer = read('src/Sequencer.cpp');
   const master = read('src/main.cpp');
@@ -238,6 +237,10 @@ test('professional bank drives generated engines and preserves expressive steps 
   const daisy = read('../RedMaster_DaisySeed64MB/DaisySeed/main.cpp');
 
   assert.match(bank, /ENGINE_PROFILE\[BUILTIN_PATTERN_COUNT\]\[MAX_TRACKS\]/);
+  const profile = bank.slice(bank.indexOf('constexpr int8_t ENGINE_PROFILE'), bank.indexOf('constexpr uint8_t PRESET_PROFILE'));
+  const rows = profile.split('\n').filter((line) => /^\s*\{(?:SMP|E\w+)/.test(line));
+  assert.equal(rows.length, 16);
+  rows.forEach((row) => assert.ok((row.match(/\bSMP\b/g) || []).length >= 12));
   for (const engine of ['E808', 'E909', 'E505', 'E303', 'EWT', 'ESH', 'EFM', 'ENOISE'])
     assert.match(bank, new RegExp(`\\b${engine}\\b`));
   assert.match(sequencer, /out\[s\]\.ratchet\s*=\s*pd->ratchets/);
@@ -251,17 +254,20 @@ test('professional bank drives generated engines and preserves expressive steps 
   assert.match(daisy, /DsqProcessHeldNotes/);
 });
 
-test('Daisy groove keeps swing pairs tempo-stable and showcase owns presentation audio', () => {
+test('Daisy groove keeps swing pairs stable and Showcase has one sample-accurate transport', () => {
   const daisy = read('../RedMaster_DaisySeed64MB/DaisySeed/main.cpp');
   const makefile = read('../RedMaster_DaisySeed64MB/DaisySeed/Makefile');
   assert.match(daisy, /currentStep & 1\) == 0\) thr = dseq\.samplesPerStep \+ offset/);
   assert.match(daisy, /else thr = dseq\.samplesPerStep > offset \? dseq\.samplesPerStep - offset/);
   assert.match(daisy, /RunStartupShowcaseDemo/);
-  const showcaseStart = daisy.indexOf('static void RunStartupShowcaseDemo');
-  const showcaseEnd = daisy.indexOf('static void DsqReleaseAllHeldNotes', showcaseStart);
-  assert.ok(showcaseStart >= 0 && showcaseEnd > showcaseStart);
-  assert.doesNotMatch(daisy.slice(showcaseStart, showcaseEnd), /if\s*\(\s*spiPktCnt\s*>\s*0/);
-  assert.match(daisy, /songStep = \(songStep \+ 1u\) & 511u/);
+  assert.match(daisy, /BuildStartupShowcaseProgram/);
+  assert.match(daisy, /ShowcaseBlocksMasterCommand/);
+  assert.match(daisy, /ShowcaseHit\(0, SHOW_BD/);
+  assert.match(daisy, /songPlaying && patternWrapped/);
+  assert.match(daisy, /if\(kStartupShowcaseDemo\)\{/);
+  assert.match(daisy, /if\(ShowcaseBlocksMasterCommand\(hdr->cmd\)\) return/);
+  assert.match(daisy, /cleanTrackEnabled\[track\] = false/);
+  assert.doesNotMatch(daisy, /static uint16_t songStep/);
   assert.match(makefile, /RED808_STARTUP_SHOWCASE_DEMO \?= 0/);
 });
 
