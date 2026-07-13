@@ -1029,11 +1029,24 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     WiFi.mode(WIFI_AP_STA);
     delay(50);
 
+    // Set protocol and TX power BEFORE softAP so the AP config is stable
+    // from the first beacon. Calling esp_wifi_set_protocol after softAP()
+    // triggers an internal AP restart that drops incoming association requests.
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+
     // Start AP first so it's always reachable
     IPAddress local_IP(192, 168, 4, 1);
     IPAddress gateway(192, 168, 4, 1);
     IPAddress subnet(255, 255, 255, 0);
     WiFi.softAPConfig(local_IP, gateway, subnet);
+
+    // Apply beacon interval via config struct before starting AP
+    wifi_config_t conf;
+    esp_wifi_get_config(WIFI_IF_AP, &conf);
+    conf.ap.beacon_interval = 100;
+    esp_wifi_set_config(WIFI_IF_AP, &conf);
+
     WiFi.softAP(apSsid, apPassword, 11, 0, 4);
     delay(200);
 
@@ -1070,21 +1083,26 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     WiFi.mode(WIFI_AP);
     delay(50);
 
+    // Set protocol and TX power BEFORE softAP so the AP config is stable
+    // from the first beacon. Calling esp_wifi_set_protocol after softAP()
+    // triggers an internal AP restart that drops incoming association requests.
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+
     IPAddress local_IP(192, 168, 4, 1);
     IPAddress gateway(192, 168, 4, 1);
     IPAddress subnet(255, 255, 255, 0);
     WiFi.softAPConfig(local_IP, gateway, subnet);
+
+    // Apply beacon interval via config struct before starting AP
+    wifi_config_t conf;
+    esp_wifi_get_config(WIFI_IF_AP, &conf);
+    conf.ap.beacon_interval = 100;
+    esp_wifi_set_config(WIFI_IF_AP, &conf);
+
     WiFi.softAP(apSsid, apPassword, 11, 0, 4);
     delay(200);
   }
-
-  // Protocolo b/g/n y beacon 100ms
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);
-  esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-  wifi_config_t conf;
-  esp_wifi_get_config(WIFI_IF_AP, &conf);
-  conf.ap.beacon_interval = 100;
-  esp_wifi_set_config(WIFI_IF_AP, &conf);
 
   WiFi.setSleep(false);
   
