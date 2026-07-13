@@ -1,0 +1,82 @@
+/* RED808 2026 shared experience layer. Page-specific styles remain authoritative. */
+html {
+  background: var(--r808-bg-base);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  background-color: var(--r808-bg-base);
+  background-image:
+    radial-gradient(circle at 12% -10%, rgba(255, 51, 79, .10), transparent 28rem),
+    radial-gradient(circle at 92% 0%, rgba(86, 216, 255, .07), transparent 34rem);
+}
+
+button, input, select, textarea { font: inherit; }
+button, [role="button"], input[type="range"], select { -webkit-tap-highlight-color: transparent; }
+
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--r808-focus) !important;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px rgba(86,216,255,.14) !important;
+}
+
+:where(button, .tab-btn, .nav-btn, [class*="-btn"]) {
+  transition: transform .16s var(--r808-ease), border-color .18s ease,
+              background-color .18s ease, color .18s ease, box-shadow .18s ease;
+}
+
+:where(button, .tab-btn, .nav-btn, [class*="-btn"]):active:not(:disabled) {
+  transform: translateY(1px) scale(.985);
+}
+
+:where(button, input, select, textarea):disabled {
+  cursor: not-allowed;
+  opacity: .46;
+  filter: saturate(.35);
+}
+
+::selection { background: rgba(255,51,79,.34); color: #fff; }
+
+* { scrollbar-color: rgba(139,152,171,.45) transparent; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: rgba(139,152,171,.36); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(139,152,171,.58); }
+
+.header,
+:where(.section, .device-info, .sequencer-section, .pads-section, .pads-xtra-section,
+       .stems-section, .volumes-section, .fx-section, .midi-section) {
+  border-color: var(--r808-border) !important;
+}
+
+:where(.track-volume-card, .ufx-card, .dashboard-card, .stat-card, .info-card, .sd-panel) {
+  border-color: var(--r808-border) !important;
+  box-shadow: var(--r808-shadow-sm);
+}
+
+:where(.track-volume-card, .ufx-card, .dashboard-card, .stat-card, .info-card, .sd-panel):hover {
+  border-color: var(--r808-border-strong) !important;
+}
+
+.r808nav-fab {
+  box-shadow: 0 16px 44px rgba(0,0,0,.42), 0 0 0 1px rgba(255,255,255,.12) !important;
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+
+#toastContainer > *, .toast {
+  border: 1px solid var(--r808-border-strong) !important;
+  border-radius: var(--r808-radius-md) !important;
+  box-shadow: var(--r808-shadow-lg) !important;
+  backdrop-filter: blur(18px) saturate(1.25);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+  }
+}

@@ -387,6 +387,8 @@ public:
         subPhase_    = 0.0f;
         currentFreq_ = 220.0f;
         targetFreq_  = 220.0f;
+        slideMul_    = 1.0f;
+        slideSamplesRemaining_ = 0;
         pitchBend_   = 0.0f;
         sliding_     = false;
         accent_      = false;
@@ -394,6 +396,7 @@ public:
         gateOn_      = false;
 
         filterEnvScale_ = 1.0f;
+        accentChirpCoef_ = expf(-dt_ / 0.025f);
 
         filter_.Init(sr_);
         ampEnv_.Init(sr_);
@@ -411,8 +414,10 @@ public:
 
         if (slide && active_) {
             sliding_ = true;
+            UpdateSlideMultiplier();
         } else {
             sliding_     = false;
+            slideSamplesRemaining_ = 0;
             currentFreq_ = targetFreq_;
             filterEnv_.Retrigger();
             ampEnv_.Retrigger();
@@ -486,13 +491,10 @@ public:
 
         /* ── 2. PITCH (slide + bend + drift) ── */
         if (sliding_) {
-            float slideCoef = expf(-dt_ / Clamp(params.slideTime, 0.01f, 0.5f));
-            /* Slide en dominio logarítmico (semitones) — portamento natural */
-            float curSemi = log2f(currentFreq_ / 440.0f) * 12.0f + 69.0f;
-            float tgtSemi = log2f(targetFreq_  / 440.0f) * 12.0f + 69.0f;
-            curSemi = curSemi * slideCoef + tgtSemi * (1.0f - slideCoef);
-            currentFreq_ = 440.0f * powf(2.0f, (curSemi - 69.0f) / 12.0f);
-            if (fabsf(currentFreq_ - targetFreq_) < 0.05f) {
+            currentFreq_ *= slideMul_;
+            if (slideSamplesRemaining_ > 0)
+                slideSamplesRemaining_--;
+            if (slideSamplesRemaining_ == 0) {
                 currentFreq_ = targetFreq_;
                 sliding_ = false;
             }
@@ -542,7 +544,7 @@ public:
         }
 
         /* ── 6. FILTRO LADDER ── */
-        if (accent_) accentChirpEnv_ *= expf(-dt_ / 0.025f);  /* 25ms decay chirp */
+        if (accent_) accentChirpEnv_ *= accentChirpCoef_;  /* 25ms decay chirp */
         float envAmount = params.envMod * 12000.0f * fEnv;
         float fc = Clamp(params.cutoff + envAmount + accentChirpEnv_, 20.0f, sr_ * 0.48f);
 
@@ -580,7 +582,10 @@ public:
     void SetSustain   (float v) { params.sustain    = Clamp(v, 0.0f,    1.0f);     }
     void SetRelease   (float v) { params.release    = Clamp(v, 0.005f,  2.0f);     }
     void SetAccent    (float v) { params.accentAmt  = Clamp(v, 0.0f,    1.0f);     }
-    void SetSlide     (float v) { params.slideTime  = Clamp(v, 0.01f,   0.5f);     }
+    void SetSlide     (float v) {
+        params.slideTime = Clamp(v, 0.01f, 0.5f);
+        if (sliding_) UpdateSlideMultiplier();
+    }
     void SetOverdrive (float v) { params.overdrive  = Clamp(v, 0.0f,    1.0f);     }
     void SetSubLevel  (float v) { params.subLevel   = Clamp(v, 0.0f,    1.0f);     }
     void SetDrift     (float v) { params.drift      = Clamp(v, 0.0f,    1.0f);     }
@@ -599,11 +604,21 @@ public:
         pitchBend_   = 0.0f;
         currentFreq_ = 220.0f;
         targetFreq_  = 220.0f;
+        slideMul_    = 1.0f;
+        slideSamplesRemaining_ = 0;
         filter_.Reset();
         dcBlock_.Init(sr_);
     }
 
 private:
+    void UpdateSlideMultiplier() {
+        const float safeCurrent = Clamp(currentFreq_, 20.0f, 5000.0f);
+        const float safeTarget  = Clamp(targetFreq_, 20.0f, 5000.0f);
+        slideSamplesRemaining_ = (uint32_t)Clamp(params.slideTime * sr_, 1.0f, sr_);
+        slideMul_ = powf(safeTarget / safeCurrent,
+                         1.0f / (float)slideSamplesRemaining_);
+    }
+
     /* ── Motor DSP ── */
     float sr_  = 48000.0f;
     float dt_  = 1.0f / 48000.0f;
@@ -613,6 +628,8 @@ private:
     float subPhase_    = 0.0f;
     float currentFreq_ = 220.0f;
     float targetFreq_  = 220.0f;
+    float slideMul_    = 1.0f;
+    uint32_t slideSamplesRemaining_ = 0;
     float pitchBend_   = 0.0f;
 
     /* ── Estado de nota ── */
@@ -624,6 +641,7 @@ private:
     /* ── Envelope scale para accent ── */
     float filterEnvScale_ = 1.0f;
     float accentChirpEnv_ = 0.0f;  /* chirp rápido del accent */
+    float accentChirpCoef_ = 0.994f;
 
     /* ── Módulos ── */
     DiodeLadder filter_;

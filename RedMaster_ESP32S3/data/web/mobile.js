@@ -1,5 +1,5 @@
 /* =========================================================================
-   RED808 Mobile ÔÇö l├│gica m├¡nima para tocar desde el m├│vil.
+   RED808 Mobile — lógica mínima para tocar desde el móvil.
    Reutiliza el MISMO protocolo WebSocket que la UI principal (app.js):
      - Pads (sample)  : mensaje binario [0x90, pad, velocity]
      - Piano (synth)  : {cmd:'synthNoteOnEx'} / {cmd:'synthNoteOff'}
@@ -12,24 +12,11 @@
 
   // ---- Constantes compartidas con app.js -------------------------------
   const TRACK_NAMES = ['BD','SD','CH','OH','CY','CP','RS','CB','LT','MT','HT','MA','CL','HC','MC','LC'];
-  const PATTERN_NAMES = ['HIP HOP','TECHNO','DnB','BREAK','HOUSE','TRAP'];
-  // ├ìndices de pista por nombre (para los patrones demo).
-  const TR = { BD:0, SD:1, CH:2, OH:3, CY:4, CP:5, RS:6, CB:7, LT:8, MT:9, HT:10, MA:11, CL:12, HC:13, MC:14, LC:15 };
-  // Patrones demo reales (16 pasos), uno por nombre, para que cada estilo SUENE
-  // distinto. Cada entrada: { pista: [pasos activos 0..15] }.
-  const DEMO_PATTERNS = [
-    // HIP HOP ÔÇö boom bap
-    { [TR.BD]:[0,6,10], [TR.SD]:[4,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[14] },
-    // TECHNO ÔÇö four on the floor
-    { [TR.BD]:[0,4,8,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[2,6,10,14], [TR.CP]:[4,12] },
-    // DnB ÔÇö two step
-    { [TR.BD]:[0,10], [TR.SD]:[4,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[7,15] },
-    // BREAK ÔÇö amen-ish
-    { [TR.BD]:[0,10], [TR.SD]:[4,7,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[14] },
-    // HOUSE ÔÇö kick + clap + offbeat hats
-    { [TR.BD]:[0,4,8,12], [TR.CP]:[4,12], [TR.CH]:[0,2,4,6,8,10,12,14], [TR.OH]:[2,6,10,14] },
-    // TRAP ÔÇö sparse kick + hi-hat rolls
-    { [TR.BD]:[0,6,9], [TR.SD]:[8], [TR.CH]:[0,2,3,4,6,8,10,11,12,14,15], [TR.CB]:[0,8] }
+  const PATTERN_NAMES = [
+    'BOOM BAP 90s','DETROIT TECHNO','JUNGLE/AMEN 90s','CHICAGO HOUSE',
+    'SYNTHPOP LINN 80s','NEW WAVE/GATED DRUMS','ITALO DISCO','ELECTRO/FREESTYLE 80s',
+    'ACID HOUSE 1988','MIAMI BASS','NEW JACK SWING','CLASSIC HOUSE 90s',
+    'UK GARAGE 90s','TRIP-HOP','RAVE/BREAKBEAT','INDUSTRIAL/EBM'
   ];
   // 16 colores fijos (uno por pista/pad), legibles sobre fondo oscuro.
   const PALETTE = [
@@ -38,23 +25,23 @@
   ];
   // Paletas por tema visual (16 colores, uno por pista).
   const PALETTES = {
-    red:    ['#ff2020','#ff5630','#ff7a3d','#ff9540','#ff4060','#ff2d55','#e01030','#ff6a4d',
-             '#ff8c5a','#ff3b30','#d92020','#ff7050','#ffae8a','#ff5040','#ff9070','#ff4530'],
-    neon:   ['#00e5ff','#ff2d95','#7dff3a','#ffe600','#4488ff','#ff5fa0','#bf5af2','#34c759',
-             '#00cfff','#ff80c0','#4dffa6','#ffd000','#36c5f0','#ff3385','#d070ff','#00ffcc'],
-    acid:   ['#00ff88','#c8ff00','#39ff14','#ffe600','#80ff00','#4dffa6','#b3ff00','#00ffc8',
-             '#a3f000','#f5e642','#00ff55','#e6ff00','#44ff88','#aaff00','#66ff33','#00ffaa'],
-    sunset: ['#ff7a18','#ff2d55','#ff9d4d','#ff3d7f','#ffcc00','#ff6b3d','#ff5500','#ff9966',
-             '#ffc18a','#ff1493','#ff8c00','#ff3366','#ffaa44','#ff6699','#ff7733','#ff4080'],
-    retro:  ['#f5a623','#e74c3c','#f39c12','#d35400','#e67e22','#c0392b','#f1c40f','#ca6f1e',
-             '#eb984e','#d68910','#f5b041','#a93226','#fad7a0','#dc7633','#f0b27a','#e59866'],
-    gray:   ['#f0f0f0','#d8d8d8','#c0c0c0','#a8a8a8','#e8e8e8','#d0d0d0','#b8b8b8','#a0a0a0',
-             '#e4e4e4','#cccccc','#b4b4b4','#9c9c9c','#dcdcdc','#c4c4c4','#acacac','#949494']
+    red808:    ['#c9271b','#d93421','#e74428','#f2552f','#d85a1a','#e86820','#f87925','#ff8c2a',
+                '#c99522','#e0aa2a','#f5bc31','#ffd052','#dcc9a8','#ead9ba','#f7ead7','#fff7e8'],
+    ocean:     ['#1144cc','#2255dd','#3366ee','#4477ff','#1166dd','#2277ee','#3388ff','#0055bb',
+                '#1177cc','#2288dd','#3399ee','#44aaff','#0044aa','#1155bb','#2266cc','#3377dd'],
+    neon:      ['#00cc00','#11dd11','#22ee22','#33ff33','#00bb44','#11cc55','#22dd66','#00aa00',
+                '#33ee33','#44ff44','#00dd88','#11ee99','#00cc66','#22dd77','#33ee88','#44ff99'],
+    sunset:    ['#ff4400','#ff5511','#ff6622','#ff7733','#ff8844','#cc44ff','#bb33ee','#aa22dd',
+                '#ff3366','#ff5588','#ff77aa','#dd55cc','#ff9944','#cc55ee','#ff6655','#ee44bb'],
+    rainbow:   ['#ff0000','#ff5500','#ffaa00','#ffff00','#88ff00','#00ff00','#00ff88','#00ffff',
+                '#0088ff','#0000ff','#5500ff','#aa00ff','#ff00ff','#ff0088','#ff4444','#44ffaa'],
+    greyscale: ['#ffffff','#eeeeee','#dddddd','#cccccc','#bbbbbb','#aaaaaa','#999999','#888888',
+                '#777777','#666666','#555555','#444444','#333333','#222222','#f0f0f0','#d0d0d0']
   };
-  let currentPalette = PALETTES.red;
-  // Color para cada uno de los 6 presets FX seg├║n la paleta del tema actual.
+  let currentPalette = PALETTES.red808;
+  // Color para cada uno de los 6 presets FX según la paleta del tema actual.
   const fxColor = (i) => currentPalette[(i * 3) % 16];
-  // Efectos "modo ni├▒o": presets con nombre divertido aplicados a TODAS las
+  // Efectos "modo niño": presets con nombre divertido aplicados a TODAS las
   // pistas a la vez. `type` es el filtro que espera el firmware (1..9), `res`
   // la resonancia. El cutoff lo controla el slider "Tono".
   const FX_PRESETS = [
@@ -66,10 +53,10 @@
     { id: 'wah',    name: 'Wah',       emoji: '🎸', color: '#bf5af2', filterType: 6,  cutoff: 1200, res: 8, gain: 10 }
   ];
   const STEP_COUNTS = [16, 32, 64];
-  // Piano: una octava = 12 semitonos. Patr├│n de teclas negras.
+  // Piano: una octava = 12 semitonos. Patrón de teclas negras.
   const WHITE_OFFSETS = [0, 2, 4, 5, 7, 9, 11];
-  const BLACK = { 0: 1, 1: 3, 3: 6, 4: 8, 5: 10 }; // posici├│n blanca -> semitono negro
-  // Colores arco├¡ris para las 7 teclas blancas (modo ni├▒o).
+  const BLACK = { 0: 1, 1: 3, 3: 6, 4: 8, 5: 10 }; // posición blanca -> semitono negro
+  // Colores arcoíris para las 7 teclas blancas (modo niño).
   const WHITE_COLORS = ['#ff4d4d', '#ff9f40', '#ffd633', '#4dd964', '#36c5f0', '#5b8def', '#b06bf0'];
   const PIANO_ENGINES = [
     { id: 3, label: '303' },
@@ -78,16 +65,16 @@
     { id: 6, label: 'FM2OP' }
   ];
   let pianoEngine = 3;
-  // Temas visuales (re-pintan los tokens RED808 v├¡a body[data-theme]).
+  // Temas visuales (repintan los tokens RED808 vía body[data-theme]).
   const THEMES = [
-    { id: 'red',    name: 'RED808', color: '#ff2020' },
-    { id: 'neon',   name: 'Neon',   color: '#00e5ff' },
-    { id: 'acid',   name: 'Acid',   color: '#00ff88' },
-    { id: 'sunset', name: 'Sunset', color: '#ff7a18' },
-    { id: 'retro',  name: 'Retro',  color: '#f5a623' },
-    { id: 'gray',   name: 'Gray',   color: '#cccccc' }
+    { id: 'red808',    name: 'RED808',    color: '#e23d22' },
+    { id: 'ocean',     name: 'Ocean',     color: '#4a9eff' },
+    { id: 'neon',      name: 'Neon',      color: '#39ff14' },
+    { id: 'sunset',    name: 'Sunset',    color: '#ff6b35' },
+    { id: 'rainbow',   name: 'Rainbow',   color: '#ff00aa' },
+    { id: 'greyscale', name: 'Greyscale', color: '#cccccc' }
   ];
-  const THEME_KEY = 'r808_mobile_theme';
+  const THEME_KEY = 'r808_web_theme';
 
   // ---- Estado ----------------------------------------------------------
   let ws = null;
@@ -126,7 +113,7 @@
     ws.onclose = () => { connected = false; setConn(false); retryTimer = setTimeout(connect, 1500); };
     ws.onerror = () => { try { ws.close(); } catch (_) {} };
     ws.onmessage = (ev) => {
-      if (ev.data instanceof ArrayBuffer) return; // niveles de audio: ignorar en m├│vil
+      if (ev.data instanceof ArrayBuffer) return; // niveles de audio: ignorar en móvil
       if (typeof ev.data !== 'string') return;
       let msg; try { msg = JSON.parse(ev.data); } catch (_) { return; }
       handleMessage(msg);
@@ -151,13 +138,13 @@
       if (d.stepCount && d.stepCount !== stepCount) applyStepCount(d.stepCount);
       if (d.step !== undefined) highlightPlayhead(d.step);
       if (d.playing !== undefined) setPlaying(!!d.playing, false);
-      if (d.pattern !== undefined && !_patLock) setPatternSel(d.pattern, false);
+      if (d.pattern !== undefined && !_patLock) setPatternSel(d.pattern, false, d.patternMeta?.name);
       return;
     }
     if (type === 'pattern') {
       if (d.stepCount && d.stepCount !== stepCount) applyStepCount(d.stepCount);
       loadPattern(d);
-      if (d.index !== undefined && !_patLock) setPatternSel(d.index, false);
+      if (d.index !== undefined && !_patLock) setPatternSel(d.index, false, d.name);
       return;
     }
     if (type === 'step') { highlightPlayhead(d.step); syncFlashPads(d.step); return; }
@@ -180,7 +167,7 @@
   }
 
   // =====================================================================
-  // Navegaci├│n de vistas
+  // Navegación de vistas
   // =====================================================================
   function initNav() {
     document.querySelectorAll('.m-tab').forEach((tab) => {
@@ -219,28 +206,11 @@
     if (_patLockTimer) clearTimeout(_patLockTimer);
     _patLockTimer = setTimeout(() => { _patLock = false; }, 1500);
     send({ cmd: 'selectPattern', index: currentPattern });
-    // Carga el beat demo del estilo elegido para que cada nombre suene distinto.
-    applyDemoPattern(currentPattern);
-  }
-  // Vuelca el patr├│n demo del ├¡ndice en el secuenciador (solo manda los cambios).
-  function applyDemoPattern(idx) {
-    const demo = DEMO_PATTERNS[idx] || {};
-    for (let t = 0; t < 16; t++) {
-      const onSteps = new Set(demo[t] || []);
-      for (let s = 0; s < stepCount; s++) {
-        const want = s < 16 ? onSteps.has(s) : false;
-        if (seqState[t][s] !== want) {
-          seqState[t][s] = want;
-          send({ cmd: 'setStep', track: t, step: s, active: want, noteLen: 1 });
-        }
-      }
-    }
-    refreshSeqDots();
   }
   function setPlaying(on, doSend) {
     isPlaying = on;
     $('playBtn').classList.toggle('playing', on);
-    $('playBtn').textContent = on ? 'ÔÅ╣' : 'ÔûÂ';
+    $('playBtn').textContent = on ? '⏹' : '▶';
     if (doSend) send({ cmd: on ? 'start' : 'stop' });
   }
   function setBpm(v, doSend) {
@@ -248,9 +218,9 @@
     $('bpmVal').textContent = String(bpm);
     if (doSend) send({ cmd: 'tempo', value: bpm });
   }
-  function setPatternSel(idx, doSend) {
+  function setPatternSel(idx, doSend, serverName) {
     currentPattern = ((idx % PATTERN_NAMES.length) + PATTERN_NAMES.length) % PATTERN_NAMES.length;
-    $('patName').textContent = PATTERN_NAMES[currentPattern] || String(idx);
+    $('patName').textContent = serverName || PATTERN_NAMES[currentPattern] || String(idx);
     if (doSend) send({ cmd: 'selectPattern', index: currentPattern });
   }
 
@@ -263,10 +233,10 @@
   let _tremoloEl = null;
   let lastTappedPad = 0;
   let _tonoDebounce = null;
-  // Cu├íntos pads se muestran en pantalla. Menos pads = pads m├ís grandes.
+  // Cuántos pads se muestran en pantalla. Menos pads = pads más grandes.
   const PAD_COUNTS = [16, 8, 4, 2, 1];
   let padCount = 16;
-  // Columnas del grid seg├║n el n├║mero de pads visibles.
+  // Columnas del grid según el número de pads visibles.
   function padCols(n) {
     if (n >= 16) return 4;
     if (n >= 8) return 2;
@@ -457,7 +427,7 @@
   }
   // Permite tocar varias teclas a la vez y deslizar el dedo (glissando "tirirri").
   function bindGlissando(piano) {
-    // Estado por dedo (pointerId): { el, note } o { el:null, note:null } si est├í fuera de teclas.
+    // Estado por dedo (pointerId): { el, note } o { el:null, note:null } si está fuera de teclas.
     const fingerKey = new Map();
     const stopNote = (st) => {
       if (st && st.el) { st.el.classList.remove('down'); noteOff(st.note); }
@@ -563,7 +533,7 @@
   }
   function setAllMute(on) {
     for (let t = 0; t < 16; t++) muteState[t] = on;
-    // Env├¡o at├│mico (una sola orden) para evitar parpadeos.
+    // Envío atómico (una sola orden) para evitar parpadeos.
     send({ cmd: 'setMuteMask', mask: on ? 0xFFFF : 0 });
     refreshTrackButtons();
   }
@@ -680,11 +650,11 @@
       b.addEventListener('click', () => { applyTheme(t.id); closeThemeSheet(); });
       opts.appendChild(b);
     });
-    let saved = 'red';
-    try { saved = localStorage.getItem(THEME_KEY) || 'red'; } catch (_) {}
-    if (!THEMES.some((t) => t.id === saved)) saved = 'red';
-    // Migrar tema 'violet' antiguo ÔåÆ 'retro'
-    if (saved === 'violet') saved = 'retro';
+    let saved = 'red808';
+    try { saved = localStorage.getItem(THEME_KEY) || localStorage.getItem('r808_mobile_theme') || 'red808'; } catch (_) {}
+    const aliases = { red: 'red808', acid: 'ocean', retro: 'rainbow', gray: 'greyscale', violet: 'rainbow' };
+    saved = aliases[saved] || saved;
+    if (!THEMES.some((t) => t.id === saved)) saved = 'red808';
     applyTheme(saved);
 
     $('themeBtn').addEventListener('click', openThemeSheet);
@@ -693,9 +663,15 @@
     setupSampleUpload();
   }
   function applyTheme(id) {
+    document.documentElement.dataset.theme = id;
     document.body.dataset.theme = id;
+    document.body.classList.remove('mono-mode');
     try { localStorage.setItem(THEME_KEY, id); } catch (_) {}
-    currentPalette = PALETTES[id] || PALETTES.red;
+    currentPalette = PALETTES[id] || PALETTES.red808;
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    const theme = THEMES.find((item) => item.id === id);
+    if (metaTheme && theme) metaTheme.setAttribute('content', theme.color);
+    send({ cmd: 'setLedMonoMode', value: id === 'greyscale' });
     document.querySelectorAll('#themeOptions .m-theme-opt').forEach((b) =>
       b.classList.toggle('active', b.dataset.theme === id));
     // Re-pintar pads con la paleta del tema
@@ -721,7 +697,7 @@
   function closeThemeSheet() { $('themeSheet').hidden = true; $('sheetBackdrop').hidden = true; }
 
   // =====================================================================
-  // JAM ÔÇö canvas multitouch (samples + synth) con efectos visuales
+  // JAM — canvas multitouch (samples + synth) con efectos visuales
   // =====================================================================
   let jamCanvas = null, jamCtx = null, jamW = 0, jamH = 0, jamDpr = 1;
   let jamRaf = 0, jamLastT = 0, jamRunning = false, jamMode = 'samples';
@@ -1201,7 +1177,7 @@
     e.preventDefault();
     const { x, y } = jamPos(e);
     const zone = jamZoneAt(x, y);
-    if (zone === st.zone) return; // mismo sitio ÔåÆ no re-disparar
+    if (zone === st.zone) return; // mismo sitio → no redisparar
     if (st.note !== null) send({ cmd: 'synthNoteOff', engine: pianoEngine, track: 255, note: st.note });
     st.note = jamTrigger(zone, x, y);
     st.zone = zone;
@@ -1254,7 +1230,7 @@
       ctx.strokeStyle = `rgba(${rg.rgb[0]},${rg.rgb[1]},${rg.rgb[2]},${rg.life * 0.6})`;
       ctx.lineWidth = 3 * rg.life + 0.5; ctx.stroke();
     }
-    // part├¡culas
+    // partículas
     for (let i = jamParticles.length - 1; i >= 0; i--) {
       const p = jamParticles[i];
       p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.94;
@@ -1278,7 +1254,7 @@
   let sampleFamily = '';
   function openSampleSheet(pad) {
     sampleTargetPad = pad;
-    $('sampleTargetName').textContent = `${pad + 1} ┬À ${TRACK_NAMES[pad]}`;
+    $('sampleTargetName').textContent = `${pad + 1} · ${TRACK_NAMES[pad]}`;
     // Chips de familias
     const chips = $('famChips');
     chips.innerHTML = '';
@@ -1289,7 +1265,7 @@
       b.addEventListener('click', () => requestSamples(fam));
       chips.appendChild(b);
     });
-    $('sampleList').innerHTML = '<div class="se-empty">CargandoÔÇª</div>';
+    $('sampleList').innerHTML = '<div class="se-empty">Cargando…</div>';
     $('sampleSheet').hidden = false;
     $('sampleBackdrop').hidden = false;
     requestSamples(TRACK_NAMES[pad]); // familia por defecto = la del pad
@@ -1303,7 +1279,7 @@
     sampleFamily = fam;
     document.querySelectorAll('#famChips button').forEach((b) =>
       b.classList.toggle('active', b.dataset.fam === fam));
-    $('sampleList').innerHTML = '<div class="se-empty">CargandoÔÇª</div>';
+    $('sampleList').innerHTML = '<div class="se-empty">Cargando…</div>';
     send({ cmd: 'getSamples', family: fam, pad: sampleTargetPad });
   }
   function renderSampleList(d) {
@@ -1358,13 +1334,13 @@
         blob = file;
         name = file.name;
       } else {
-        setUploadStatus('Convirtiendo audioÔÇª', '');
+        setUploadStatus('Convirtiendo audio…', '');
         const wav = await decodeToWav(file);
         blob = wav;
         name = file.name.replace(/\.[^.]+$/, '') + '.wav';
-        if (blob.size > 8 * 1024 * 1024) { setUploadStatus('Archivo muy grande tras convertir (m├íx 8MB)', 'err'); return; }
+        if (blob.size > 8 * 1024 * 1024) { setUploadStatus('Archivo muy grande tras convertir (máx. 8 MB)', 'err'); return; }
       }
-      setUploadStatus('SubiendoÔÇª 0%', '');
+      setUploadStatus('Subiendo… 0%', '');
       await postSample(blob, name, pad);
     } catch (err) {
       setUploadStatus('Error: ' + (err && err.message ? err.message : err), 'err');
@@ -1377,11 +1353,11 @@
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/upload?pad=' + pad);
       xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) setUploadStatus('SubiendoÔÇª ' + Math.round((e.loaded / e.total) * 100) + '%', '');
+        if (e.lengthComputable) setUploadStatus('Subiendo… ' + Math.round((e.loaded / e.total) * 100) + '%', '');
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          setUploadStatus('Ô£à ' + name + ' cargado en pad ' + (pad + 1), 'ok');
+          setUploadStatus('✅ ' + name + ' cargado en pad ' + (pad + 1), 'ok');
           triggerPad(pad);
           setTimeout(() => { setUploadStatus('', ''); closeSampleSheet(); }, 1200);
           resolve();

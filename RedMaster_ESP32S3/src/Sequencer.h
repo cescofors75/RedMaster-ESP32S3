@@ -16,6 +16,16 @@
 #define MAX_TRACKS 16
 #define MELODY_STEP_VOICES 4
 
+struct PatternMetadata {
+  char name[32];
+  char genre[24];
+  char kit[16];
+  uint16_t recommendedBpm;
+  uint8_t swing;
+  uint8_t humanizeTimingMs;
+  uint8_t humanizeVelocity;
+};
+
 // Loop types for pads
 enum LoopType {
   LOOP_EVERY_STEP = 0,   // Trigger every step (16th note)
@@ -30,6 +40,7 @@ enum LoopType {
 // Allocated with ps_calloc() in Sequencer::Sequencer().
 // -----------------------------------------------------------------------
 struct PatternData {
+  PatternMetadata metadata[MAX_PATTERNS];
   bool    steps[MAX_PATTERNS][MAX_TRACKS][STEPS_PER_PATTERN];
   uint8_t velocities[MAX_PATTERNS][MAX_TRACKS][STEPS_PER_PATTERN];
   uint8_t noteLenDivs[MAX_PATTERNS][MAX_TRACKS][STEPS_PER_PATTERN];
@@ -46,7 +57,7 @@ struct PatternData {
   uint8_t stepNoteVoices[MAX_PATTERNS][MAX_TRACKS][STEPS_PER_PATTERN][MELODY_STEP_VOICES];
   uint8_t stepFlags[MAX_PATTERNS][MAX_TRACKS][STEPS_PER_PATTERN];
 };
-// sizeof(PatternData) ≈ 229 KB  →  allocated from 8 MB PSRAM, not DRAM
+// sizeof(PatternData) ≈ 241 KB  →  allocated from 8 MB PSRAM, not DRAM
 
 // Snapshot consistente de un step para subir a la Daisy. Permite que
 // dsqUploadPattern copie una pista entera bajo un solo lock y luego haga el
@@ -56,6 +67,9 @@ struct StepUploadData {
   uint8_t  velocity;
   uint8_t  noteLenDiv;
   uint8_t  probability;
+  uint8_t  ratchet;
+  uint8_t  flags;
+  uint8_t  noteVoices[MELODY_STEP_VOICES];
   bool     cutoffEn;
   uint16_t cutoffHz;
   bool     reverbEn;
@@ -100,6 +114,7 @@ public:
   
   // Note length per step (divider: 1=full, 2=half, 4=quarter, 8=eighth)
   void setStepNoteLen(int track, int step, uint8_t div);
+  void setStepNoteLen(int pattern, int track, int step, uint8_t div);
   uint8_t getStepNoteLen(int track, int step);
   uint8_t getStepNoteLen(int pattern, int track, int step);
 
@@ -165,6 +180,8 @@ public:
   void selectPattern(int pattern);
   int getCurrentPattern();
   void copyPattern(int src, int dst);
+  void setPatternMetadata(int pattern, const PatternMetadata& metadata);
+  bool getPatternMetadata(int pattern, PatternMetadata& metadata);
   
   // Mute tracks
   void muteTrack(int track, bool muted);
@@ -191,11 +208,10 @@ public:
   void songChainPlay();
   void songChainStop();
   void songChainReset();
-  bool isSongChainActive() const { return songChainActive; }
-  uint8_t getSongChainIdx() const { return songChainIdx; }
-  uint8_t getSongChainRepeatCnt() const { return songChainRepeatCnt; }
-  uint8_t getSongChainCount() const { return songChainCount; }
-  const SongChainEntry* getSongChain() const { return songChain; }
+  bool isSongChainActive();
+  uint8_t getSongChainIdx();
+  uint8_t getSongChainRepeatCnt();
+  uint8_t getSongChainCount();
   
   // Playback
   int getCurrentStep();
@@ -236,6 +252,12 @@ private:
   SemaphoreHandle_t patternMutex = nullptr;
   inline void lockPattern()   { if (patternMutex) xSemaphoreTakeRecursive(patternMutex, portMAX_DELAY); }
   inline void unlockPattern() { if (patternMutex) xSemaphoreGiveRecursive(patternMutex); }
+
+  // Short-lived synchronization for transport, mixer, loop and song-chain
+  // state shared by Core0 web handlers and the Core1 sequencer hot path.
+  SemaphoreHandle_t stateMutex = nullptr;
+  inline void lockState()   { if (stateMutex) xSemaphoreTakeRecursive(stateMutex, portMAX_DELAY); }
+  inline void unlockState() { if (stateMutex) xSemaphoreGiveRecursive(stateMutex); }
   
   // volatile: leidos/escritos desde Core1 (loop → update/processStep) y Core0
   // (start/stop/selectPattern/setTempo desde web). Evita que el compilador los
@@ -276,7 +298,7 @@ private:
   uint8_t loopStepCounter[MAX_TRACKS];
   
   void calculateStepInterval();
-  void processStep();
+  void processStep(int pattern, int step);
 };
 
 #endif // SEQUENCER_H

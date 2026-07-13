@@ -377,6 +377,7 @@ typedef struct __attribute__((packed)) {
 #define CMD_DSQ_SET_HUMANIZE     0xDB  // E2: [timingMs(1), velocityAmt(1)] humanization
 #define CMD_CLEAN_TRACK_ACTIVE   0xDC  // [track(1), active(1)] include/exclude clean track from global transport
 #define CMD_CLEAN_TRACK_MUTE     0xDD  // [track(1), muted(1)] mute clean track audio
+#define CMD_DSQ_SET_STEP_NOTES   0xDE  // [pattern,track,step,flags,note0..note3]
 
 // ─── DSQ Step packet (4 bytes) – used in upload track ───
 #define DSQ_PATTERNS   16
@@ -386,7 +387,7 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint8_t  active;       // 1 = step is active
     uint8_t  velocity;     // 1-127 (0 = use track default)
-    uint8_t  noteLenDiv;   // note length divisor: 0=full step, 2=1/2, 4=1/4…
+    uint8_t  noteLenDiv;   // low nibble=length divisor; high nibble=ratchet-1
     uint8_t  probability;  // 0-100 (100 = always fire)
 } DsqStepPkt;
 
@@ -425,6 +426,15 @@ typedef struct __attribute__((packed)) {
     uint8_t  volume;        // volume 0-127
     uint8_t  reserved[2];
 } DsqSetParamLockPayload;
+
+// CMD_DSQ_SET_STEP_NOTES (0xDE)  8 bytes
+typedef struct __attribute__((packed)) {
+    uint8_t pattern;
+    uint8_t track;
+    uint8_t step;
+    uint8_t flags;         // bit0=accent, bit1=slide
+    uint8_t notes[4];      // MIDI notes, 0 = unused/rest
+} DsqSetStepNotesPayload;
 
 // CMD_DSQ_GET_POS response (4 bytes)
 typedef struct __attribute__((packed)) {

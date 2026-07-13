@@ -427,6 +427,9 @@ public:
                          bool cutoffEn, uint16_t cutoffHz,
                          bool reverbEn, uint8_t reverbSend,
                          bool volEn, uint8_t volume);
+    // Store melodic notes and accent/slide flags in a resident Daisy step
+    bool dsqSetStepNotes(uint8_t pattern, uint8_t track, uint8_t step,
+                         uint8_t flags, const uint8_t notes[4]);
     // Query sequencer position (blocking round-trip)
     bool dsqGetPos(uint8_t& outStep, uint8_t& outPattern, bool& outPlaying);
     // Set engine for a track in Daisy sequencer (-1=sampler, 0=808, 1=909, 2=505, 3=303)

@@ -3,10 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>RED808 — Patchbay</title>
+<title>RED808 — PATH</title>
+    <link rel="icon" href="/favicon.ico" type="image/svg+xml">
     <script src="nav.js"></script>
   <link rel="stylesheet" href="theme-vars.css">
 <link rel="stylesheet" href="patchbay.css">
+<link rel="stylesheet" href="ui-2026.css">
 </head>
 <body>
 <div id="patchbay">
@@ -18,7 +20,7 @@
       <button class="pb-transport-btn pb-play" id="pbPlayBtn" onclick="pbTogglePlay()" title="Play/Pause">▶</button>
       <span class="pb-transport-bpm" id="pbBpmDisplay">120</span>
     </div>
-    <h1>RED808 <span>PATCHBAY</span></h1>
+    <h1>RED808 <span>PATH · PATCHBAY</span></h1>
     <button class="pb-hdr-btn" id="pbMenuBtn" onclick="togglePBMenu()" title="Workspace">☰</button>
     <div id="pbMenu" class="pb-menu hidden">
       <div class="pb-menu-title">Workspace</div>
@@ -65,8 +67,8 @@
       </div>
       <div class="pb-fx-group">
         <div class="pb-fx-group-head">
-          <span class="pb-fx-group-title">FILTERS</span>
-          <span class="pb-fx-group-subtitle">Track tone shaping</span>
+          <span class="pb-fx-group-title">FILTER SLOT</span>
+          <span class="pb-fx-group-subtitle">Uno efectivo por pista · gana el último nodo</span>
         </div>
         <div class="pb-fx-group-btns">
           <button class="pb-add-btn" data-fx="lowpass"   onclick="pbAddEffect('lowpass')">LP</button>
@@ -82,17 +84,16 @@
       </div>
       <div class="pb-fx-group">
         <div class="pb-fx-group-head">
-          <span class="pb-fx-group-title">FX</span>
-          <span class="pb-fx-group-subtitle">Dynamics & ambience</span>
+          <span class="pb-fx-group-title">TRACK FX SLOTS</span>
+          <span class="pb-fx-group-subtitle">Procesamiento real disponible en Daisy</span>
         </div>
         <div class="pb-fx-group-btns">
-          <button class="pb-add-btn" data-fx="echo"        onclick="pbAddEffect('echo')">REVERB</button>
-          <button class="pb-add-btn" data-fx="delay"       onclick="pbAddEffect('delay')">DELAY</button>
+          <button class="pb-add-btn" data-fx="delay" title="Slot Echo/Delay por pista" onclick="pbAddEffect('delay')">ECHO</button>
           <button class="pb-add-btn" data-fx="bitcrusher"  onclick="pbAddEffect('bitcrusher')">BITCRUSH</button>
           <button class="pb-add-btn" data-fx="distortion"  onclick="pbAddEffect('distortion')">DIST</button>
           <button class="pb-add-btn" data-fx="compressor"  onclick="pbAddEffect('compressor')">COMP</button>
           <button class="pb-add-btn" data-fx="flanger"     onclick="pbAddEffect('flanger')">FLANGER</button>
-          <button class="pb-add-btn" data-fx="phaser"      onclick="pbAddEffect('phaser')">PHASER</button>
+          <span class="pb-master-note">Phaser y Reverb globales están en POST</span>
         </div>
       </div>
     </div>
@@ -115,10 +116,10 @@
       <div class="pb-macro-actions">
         <button onclick="pbSaveMacroScene()">Guardar escena</button>
         <button onclick="pbLoadMacroScene()">Cargar escena</button>
-        <button id="pbMacroToggleBtn" onclick="pbToggleMacros()" style="background:rgba(105,240,174,0.2);border-color:rgba(105,240,174,0.5);color:#69f0ae;font-weight:800">\ud83d\udd0a MACROS ON</button>
+        <button id="pbMacroToggleBtn" onclick="pbToggleMacros()" style="background:rgba(105,240,174,0.2);border-color:rgba(105,240,174,0.5);color:#69f0ae;font-weight:800">● MACROS ON</button>
       </div>
     </div>
-    <div class="pb-help">DRAG <span class="dot out"></span> TO CONNECT · CLICK WIRE TO SELECT · SUPR/BACKSPACE TO REMOVE · DRAG NODE TO MOVE</div>
+    <div class="pb-help"><b>CONECTA</b> desde <span class="dot out"></span> · doble clic edita · cable + Supr elimina · B activa bypass</div>
   </div>
 
   <!-- Tabs PRE / POST -->
@@ -353,12 +354,14 @@
   <!-- Footer -->
   <footer id="pbFooter">
     <span class="pb-status-dot" id="pbWsStatus"></span>
+    <span id="pbStatus" class="pb-route-status" aria-live="polite">Esperando conexión…</span>
+    <span>·</span>
     <span>NODES: <b id="pbNodeCount">0</b></span>
     <span>—</span>
     <span>CABLES: <b id="pbCableCount">0</b></span>
     <span>—</span>
     <span id="pbFxStatus" style="color:#69f0ae">FX: <b id="pbFxActive">0</b></span>
-    <span class="pb-footer-brand">RED808 / PATCHBAY v1.0</span>
+    <span class="pb-footer-brand">RED808 / PATH · PATCHBAY</span>
   </footer>
 </div>
 <script src="patchbay.js"></script>

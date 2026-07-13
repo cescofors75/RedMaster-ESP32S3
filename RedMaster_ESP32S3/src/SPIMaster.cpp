@@ -2009,6 +2009,19 @@ bool SPIMaster::dsqSetParamLock(uint8_t pattern, uint8_t track, uint8_t step,
     return sendCommand(CMD_DSQ_SET_PARAM_LOCK, &p, sizeof(p));
 }
 
+bool SPIMaster::dsqSetStepNotes(uint8_t pattern, uint8_t track, uint8_t step,
+                                uint8_t flags, const uint8_t notes[4])
+{
+    if (!notes || step >= DSQ_MAX_STEPS) return false;
+    DsqSetStepNotesPayload p{};
+    p.pattern = pattern % DSQ_PATTERNS;
+    p.track = track & 15;
+    p.step = step;
+    p.flags = flags & 0x03;
+    memcpy(p.notes, notes, sizeof(p.notes));
+    return sendCommand(CMD_DSQ_SET_STEP_NOTES, &p, sizeof(p));
+}
+
 bool SPIMaster::dsqGetPos(uint8_t& outStep, uint8_t& outPattern, bool& outPlaying)
 {
     DsqPosResponse r = {};

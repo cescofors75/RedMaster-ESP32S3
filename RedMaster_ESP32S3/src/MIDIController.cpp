@@ -5,6 +5,8 @@ static MIDIController* s_midiInstance = nullptr;
 // volatile: escrito desde el callback USB (contexto USB host) y leido/escrito
 // desde readMidiData()/closeMidiDevice() en la task principal.
 static volatile bool s_transferSubmitted = false;
+static volatile bool s_transferCallbackActive = false;
+static volatile bool s_closingDevice = false;
 // Protege el ring buffer de historial + contadores, que se escriben desde el
 // callback USB (Core0) y se leen desde la task web (AsyncTCP, Core0) — tasks
 // distintas que se pueden expropiar entre si.
@@ -13,6 +15,7 @@ static portMUX_TYPE s_midiHistMux = portMUX_INITIALIZER_UNLOCKED;
 // Transfer callback — se llama cuando USB Host completa una lectura
 static void transferCallback(usb_transfer_t* transfer) {
   if (!transfer || !transfer->context) return;
+  s_transferCallbackActive = true;
   MIDIController* ctrl = static_cast<MIDIController*>(transfer->context);
 
   if (transfer->status == USB_TRANSFER_STATUS_COMPLETED && transfer->actual_num_bytes > 0) {
@@ -20,9 +23,12 @@ static void transferCallback(usb_transfer_t* transfer) {
   }
 
   // Re-submit para lectura continua
-  if (transfer->status != USB_TRANSFER_STATUS_CANCELED &&
+  if (!s_closingDevice &&
+      transfer->status != USB_TRANSFER_STATUS_CANCELED &&
       transfer->status != USB_TRANSFER_STATUS_STALL) {
-    usb_host_transfer_submit(transfer);
+    if (usb_host_transfer_submit(transfer) != ESP_OK) {
+      s_transferSubmitted = false;
+    }
   } else {
     // STALL/CANCELED: el transfer NO vuelve a estar en vuelo. Sin esto el flag
     // quedaba en true para siempre y readMidiData() abortaba en cada llamada,
@@ -30,6 +36,7 @@ static void transferCallback(usb_transfer_t* transfer) {
     // readMidiData() pueda reenviar (recuperacion automatica tras un STALL).
     s_transferSubmitted = false;
   }
+  s_transferCallbackActive = false;
 }
 
 MIDIController::MIDIController() 
@@ -293,13 +300,17 @@ void MIDIController::notifyDeviceChange(bool connected) {
 }
 
 bool MIDIController::openMidiDevice(uint8_t deviceAddress) {
-  s_transferSubmitted = false;
-  
   // Close previous device if exists
   if (deviceHandle) {
     closeMidiDevice();
+    if (deviceHandle) {
+      // Cancellation callback is still pending; opening over the old transfer
+      // would either leak it or make its callback target the new device.
+      return false;
+    }
     vTaskDelay(pdMS_TO_TICKS(100)); // Wait for cleanup
   }
+  s_transferSubmitted = false;
   
   // Open the device
   esp_err_t err = usb_host_device_open(clientHandle, deviceAddress, &deviceHandle);
@@ -451,8 +462,29 @@ bool MIDIController::openMidiDevice(uint8_t deviceAddress) {
 }
 
 void MIDIController::closeMidiDevice() {
+  // A submitted transfer owns midiTransfer until its CANCELLED callback has
+  // been delivered. Halt+flush cancels queued/in-flight work; then drain client
+  // events before freeing the object. Freeing first was a use-after-free when a
+  // cable was removed while the callback was still running/resubmitting.
+  if (midiTransfer) s_closingDevice = true;
+  if (midiTransfer && deviceHandle && midiEndpointAddress != 0 && s_transferSubmitted) {
+    usb_host_endpoint_halt(deviceHandle, midiEndpointAddress);
+    usb_host_endpoint_flush(deviceHandle, midiEndpointAddress);
+    const uint32_t deadline = millis() + 250;
+    while ((s_transferSubmitted || s_transferCallbackActive) &&
+           (int32_t)(deadline - millis()) > 0) {
+      usb_host_client_handle_events(clientHandle, pdMS_TO_TICKS(5));
+      vTaskDelay(pdMS_TO_TICKS(1));
+    }
+  }
+
+  // If the host did not deliver cancellation, do not free memory still owned
+  // by USB. Keep it for the next close attempt; this is safer than a UAF.
+  if (s_transferSubmitted || s_transferCallbackActive) {
+    return;
+  }
   s_transferSubmitted = false;
-  
+
   if (midiTransfer) {
     usb_host_transfer_free(midiTransfer);
     midiTransfer = nullptr;
@@ -473,6 +505,7 @@ void MIDIController::closeMidiDevice() {
   
   midiEndpointAddress = 0;
   midiMaxPacketSize = 0;
+  s_closingDevice = false;
   
 }
 

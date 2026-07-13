@@ -7,6 +7,7 @@
 #include "SPIMaster.h"
 #include "SampleManager.h"
 #include "Sequencer.h"
+#include "PatternBank.h"
 #include "WebInterface.h"
 #include "MIDIController.h"
 #include "SysLog.h"
@@ -283,10 +284,31 @@ static volatile int8_t _pendingDsqUpload = -1;   // pattern index, -1 = idle
 static volatile bool   _pendingDsqSelect = false;
 static volatile int8_t _pendingDsqSelectOnly = -1; // pattern index for select-only path
 static volatile bool   _pendingDsqPlay = false;    // arrancar Daisy tras upload (ordenado)
+static int16_t _daisySlotMasterPattern[DSQ_PATTERNS];
+static uint32_t _daisySlotLastUse[DSQ_PATTERNS] = {};
+static uint32_t _daisyResidentClock = 0;
+static int8_t _activeDaisySlot = -1;
+
+static int clampMasterPattern(int pattern) {
+    return constrain(pattern, 0, MAX_PATTERNS - 1);
+}
+
+int dsqGetResidentSlot(int masterPattern) {
+    masterPattern = clampMasterPattern(masterPattern);
+    int slot = -1;
+    portENTER_CRITICAL(&_pendingDsqMux);
+    for (int i = 0; i < DSQ_PATTERNS; ++i) {
+        if (_daisySlotMasterPattern[i] == masterPattern) {
+            slot = i;
+            break;
+        }
+    }
+    portEXIT_CRITICAL(&_pendingDsqMux);
+    return slot;
+}
 
 void dsqUploadPatternDeferred(int pattern) {
-    if (pattern < 0) pattern = 0;
-    pattern %= DSQ_PATTERNS;
+    pattern = clampMasterPattern(pattern);
     portENTER_CRITICAL(&_pendingDsqMux);
     _pendingDsqSelect = true;
     _pendingDsqUpload = (int8_t)pattern;
@@ -296,8 +318,7 @@ void dsqUploadPatternDeferred(int pattern) {
 // Solo selecciona patrón en Daisy (1 cmd SPI). NO reuploadea steps.
 // Usar cuando los patrones ya están en Daisy y solo queremos cambiar el activo.
 void dsqSelectPatternDeferred(int pattern) {
-    if (pattern < 0) pattern = 0;
-    pattern %= DSQ_PATTERNS;
+    pattern = clampMasterPattern(pattern);
     portENTER_CRITICAL(&_pendingDsqMux);
     _pendingDsqSelectOnly = (int8_t)pattern;
     portEXIT_CRITICAL(&_pendingDsqMux);
@@ -305,8 +326,7 @@ void dsqSelectPatternDeferred(int pattern) {
 
 // Sube patrón y al terminar arranca Daisy. Garantiza orden upload → select → play.
 void dsqUploadAndPlayDeferred(int pattern) {
-    if (pattern < 0) pattern = 0;
-    pattern %= DSQ_PATTERNS;
+    pattern = clampMasterPattern(pattern);
     portENTER_CRITICAL(&_pendingDsqMux);
     _pendingDsqSelect = true;
     _pendingDsqUpload = (int8_t)pattern;
@@ -314,13 +334,11 @@ void dsqUploadAndPlayDeferred(int pattern) {
     portEXIT_CRITICAL(&_pendingDsqMux);
 }
 
-// Número real de patrones inline definidos en setup (HIP HOP, TECHNO, DnB,
-// BREAK, HOUSE, TRAP). Subir sólo estos al boot evita saturar la SPI con
-// 10 patrones vacíos y reduce el riesgo de perder comandos a la Daisy.
-#define DSQ_PATTERNS_INLINE 6
-
-// Helper: convierte un patrón del Sequencer ESP32 → DsqStepPkt y lo sube a Daisy
-void dsqUploadPattern(int pattern) {
+// Convierte un patrón de la biblioteca Master en un slot físico de la Daisy.
+// Nunca se entrega un índice Master directamente al protocolo de 16 slots.
+static void dsqUploadPatternToSlot(int masterPattern, int daisySlot) {
+    masterPattern = clampMasterPattern(masterPattern);
+    daisySlot = constrain(daisySlot, 0, DSQ_PATTERNS - 1);
     const int stepCount = sequencer.getPatternLength();  // longitud global
     const int clampedLen = (stepCount >= 64) ? 64 : (stepCount >= 32) ? 32 : 16;
     DsqStepPkt pkt[DSQ_MAX_STEPS];
@@ -333,20 +351,37 @@ void dsqUploadPattern(int pattern) {
         // Copia consistente de la pista bajo un solo lock. Antes se leia con
         // getters sin lock mientras la web editaba el patron, produciendo
         // uploads desgarrados (sintoma: pistas/patrones parciales).
-        sequencer.snapshotTrackForUpload(pattern, trk, clampedLen, snap);
+        sequencer.snapshotTrackForUpload(masterPattern, trk, clampedLen, snap);
         for (int s = 0; s < clampedLen; s++) {
             pkt[s].active      = snap[s].active ? 1 : 0;
             pkt[s].velocity    = snap[s].velocity;
-            pkt[s].noteLenDiv  = snap[s].noteLenDiv;
+            const uint8_t length = snap[s].noteLenDiv & 0x0F;
+            const uint8_t ratchet = constrain(snap[s].ratchet, 1, 4);
+            pkt[s].noteLenDiv  = length | ((ratchet - 1) << 4);
             pkt[s].probability = snap[s].probability;
         }
-        if (!spiMaster.dsqUploadTrack((uint8_t)pattern, (uint8_t)trk, pkt, (uint8_t)clampedLen)) {
-            Serial.printf("[DSQ] upload track %d pattern %d failed\n", trk, pattern);
+        if (!spiMaster.dsqUploadTrack((uint8_t)daisySlot, (uint8_t)trk, pkt, (uint8_t)clampedLen)) {
+            Serial.printf("[DSQ] upload track %d master %d -> slot %d failed\n", trk, masterPattern, daisySlot);
         }
         // 8 ms entre tracks: deja a la Daisy procesar el packet anterior
         // y vaciar su SPI RX ring antes del siguiente. Evita spiRingDrops y
         // tracks parciales (síntoma: patrones con pistas vacías).
         vTaskDelay(pdMS_TO_TICKS(8));
+        // Las notas/flags melódicas viajan aparte para conservar el paquete
+        // histórico de 4 bytes. Daisy limpia las notas al recibir la pista;
+        // solo enviamos los steps que realmente contienen información musical.
+        for (int s = 0; s < clampedLen; s++) {
+            bool hasNotes = false;
+            for (int v = 0; v < MELODY_STEP_VOICES; v++) {
+                if (snap[s].noteVoices[v] != 0) { hasNotes = true; break; }
+            }
+            if (hasNotes || snap[s].flags != 0) {
+                spiMaster.dsqSetStepNotes((uint8_t)daisySlot, (uint8_t)trk,
+                                          (uint8_t)s, snap[s].flags,
+                                          snap[s].noteVoices);
+                vTaskDelay(pdMS_TO_TICKS(1));
+            }
+        }
         // Param locks: usar las flags 'enabled' reales del snapshot. Antes se
         // inferia del valor (ch!=1000, rv!=0, vl!=0), lo que descartaba un
         // cutoff legitimo de 1000 Hz o un volumen 0 (bug M15).
@@ -359,7 +394,7 @@ void dsqUploadPattern(int pattern) {
             uint8_t  vl = snap[s].volume;
             if (ce || re || ve) {
                 spiMaster.dsqSetParamLock(
-                    (uint8_t)pattern, (uint8_t)trk, (uint8_t)s,
+                    (uint8_t)daisySlot, (uint8_t)trk, (uint8_t)s,
                     ce, ch, re, rv, ve, vl
                 );
             }
@@ -367,21 +402,88 @@ void dsqUploadPattern(int pattern) {
     }
 }
 
+static int chooseDaisySlot(int masterPattern) {
+    const int resident = dsqGetResidentSlot(masterPattern);
+    if (resident >= 0) return resident;
+    for (int i = 0; i < DSQ_PATTERNS; ++i) {
+        if (_daisySlotMasterPattern[i] < 0) return i;
+    }
+    int oldestSlot = (_activeDaisySlot == 0) ? 1 : 0;
+    for (int i = 0; i < DSQ_PATTERNS; ++i) {
+        if (i == _activeDaisySlot) continue;
+        if (_daisySlotLastUse[i] < _daisySlotLastUse[oldestSlot]) oldestSlot = i;
+    }
+    return oldestSlot;
+}
+
+static int ensurePatternResident(int masterPattern, bool forceUpload) {
+    masterPattern = clampMasterPattern(masterPattern);
+    int slot = dsqGetResidentSlot(masterPattern);
+    if (slot < 0) slot = chooseDaisySlot(masterPattern);
+    if (forceUpload || _daisySlotMasterPattern[slot] != masterPattern) {
+        dsqUploadPatternToSlot(masterPattern, slot);
+        portENTER_CRITICAL(&_pendingDsqMux);
+        _daisySlotMasterPattern[slot] = masterPattern;
+        portEXIT_CRITICAL(&_pendingDsqMux);
+    }
+    _daisySlotLastUse[slot] = ++_daisyResidentClock;
+    return slot;
+}
+
+static void applyPatternPerformance(int masterPattern) {
+    PatternMetadata metadata{};
+    if (!sequencer.getPatternMetadata(masterPattern, metadata)) return;
+    if (masterPattern < BUILTIN_PATTERN_COUNT) {
+        sequencer.setTempo((float)metadata.recommendedBpm);
+        spiMaster.setTempo((float)metadata.recommendedBpm);
+    }
+    sequencer.setHumanize(metadata.humanizeTimingMs, metadata.humanizeVelocity);
+    spiMaster.dsqSetSwing(metadata.swing);
+    spiMaster.dsqSetHumanize(metadata.humanizeTimingMs, metadata.humanizeVelocity);
+
+    BuiltinPatternSoundProfile sound{};
+    if (getBuiltinPatternSoundProfile(masterPattern, sound)) {
+        for (int engine = 0; engine < BUILTIN_ENGINE_COUNT; engine++) {
+            spiMaster.synthPreset((uint8_t)engine, sound.presets[engine]);
+        }
+        for (int track = 0; track < MAX_TRACKS; track++) {
+            setTrackSynthEngine(track, sound.engines[track]);
+            spiMaster.dsqSetTrackEngine((uint8_t)track, sound.engines[track]);
+            spiMaster.dsqSetMute((uint8_t)track, false);
+        }
+    }
+}
+
+// API histórica: ahora fuerza la actualización del slot residente correcto.
+void dsqUploadPattern(int masterPattern) {
+    ensurePatternResident(masterPattern, true);
+}
+
 // CORE 1: Sequencer UI + SPI Master
 // El secuenciador corre en Daisy Seed; aquí solo actualizamos estado UI y LFO.
 void spiAudioTask(void *pvParameters) {
     esp_task_wdt_add(NULL);  // subscribe to TWDT
 
-    // Subir sólo los patrones inline reales (no los 16 slots completos).
+    for (int slot = 0; slot < DSQ_PATTERNS; ++slot) {
+        _daisySlotMasterPattern[slot] = -1;
+        _daisySlotLastUse[slot] = 0;
+    }
+
+    // El banco profesional ocupa los 16 slots residentes al arrancar.
     // 20ms de gap entre patrones para que la Daisy procese cada lote
     // antes de empezar el siguiente — evita que comandos posteriores caigan
     // al vacío y dejen slots con datos parciales (sintoma: patrones que no suenan).
-    for (int pat = 0; pat < DSQ_PATTERNS_INLINE; pat++) {
-        dsqUploadPattern(pat);
+    for (int pat = 0; pat < BUILTIN_PATTERN_COUNT; pat++) {
+        dsqUploadPatternToSlot(pat, pat);
+        _daisySlotMasterPattern[pat] = pat;
+        _daisySlotLastUse[pat] = ++_daisyResidentClock;
         vTaskDelay(pdMS_TO_TICKS(40));
     }
     // Seleccionar patrón activo en Daisy
-    spiMaster.dsqSelectPattern((uint8_t)sequencer.getCurrentPattern());
+    const int initialMasterPattern = sequencer.getCurrentPattern();
+    _activeDaisySlot = ensurePatternResident(initialMasterPattern, false);
+    spiMaster.dsqSelectPattern((uint8_t)_activeDaisySlot);
+    applyPatternPerformance(initialMasterPattern);
     // Sync tempo inicial a secuenciador Daisy
     spiMaster.setTempo((float)sequencer.getTempo());
 
@@ -415,9 +517,11 @@ void spiAudioTask(void *pvParameters) {
         }
         portEXIT_CRITICAL(&_pendingDsqMux);
         if (pat >= 0) {
-            dsqUploadPattern(pat);
+            const int slot = ensurePatternResident(pat, true);
             if (selectAfterUpload) {
-                spiMaster.dsqSelectPattern((uint8_t)pat);
+                spiMaster.dsqSelectPattern((uint8_t)slot);
+                _activeDaisySlot = slot;
+                applyPatternPerformance(pat);
             }
             if (playAfterUpload) {
                 spiMaster.dsqControl(1);  // PLAY al final, en orden garantizado
@@ -431,7 +535,10 @@ void spiAudioTask(void *pvParameters) {
         _pendingDsqSelectOnly = -1;
         portEXIT_CRITICAL(&_pendingDsqMux);
         if (selOnly >= 0) {
-            spiMaster.dsqSelectPattern((uint8_t)selOnly);
+            const int slot = ensurePatternResident(selOnly, false);
+            spiMaster.dsqSelectPattern((uint8_t)slot);
+            _activeDaisySlot = slot;
+            applyPatternPerformance(selOnly);
         }
 
         sequencer.update();   // Mantiene internos del secuenciador (beat UI, song mode)
@@ -807,54 +914,10 @@ void setup() {
     }
 
     // 4. Sequencer Setup
-    // El secuenciador de la Daisy dispara SAMPLES.
-    // El ESP32 se encarga de disparar SYNTH TRIGGERS en paralelo.
-
-    // Step callback: cuando un track usa synth engine, enviar synthTrigger por SPI
-    sequencer.setStepCallback([](int track, uint8_t velocity, uint8_t trackVolume, uint32_t noteLenSamples) {
-        int8_t engine = getTrackSynthEngine(track);
-        if (engine < 0) return;  // sampler → la Daisy ya lo dispara internamente
-        // Synth engine: el ESP32 envía el trigger por SPI
-        float scaled = (velocity / 127.0f) * (trackVolume / 100.0f);
-        uint8_t synthVel = (uint8_t)constrain((int)roundf(scaled * 127.0f), 1, 127);
-        // Melodic engines (303/WTOSC/SH101/FM2Op): use per-step note if available
-        if (engine >= 3) {
-            int pat = sequencer.getCurrentPattern();
-            int step = sequencer.getCurrentStep();
-            uint8_t flags = sequencer.getStepFlags(pat, track, step);
-            bool accent = (flags & 0x01) != 0;
-            bool slide  = (flags & 0x02) != 0;
-            bool anyNote = false;
-            // Reclamo atomico del hold previo (compite con el comando stop de
-            // la web, que llama releaseSequencerMelodicHolds desde AsyncTCP).
-            portENTER_CRITICAL(&gPadNoteMux);
-            bool prevHeld = gSeqMelodicHeld[track];
-            int8_t prevEngine = gSeqMelodicHeldEngine[track];
-            if (prevHeld) {
-                gSeqMelodicHeld[track] = false;
-                gSeqMelodicHeldEngine[track] = -1;
-            }
-            portEXIT_CRITICAL(&gPadNoteMux);
-            if (prevHeld) {
-                if (prevEngine == 3) spiMaster.synth303NoteOff();
-                else if (prevEngine >= 4 && prevEngine <= 8) spiMaster.synthNoteOff((uint8_t)prevEngine, (uint8_t)track);
-            }
-            for (int voice = 0; voice < MELODY_STEP_VOICES; voice++) {
-                uint8_t note = sequencer.getStepNoteVoice(pat, track, step, voice);
-                if (note == 0) continue;
-                anyNote = true;
-                spiMaster.synthNoteOnEx((uint8_t)engine, note, synthVel, accent, slide);
-            }
-            if (!anyNote) return;
-            portENTER_CRITICAL(&gPadNoteMux);
-            gSeqMelodicHeld[track] = true;
-            gSeqMelodicHeldEngine[track] = engine;
-            portEXIT_CRITICAL(&gPadNoteMux);
-        } else {
-            // Percussion engines (808/909/505): trigger by instrument
-            spiMaster.synthTrigger((uint8_t)engine, (uint8_t)track, synthVel);
-        }
-    });
+    // Daisy es la única autoridad temporal: dispara samples y sintetizadores
+    // dentro del callback de audio. Repetirlos desde este callback del Master
+    // producía ataques dobles, flams y notas fuera de fase.
+    sequencer.setStepCallback(nullptr);
 
     // Callback para sincronización en tiempo real con la web
     sequencer.setStepChangeCallback([](int newStep) {
@@ -863,300 +926,15 @@ void setup() {
     });
     // Callback para cambio de patrón en song mode
     sequencer.setPatternChangeCallback([](int newPattern, int songLength) {
+        dsqSelectPatternDeferred(newPattern);
         webInterface.broadcastSongPattern(newPattern, songLength);
     });
     sequencer.setTempo(110); // BPM inicial
     spiMaster.setTempo(110.0f); // Sync BPM to Daisy transport
     applyProfessionalMixBaseline();
     
-    // === PATRÓN 0: HIP HOP BOOM BAP (16 tracks) ===
-    sequencer.selectPattern(0);
-    sequencer.setStep(0, 0, true);   // BD: Kick en 1
-    sequencer.setStep(0, 3, true);   // BD: Kick ghost
-    sequencer.setStep(0, 10, true);  // BD: Kick sincopado
-    sequencer.setStep(1, 4, true);   // SD: Snare en 2
-    sequencer.setStep(1, 12, true);  // SD: Snare en 4
-    for(int i=0; i<16; i+=2) sequencer.setStep(2, i, true); // CH: patrón cerrado
-    sequencer.setStep(3, 6, true);   // OH: para swing
-    sequencer.setStep(3, 14, true);  // OH: al final
-    sequencer.setStep(5, 4, true);   // CP: Clap doblando snare
-    sequencer.setStep(5, 12, true);
-    sequencer.setStep(6, 7, true);   // RS: Rimshot fill
-    sequencer.setStep(7, 5, true);   // CB: Cowbell groove
-    sequencer.setStep(7, 13, true);  // CB: Cowbell extra
-    sequencer.setStep(4, 15, true);  // CY: Cymbal crash final
-    // Extra percusión para ocupar más tracks (8-15)
-    sequencer.setStep(8, 2, true);   // LT
-    sequencer.setStep(8, 11, true);
-    sequencer.setStep(9, 6, true);   // MT
-    sequencer.setStep(10, 14, true); // HT
-    sequencer.setStep(11, 1, true);  // MA
-    sequencer.setStep(11, 9, true);
-    sequencer.setStep(12, 3, true);  // CL
-    sequencer.setStep(12, 15, true);
-    sequencer.setStep(13, 10, true); // HC
-    sequencer.setStep(14, 12, true); // MC
-    sequencer.setStep(15, 0, true);  // LC
-    
-    // === PATRÓN 1: TECHNO DETROIT (16 tracks) ===
-    sequencer.selectPattern(1);
-    for(int i=0; i<16; i+=4) sequencer.setStep(0, i, true); // BD: Four on the floor
-    sequencer.setStep(1, 4, true);   // SD: Snare en 2
-    sequencer.setStep(1, 12, true);  // SD: Snare en 4
-    for(int i=0; i<16; i++) sequencer.setStep(2, i, true);  // CH: 16th hi-hats
-    sequencer.setStep(3, 8, true);   // OH: en medio
-    sequencer.setStep(5, 4, true);   // CP: Clap capa snare
-    sequencer.setStep(5, 8, true);
-    sequencer.setStep(5, 12, true);
-    sequencer.setStep(6, 7, true);   // RS: Rim accent
-    sequencer.setStep(6, 11, true);
-    sequencer.setStep(6, 15, true);
-    sequencer.setStep(12, 3, true);  // CL: Claves offbeat
-    sequencer.setStep(12, 7, true);
-    sequencer.setStep(12, 11, true);
-    sequencer.setStep(12, 15, true);
-    sequencer.setStep(4, 0, true);   // CY: Cymbal intro
-    sequencer.setStep(4, 8, true);   // CY: medio
-    // Toms/congas para expandir instrumentación completa
-    sequencer.setStep(8, 8, true);   // LT
-    sequencer.setStep(9, 10, true);  // MT
-    sequencer.setStep(10, 14, true); // HT
-    sequencer.setStep(11, 3, true);  // MA
-    sequencer.setStep(11, 11, true);
-    sequencer.setStep(13, 6, true);  // HC
-    sequencer.setStep(14, 13, true); // MC
-    sequencer.setStep(15, 15, true); // LC
-    sequencer.setStepCutoffLock(1, 0, true, 340);
-    sequencer.setStepCutoffLock(1, 4, true, 950);
-    sequencer.setStepCutoffLock(1, 8, true, 2600);
-    sequencer.setStepCutoffLock(1, 12, true, 7000);
-    sequencer.setStepReverbSendLock(1, 4, true, 35);
-    sequencer.setStepReverbSendLock(1, 12, true, 55);
-    sequencer.setStepVolumeLock(1, 4, true, 112);
-    sequencer.setStepVolumeLock(1, 12, true, 120);
-    
-    // === PATRÓN 2: DRUM & BASS (16 tracks) ===
-    sequencer.selectPattern(2);
-    sequencer.setStep(0, 0, true);   // BD: Kick doble
-    sequencer.setStep(0, 2, true);
-    sequencer.setStep(0, 10, true);  // BD: Kick sincopado
-    sequencer.setStep(1, 4, true);   // SD: Snare break
-    sequencer.setStep(1, 7, true);   // SD: Snare ghost
-    sequencer.setStep(1, 10, true);
-    sequencer.setStep(1, 12, true);
-    for(int i=0; i<16; i++) sequencer.setStep(2, i, true);  // CH: constante
-    sequencer.setStep(3, 6, true);   // OH: textura
-    sequencer.setStep(3, 10, true);
-    sequencer.setStep(3, 14, true);
-    sequencer.setStep(5, 4, true);   // CP: Clap layers
-    sequencer.setStep(5, 8, true);
-    sequencer.setStep(5, 12, true);
-    sequencer.setStep(4, 0, true);   // CY: Cymbal intro
-    sequencer.setStep(4, 8, true);
-    sequencer.setStep(4, 15, true);
-    // Más capas para 16 tracks
-    sequencer.setStep(7, 3, true);   // CB
-    sequencer.setStep(7, 11, true);
-    sequencer.setStep(8, 5, true);   // LT
-    sequencer.setStep(9, 9, true);   // MT
-    sequencer.setStep(10, 13, true); // HT
-    sequencer.setStep(11, 2, true);  // MA
-    sequencer.setStep(11, 6, true);
-    sequencer.setStep(12, 1, true);  // CL
-    sequencer.setStep(12, 9, true);
-    sequencer.setStep(13, 7, true);  // HC
-    sequencer.setStep(14, 14, true); // MC
-    sequencer.setStep(15, 12, true); // LC
-    
-    // === PATRÓN 3: LATIN PERCUSSION (16 tracks) ===
-    sequencer.selectPattern(3);
-    sequencer.setStep(0, 0, true);   // BD: Kick
-    sequencer.setStep(0, 8, true);
-    sequencer.setStep(1, 4, true);   // SD: Snare
-    sequencer.setStep(1, 12, true);
-    sequencer.setStep(2, 0, true);   // CH: Hi-hat pattern
-    sequencer.setStep(2, 2, true);
-    sequencer.setStep(2, 4, true);
-    sequencer.setStep(2, 6, true);
-    sequencer.setStep(2, 8, true);
-    sequencer.setStep(2, 10, true);
-    sequencer.setStep(2, 12, true);
-    sequencer.setStep(2, 14, true);
-    sequencer.setStep(7, 1, true);   // CB: Cowbell clave
-    sequencer.setStep(7, 5, true);
-    sequencer.setStep(7, 9, true);
-    sequencer.setStep(7, 13, true);
-    sequencer.setStep(12, 0, true);  // CL: Claves pattern
-    sequencer.setStep(12, 3, true);
-    sequencer.setStep(12, 6, true);
-    sequencer.setStep(12, 10, true);
-    sequencer.setStep(13, 2, true);  // HC: Hi Conga
-    sequencer.setStep(13, 7, true);
-    sequencer.setStep(13, 11, true);
-    sequencer.setStep(14, 4, true);  // MC: Mid Conga
-    sequencer.setStep(14, 9, true);
-    sequencer.setStep(14, 14, true);
-    sequencer.setStep(15, 0, true);  // LC: Low Conga
-    sequencer.setStep(15, 6, true);
-    sequencer.setStep(15, 12, true);
-    sequencer.setStep(11, 1, true);  // MA: Maracas shuffle
-    sequencer.setStep(11, 3, true);
-    sequencer.setStep(11, 5, true);
-    sequencer.setStep(11, 7, true);
-    sequencer.setStep(11, 9, true);
-    sequencer.setStep(11, 11, true);
-    sequencer.setStep(11, 13, true);
-    sequencer.setStep(11, 15, true);
-    // Refuerzo de kit completo (cymbal/toms)
-    sequencer.setStep(3, 15, true);  // OH cierre
-    sequencer.setStep(4, 0, true);   // CY
-    sequencer.setStep(4, 8, true);
-    sequencer.setStep(8, 4, true);   // LT
-    sequencer.setStep(9, 8, true);   // MT
-    sequencer.setStep(10, 12, true); // HT
-    
-    // === PATRÓN 4: CHICAGO HOUSE (16 tracks) ===
-    sequencer.selectPattern(4);
-    for(int i=0; i<16; i+=4) sequencer.setStep(0, i, true); // BD: Four on floor
-    sequencer.setStep(1, 4, true);   // SD: Snare 2 y 4
-    sequencer.setStep(1, 12, true);
-    for(int i=2; i<16; i+=4) sequencer.setStep(2, i, true); // CH: offbeat
-    sequencer.setStep(3, 6, true);   // OH: sincopado
-    sequencer.setStep(3, 10, true);
-    sequencer.setStep(3, 14, true);
-    sequencer.setStep(5, 4, true);   // CP: Clap dobla snare
-    sequencer.setStep(5, 8, true);
-    sequencer.setStep(5, 12, true);
-    sequencer.setStep(6, 1, true);   // RS: Rim house
-    sequencer.setStep(6, 5, true);
-    sequencer.setStep(6, 9, true);
-    sequencer.setStep(6, 13, true);
-    sequencer.setStep(4, 0, true);   // CY: Cymbal intro
-    sequencer.setStep(4, 8, true);
-    // Añadir instrumentos restantes para full groove 16-track
-    sequencer.setStep(7, 3, true);   // CB
-    sequencer.setStep(7, 11, true);
-    sequencer.setStep(8, 6, true);   // LT
-    sequencer.setStep(9, 10, true);  // MT
-    sequencer.setStep(10, 14, true); // HT
-    sequencer.setStep(11, 1, true);  // MA
-    sequencer.setStep(11, 5, true);
-    sequencer.setStep(12, 7, true);  // CL
-    sequencer.setStep(13, 9, true);  // HC
-    sequencer.setStep(14, 13, true); // MC
-    sequencer.setStep(15, 15, true); // LC
+    initializeProfessionalPatternBank(sequencer);
 
-    // === PATRÓN 5: CINEMATIC HYBRID (16 tracks) ===
-    sequencer.selectPattern(5);
-    sequencer.setStep(0, 0, true);
-    sequencer.setStep(0, 7, true);
-    sequencer.setStep(0, 10, true);
-    sequencer.setStep(0, 14, true);
-    sequencer.setStep(1, 4, true);
-    sequencer.setStep(1, 11, true);
-    sequencer.setStep(1, 12, true);
-    for (int i = 0; i < 16; i += 2) sequencer.setStep(2, i, true);
-    sequencer.setStep(2, 13, true);
-    sequencer.setStep(2, 15, true);
-    sequencer.setStep(3, 3, true);
-    sequencer.setStep(3, 9, true);
-    sequencer.setStep(3, 15, true);
-    sequencer.setStep(4, 0, true);
-    sequencer.setStep(4, 15, true);
-    sequencer.setStep(5, 4, true);
-    sequencer.setStep(5, 12, true);
-    sequencer.setStep(6, 6, true);
-    sequencer.setStep(6, 14, true);
-    sequencer.setStep(7, 5, true);
-    sequencer.setStep(7, 13, true);
-    sequencer.setStep(8, 2, true);
-    sequencer.setStep(8, 10, true);
-    sequencer.setStep(9, 8, true);
-    sequencer.setStep(10, 12, true);
-    sequencer.setStep(11, 1, true);
-    sequencer.setStep(11, 5, true);
-    sequencer.setStep(11, 9, true);
-    sequencer.setStep(11, 13, true);
-    sequencer.setStep(12, 7, true);
-    sequencer.setStep(12, 15, true);
-    sequencer.setStep(13, 3, true);
-    sequencer.setStep(13, 11, true);
-    sequencer.setStep(14, 6, true);
-    sequencer.setStep(14, 14, true);
-    sequencer.setStep(15, 0, true);
-    sequencer.setStep(15, 8, true);
-    // Professional transitions through automation locks
-    sequencer.setStepCutoffLock(0, 0, true, 320);
-    sequencer.setStepCutoffLock(0, 8, true, 1400);
-    sequencer.setStepCutoffLock(0, 12, true, 4200);
-    sequencer.setStepCutoffLock(0, 15, true, 9000);
-    sequencer.setStepReverbSendLock(1, 4, true, 22);
-    sequencer.setStepReverbSendLock(1, 12, true, 45);
-    sequencer.setStepReverbSendLock(4, 0, true, 60);
-    sequencer.setStepReverbSendLock(4, 15, true, 70);
-    sequencer.setStepVolumeLock(2, 0, true, 105);
-    sequencer.setStepVolumeLock(2, 8, true, 118);
-    sequencer.setStepVolumeLock(2, 15, true, 112);
-
-    // ── DINÁMICAS DE VELOCIDAD: ghost notes, acentos, humanización ──────────
-    // Patrón 0: Hip Hop Boom Bap — groove con ghosts
-    sequencer.setStepVelocity(0, 0, 0, 120);   // BD: fuerte
-    sequencer.setStepVelocity(0, 0, 3, 75);    // BD: ghost suave
-    sequencer.setStepVelocity(0, 0, 10, 100);  // BD: sincopado medio
-    sequencer.setStepVelocity(0, 1, 4, 115);   // SD: accent
-    sequencer.setStepVelocity(0, 1, 12, 110);  // SD
-    // CH: alternar acentos 8ths
-    for(int i=0; i<16; i+=2) sequencer.setStepVelocity(0, 2, i, (i%4==0) ? 100 : 70);
-    sequencer.setStepVelocity(0, 3, 6, 85);    // OH
-    sequencer.setStepVelocity(0, 3, 14, 75);   // OH suave
-    sequencer.setStepVelocity(0, 5, 4, 105);   // CP
-    sequencer.setStepVelocity(0, 5, 12, 100);  // CP
-    sequencer.setStepVelocity(0, 6, 7, 80);    // RS ghost
-    sequencer.setStepVelocity(0, 7, 5, 70);    // CB suave
-    sequencer.setStepVelocity(0, 7, 13, 65);   // CB ghost
-
-    // Patrón 1: Techno — mecánico pero con groove sutil
-    sequencer.setStepVelocity(1, 0, 0, 127);   // BD: fuerte
-    sequencer.setStepVelocity(1, 0, 4, 120);
-    sequencer.setStepVelocity(1, 0, 8, 125);
-    sequencer.setStepVelocity(1, 0, 12, 118);
-    // CH 16ths: patrón de acentos dinámico
-    for(int i=0; i<16; i++) sequencer.setStepVelocity(1, 2, i, (i%4==0) ? 110 : (i%2==0) ? 85 : 60);
-
-    // Patrón 2: DnB — agresivo con ghosts
-    sequencer.setStepVelocity(2, 0, 0, 127);   // BD: máximo impacto
-    sequencer.setStepVelocity(2, 0, 2, 100);   // BD: segundo golpe más suave
-    sequencer.setStepVelocity(2, 0, 10, 110);
-    sequencer.setStepVelocity(2, 1, 4, 120);   // SD
-    sequencer.setStepVelocity(2, 1, 7, 65);    // SD: ghost note
-    sequencer.setStepVelocity(2, 1, 10, 90);
-    sequencer.setStepVelocity(2, 1, 12, 115);
-    // CH: rápido con dinámicas
-    for(int i=0; i<16; i++) sequencer.setStepVelocity(2, 2, i, (i%4==0) ? 100 : (i%2==0) ? 80 : 55);
-
-    // Patrón 3: Latin — orgánico con acentos de clave
-    sequencer.setStepVelocity(3, 7, 1, 90);    // CB: clave
-    sequencer.setStepVelocity(3, 7, 5, 100);
-    sequencer.setStepVelocity(3, 7, 9, 95);
-    sequencer.setStepVelocity(3, 7, 13, 85);
-    sequencer.setStepVelocity(3, 12, 0, 110);  // CL: acentuada
-    sequencer.setStepVelocity(3, 12, 3, 95);
-    sequencer.setStepVelocity(3, 12, 6, 100);
-    sequencer.setStepVelocity(3, 12, 10, 90);
-    // Congas: dinámica natural
-    sequencer.setStepVelocity(3, 13, 2, 95);   // HC
-    sequencer.setStepVelocity(3, 13, 7, 110);  // HC: acento
-    sequencer.setStepVelocity(3, 13, 11, 85);
-    sequencer.setStepVelocity(3, 14, 4, 90);   // MC
-    sequencer.setStepVelocity(3, 14, 9, 105);
-    sequencer.setStepVelocity(3, 14, 14, 80);
-    sequencer.setStepVelocity(3, 15, 0, 100);  // LC
-    sequencer.setStepVelocity(3, 15, 6, 110);  // LC: acento
-    sequencer.setStepVelocity(3, 15, 12, 95);
-    // Maracas: shake alternado
-    for(int i=1; i<16; i+=2) sequencer.setStepVelocity(3, 11, i, (i%4==1) ? 80 : 55);
-
-    sequencer.selectPattern(0); // Empezar con Hip Hop
     // sequencer.start(); // DISABLED: User must press PLAY
 
     // 5. WiFi: STA (casa) + AP (RED808 fallback)
@@ -1171,8 +949,8 @@ void setup() {
         delay(500);
     }
 
-        // Pattern bank autoload disabled: using built-in 6 sampler patterns (HIP HOP, TECHNO, DnB, BREAK, HOUSE, TRAP)
-        syslog("BOOT", "Pattern bank autoload disabled: using built-in 6 sampler patterns");
+        // El banco profesional integrado es la fuente segura si no se carga una biblioteca desde LittleFS.
+        syslog("BOOT", "Professional 16-pattern bank ready (Master library -> Daisy resident cache)");
 
     webInterface.setMIDIController(&midiController);
     midiController.setMessageCallback([](const MIDIMessage& msg) {
@@ -1260,9 +1038,9 @@ void setup() {
                 break;
             case BTN_FUNC_NEXT_PATTERN:
             case BTN_FUNC_NEXT_PAT_PLAY: {
-                int next = (sequencer.getCurrentPattern() + 1) % DSQ_PATTERNS;
+                int next = (sequencer.getCurrentPattern() + 1) % BUILTIN_PATTERN_COUNT;
                 sequencer.selectPattern(next);
-                spiMaster.dsqSelectPattern((uint8_t)next);
+                dsqSelectPatternDeferred(next);
                 if (funcId == BTN_FUNC_NEXT_PAT_PLAY) { sequencer.start(); spiMaster.dsqControl(1); }
                 ctrlButtons.flashLed(btnIdx);
                 snprintf(buf, sizeof(buf),
@@ -1272,9 +1050,9 @@ void setup() {
             }
             case BTN_FUNC_PREV_PATTERN:
             case BTN_FUNC_PREV_PAT_PLAY: {
-                int prev = (sequencer.getCurrentPattern() + DSQ_PATTERNS - 1) % DSQ_PATTERNS;
+                int prev = (sequencer.getCurrentPattern() + BUILTIN_PATTERN_COUNT - 1) % BUILTIN_PATTERN_COUNT;
                 sequencer.selectPattern(prev);
-                spiMaster.dsqSelectPattern((uint8_t)prev);
+                dsqSelectPatternDeferred(prev);
                 if (funcId == BTN_FUNC_PREV_PAT_PLAY) { sequencer.start(); spiMaster.dsqControl(1); }
                 ctrlButtons.flashLed(btnIdx);
                 snprintf(buf, sizeof(buf),
@@ -1359,7 +1137,7 @@ void setup() {
             case BTN_FUNC_PATTERN_6: case BTN_FUNC_PATTERN_7: {
                 int pIdx = funcId - BTN_FUNC_PATTERN_0;
                 sequencer.selectPattern(pIdx);
-                spiMaster.dsqSelectPattern((uint8_t)pIdx);
+                dsqSelectPatternDeferred(pIdx);
                 ctrlButtons.flashLed(btnIdx, CTRL_CLR_CYAN);
                 snprintf(buf, sizeof(buf),
                     "{\"type\":\"physButton\",\"action\":\"nextPattern\",\"pattern\":%d}", pIdx);

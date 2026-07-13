@@ -18,7 +18,13 @@ let lastSynthSwitchMs = new Array(16).fill(0);
 let synthSwitchPendingTimers = new Array(16).fill(null);
 let currentPatternIndex = 0; // Track current pattern for keyboard nav
 
-const PATTERN_NAMES = ['HIP HOP', 'TECHNO', 'DnB', 'BREAK', 'HOUSE', 'TRAP'];
+const PATTERN_NAMES = [
+    'BOOM BAP 90s', 'DETROIT TECHNO', 'JUNGLE/AMEN 90s', 'CHICAGO HOUSE',
+    'SYNTHPOP LINN 80s', 'NEW WAVE/GATED DRUMS', 'ITALO DISCO',
+    'ELECTRO/FREESTYLE 80s', 'ACID HOUSE 1988', 'MIAMI BASS',
+    'NEW JACK SWING', 'CLASSIC HOUSE 90s', 'UK GARAGE 90s', 'TRIP-HOP',
+    'RAVE/BREAKBEAT', 'INDUSTRIAL/EBM'
+];
 
 function clearTimerMap(timerMap) {
     Object.keys(timerMap).forEach((key) => {
@@ -323,10 +329,11 @@ function showNotification(message) {}
 // ESP32 WiFi AP can only handle ~2 concurrent HTTP transfers reliably.
 // Loading all scripts at once (8 files, ~178KB gzipped) causes TCP congestion.
 // Instead, we load feature modules sequentially AFTER the page renders.
+const DEFERRED_ASSET_VERSION = '20260712c';
 function _loadScript(src) {
     return new Promise(resolve => {
         const s = document.createElement('script');
-        s.src = src;
+        s.src = `${src}?v=${DEFERRED_ASSET_VERSION}`;
         s.onload = resolve;
         s.onerror = () => { console.warn('[Loader] Failed:', src); resolve(); };
         document.body.appendChild(s);
@@ -553,9 +560,9 @@ function handleWebSocketMessage(data) {
             // Actualizar patrón actual si viene el índice
             if (data.index !== undefined) {
                 currentPatternIndex = data.index;
-                const patternName = data.index < PATTERN_NAMES.length
+                const patternName = data.name || (data.index < PATTERN_NAMES.length
                     ? PATTERN_NAMES[data.index]
-                    : `PATTERN ${data.index + 1}`;
+                    : `PATTERN ${data.index + 1}`);
                 const nameEl = document.getElementById('currentPatternName');
                 if (nameEl) nameEl.textContent = patternName;
                 const circularPatternName = document.getElementById('circularPatternName');
@@ -1340,10 +1347,30 @@ function updateLoopButtonState(padIndex) {
     }
 }
 
+function closePadEngineMenus(exceptStrip = null) {
+    document.querySelectorAll('.pad-synth-strip.open').forEach(strip => {
+        if (strip === exceptStrip) return;
+        strip.classList.remove('open');
+        strip.closest('.pad')?.classList.remove('engine-menu-open');
+        strip.querySelector('.pad-engine-menu-toggle')?.setAttribute('aria-expanded', 'false');
+    });
+}
+
 // Create Pads
 function createPads() {
     _cachedPadEls = null; // invalidate sync-LED cache
     const grid = document.getElementById('padsGrid');
+
+    if (!grid.dataset.engineMenuDismissBound) {
+        document.addEventListener('pointerdown', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target?.closest('.pad-synth-strip')) closePadEngineMenus();
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') closePadEngineMenus();
+        });
+        grid.dataset.engineMenuDismissBound = '1';
+    }
     
     const families = padNames;
     
@@ -1356,15 +1383,21 @@ function createPads() {
         pad.dataset.pad = i;
         
         pad.innerHTML = `
-            <button class="pad-mute-toggle" data-pad="${i}" title="Mute Pad">M</button>
-            <button class="pad-upload-btn" data-pad="${i}" title="Load Sample">+</button>
-            <button class="pad-filter-btn" data-pad="${i}" title="Filter">F</button>
-            <button class="pad-fx-btn" data-pad="${i}" title="FX (Distortion/BitCrush)">🎸</button>
-            <div class="pad-content">
-                <div class="pad-name">${padNames[i]}</div>
-                <div class="pad-sample-info" id="sampleInfo-${i}"><span class="sample-file">—</span><span class="sample-quality"></span></div>
-                <div class="pad-seq-mini" data-pad="${i}" aria-hidden="true"></div>
-                <span class="pad-filter-indicator" data-pad="${i}" style="display:none;"></span>
+            <div class="pad-topbar">
+                <button class="pad-mute-toggle" data-pad="${i}" type="button" title="Silenciar pad" aria-label="Silenciar ${padNames[i]}">M</button>
+            </div>
+            <div class="pad-hit-area">
+                <div class="pad-content">
+                    <div class="pad-name">${padNames[i]}</div>
+                    <div class="pad-sample-info" id="sampleInfo-${i}"><span class="sample-file">—</span><span class="sample-quality"></span></div>
+                    <div class="pad-seq-mini" data-pad="${i}" aria-hidden="true"></div>
+                    <span class="pad-filter-indicator" data-pad="${i}" style="display:none;"></span>
+                </div>
+            </div>
+            <div class="pad-action-bar" role="group" aria-label="Acciones de ${padNames[i]}">
+                <button class="pad-upload-btn" data-pad="${i}" type="button" title="Cargar sample" aria-label="Cargar sample en ${padNames[i]}"><span aria-hidden="true">＋</span></button>
+                <button class="pad-fx-btn" data-pad="${i}" type="button" title="Efectos" aria-label="Efectos de ${padNames[i]}"><span aria-hidden="true">FX</span></button>
+                <button class="pad-filter-btn" data-pad="${i}" type="button" title="Filtro" aria-label="Filtro de ${padNames[i]}"><span aria-hidden="true">F</span></button>
             </div>
             <span class="pad-engine-spinner" aria-hidden="true"></span>
             <div class="pad-corona" aria-hidden="true"></div>
@@ -1387,7 +1420,8 @@ function createPads() {
             const keyHint = document.createElement('div');
             keyHint.className = 'pad-key-hint';
             keyHint.textContent = keyLabel;
-            pad.appendChild(keyHint);
+            const actionBar = pad.querySelector('.pad-action-bar');
+            (actionBar || pad).appendChild(keyHint);
         }
         
         // Touch y click con tremolo
@@ -1486,21 +1520,40 @@ function createPads() {
         synthStrip.className = 'pad-synth-strip';
         synthStrip.dataset.pad = i;
         synthStrip.innerHTML = `
-            <div class="pad-synth-column pad-synth-column-left">
-                <button class="synth-btn" data-pad="${i}" data-engine="4" title="Wavetable OSC">WT</button>
-                <button class="synth-btn" data-pad="${i}" data-engine="5" title="SH-101 monosynth">SH</button>
-                <button class="synth-btn" data-pad="${i}" data-engine="6" title="FM 2-Op synth">FM</button>
-            </div>
-            <div class="pad-synth-column pad-synth-column-right">
-                <button class="synth-btn" data-pad="${i}" data-engine="0" title="TR-808 synth engine">808</button>
-                <button class="synth-btn" data-pad="${i}" data-engine="1" title="TR-909 synth engine">909</button>
-                <button class="synth-btn" data-pad="${i}" data-engine="2" title="TR-505 synth engine">505</button>
-                <button class="synth-btn" data-pad="${i}" data-engine="3" title="TB-303 bass synth">303</button>
+            <button class="pad-engine-menu-toggle" type="button" aria-haspopup="menu" aria-expanded="false" title="Seleccionar fuente de sonido">
+                <span class="pad-engine-led" aria-hidden="true"></span>
+                <span class="pad-engine-current">SMP</span>
+                <span class="pad-engine-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div class="pad-engine-options" role="menu" aria-label="Fuente de sonido para ${padNames[i]}">
+                <button class="synth-btn" type="button" role="menuitem" data-pad="${i}" data-engine="-1" title="Reproducir sample">SMP</button>
+                <button class="synth-btn" type="button" role="menuitem" data-pad="${i}" data-engine="0" title="TR-808 synth engine">808</button>
+                <button class="synth-btn" type="button" role="menuitem" data-pad="${i}" data-engine="1" title="TR-909 synth engine">909</button>
+                <button class="synth-btn" type="button" role="menuitem" data-pad="${i}" data-engine="2" title="TR-505 synth engine">505</button>
+                <button class="synth-btn" type="button" role="menuitem" data-pad="${i}" data-engine="3" title="TB-303 bass synth">303</button>
+                <button class="synth-btn" type="button" role="menuitem" data-pad="${i}" data-engine="4" title="Wavetable OSC">WT</button>
+                <button class="synth-btn" type="button" role="menuitem" data-pad="${i}" data-engine="5" title="SH-101 monosynth">SH</button>
+                <button class="synth-btn" type="button" role="menuitem" data-pad="${i}" data-engine="6" title="FM 2-Op synth">FM</button>
             </div>
         `;
+        const engineMenuToggle = synthStrip.querySelector('.pad-engine-menu-toggle');
+        const stopEnginePointer = (e) => { e.stopPropagation(); };
+        engineMenuToggle.addEventListener('touchstart', stopEnginePointer);
+        engineMenuToggle.addEventListener('touchend', stopEnginePointer);
+        engineMenuToggle.addEventListener('mousedown', stopEnginePointer);
+        engineMenuToggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const willOpen = !synthStrip.classList.contains('open');
+            closePadEngineMenus(synthStrip);
+            synthStrip.classList.toggle('open', willOpen);
+            pad.classList.toggle('engine-menu-open', willOpen);
+            engineMenuToggle.setAttribute('aria-expanded', String(willOpen));
+        });
         synthStrip.querySelectorAll('button.synth-btn').forEach(btn => {
             const stopEvt = (e) => { e.stopPropagation(); };
             btn.addEventListener('touchstart', stopEvt);
+            btn.addEventListener('touchend', stopEvt);
             btn.addEventListener('mousedown', stopEvt);
             const handler = (e) => {
                 e.preventDefault();
@@ -1508,8 +1561,10 @@ function createPads() {
                 const padIdx = parseInt(btn.dataset.pad);
                 const engine = parseInt(btn.dataset.engine);
                 setSynthEngine(padIdx, engine);
+                synthStrip.classList.remove('open');
+                pad.classList.remove('engine-menu-open');
+                engineMenuToggle.setAttribute('aria-expanded', 'false');
             };
-            btn.addEventListener('touchend', handler);
             btn.addEventListener('click', handler);
         });
         
@@ -1517,6 +1572,7 @@ function createPads() {
         const selectBtn = document.createElement('button');
         selectBtn.className = 'pad-select-btn';
         selectBtn.style.display = 'none';  // Oculto por defecto
+        selectBtn.dataset.pad = i;
         selectBtn.dataset.padIndex = i;
         selectBtn.dataset.family = families[i];
         selectBtn.addEventListener('click', (e) => {
@@ -1526,11 +1582,12 @@ function createPads() {
         });
 
         
+        pad.querySelector('.pad-topbar')?.appendChild(synthStrip);
+        pad.querySelector('.pad-action-bar')?.appendChild(selectBtn);
         padContainer.appendChild(pad);
-        padContainer.appendChild(synthStrip);
-        padContainer.appendChild(selectBtn);
         grid.appendChild(padContainer);
 
+        updatePadSynthVisual(i, padSynthEngine[i]);
         refreshPadSampleInfo(i);
         updatePadSequenceMiniDots(i);
     }
@@ -2742,11 +2799,15 @@ function updateSampleButtons() {
         
         if (count > 1) {
             btn.style.display = 'flex';
+            btn.classList.add('available');
+            btn.closest('.pad-action-bar')?.classList.add('has-sample-menu');
             btn.innerHTML = `📂<span class="sample-count-badge">${count}</span>`;
             btn.title = `${count} ${family} samples available - Click to change`;
             buttonsShown++;
         } else {
             btn.style.display = 'none';
+            btn.classList.remove('available');
+            btn.closest('.pad-action-bar')?.classList.remove('has-sample-menu');
         }
     });
 }
@@ -3308,9 +3369,14 @@ function updatePadSynthVisual(padIndex, engine) {
     // Actualizar aspecto de todos los botones de engine de este pad
     const strip = document.querySelector(`.pad-synth-strip[data-pad="${padIndex}"]`);
     if (strip) {
+        const engineLabels = ['808', '909', '505', '303', 'WT', 'SH', 'FM'];
+        const currentLabel = strip.querySelector('.pad-engine-current');
+        if (currentLabel) currentLabel.textContent = engine >= 0 ? engineLabels[engine] : 'SMP';
+        strip.classList.toggle('has-synth', engine >= 0);
         strip.querySelectorAll('.synth-btn').forEach(btn => {
             const e = parseInt(btn.dataset.engine);
             btn.classList.toggle('active', engine === e);
+            btn.setAttribute('aria-current', engine === e ? 'true' : 'false');
         });
     }
 }
@@ -3531,22 +3597,53 @@ function updateTrackLoopVisual(trackIndex) {
     }
 }
 
+function getTrackThemeColor(track) {
+    const safeTrack = Math.max(0, Math.min(15, parseInt(track, 10) || 0));
+    return `rgb(var(--pad-color-${safeTrack}))`;
+}
+
+function sequencerGridTemplateForStepCount(stepCount) {
+    if (stepCount <= 16) return `96px repeat(${stepCount}, minmax(34px, 1fr)) 72px`;
+    if (stepCount <= 32) return `82px repeat(${stepCount}, minmax(26px, 1fr)) 64px`;
+    return `72px repeat(${stepCount}, minmax(22px, 1fr)) 58px`;
+}
+
+function sequencerMinWidthForStepCount(stepCount) {
+    if (stepCount <= 16) return 960;
+    if (stepCount <= 32) return 1320;
+    return 2320;
+}
+
+function renderSequencerRuler(stepCount) {
+    const ruler = document.getElementById('sequencerRuler');
+    if (!ruler) return;
+    const count = Math.max(16, parseInt(stepCount, 10) || 16);
+    ruler.style.gridTemplateColumns = sequencerGridTemplateForStepCount(count);
+    ruler.style.minWidth = `${sequencerMinWidthForStepCount(count)}px`;
+    ruler.innerHTML = '<span class="sequencer-ruler-corner">TRACK</span>' +
+        Array.from({ length: count }, (_, step) => {
+            const classes = ['sequencer-ruler-step'];
+            if (step % 16 === 0) classes.push('bar-start');
+            else if (step % 4 === 0) classes.push('beat-start');
+            return `<span class="${classes.join(' ')}" data-step="${step}">${step + 1}</span>`;
+        }).join('') +
+        '<span class="sequencer-ruler-corner sequencer-ruler-fx">FX</span>';
+}
+
 // Create Sequencer
 function createSequencer() {
     const grid = document.getElementById('sequencerGrid');
     const indicator = document.getElementById('stepIndicator');
     const gridWrapper = document.getElementById('sequencerContainer');
     const trackNames = ['BD', 'SD', 'CH', 'OH', 'CY', 'CP', 'RS', 'CB', 'LT', 'MT', 'HT', 'MA', 'CL', 'HC', 'MC', 'LC'];
-    const trackColors = [
-        '#ff0000', '#ffa500', '#ffff00', '#00ffff',
-        '#e6194b', '#ff00ff', '#00ff00', '#f58231',
-        '#911eb4', '#46f0f0', '#f032e6', '#bcf60c',
-        '#38ceff', '#fabebe', '#008080', '#484dff'
-    ];
+    const trackColors = Array.from({ length: 16 }, (_, track) => getTrackThemeColor(track));
 
     stepDots = [];
     stepColumns = Array.from({ length: 16 }, () => []);
     lastCurrentStep = null;
+    grid.style.gridTemplateColumns = sequencerGridTemplateForStepCount(16);
+    grid.style.minWidth = `${sequencerMinWidthForStepCount(16)}px`;
+    renderSequencerRuler(16);
     
     // 16 tracks x (16 steps + FX column)
     for (let track = 0; track < 16; track++) {
@@ -3590,17 +3687,31 @@ function createSequencer() {
         });
         
         const name = document.createElement('span');
+        name.className = 'track-name';
         name.textContent = trackNames[track];
         name.style.color = trackColors[track];
+
+        const trackNumber = document.createElement('span');
+        trackNumber.className = 'track-number';
+        trackNumber.textContent = String(track + 1).padStart(2, '0');
+
+        const identity = document.createElement('div');
+        identity.className = 'track-identity';
+        identity.appendChild(trackNumber);
+        identity.appendChild(name);
+
+        const actions = document.createElement('div');
+        actions.className = 'track-actions';
+        actions.appendChild(volumeBtn);
+        actions.appendChild(muteBtn);
+        actions.appendChild(soloBtn);
 
         const loopIndicator = document.createElement('span');
         loopIndicator.className = 'loop-indicator';
         loopIndicator.textContent = 'LOOP';
         
-        label.appendChild(name);          // grid row1 col1
-        label.appendChild(volumeBtn);       // grid row1 col2
-        label.appendChild(muteBtn);         // grid row2 col1
-        label.appendChild(soloBtn);         // grid row2 col2
+        label.appendChild(identity);
+        label.appendChild(actions);
         label.appendChild(loopIndicator);   // absolute overlay
         label.style.borderColor = trackColors[track];
         
@@ -3794,20 +3905,11 @@ function rebuildSequencerGrid(stepCount) {
     circularSequencerData = Array.from({ length: 16 }, () => Array(stepCount).fill(false));
     lastCurrentStep = null;
 
-    // Update CSS grid columns
-    // Use CSS class for grid template when 32/64, inline for 16
-    grid.style.gridTemplateColumns = '';
-    if (stepCount <= 16) {
-        grid.style.gridTemplateColumns = `72px repeat(${stepCount}, 1fr) 50px`;
-    }
+    // Keep ruler, tracks, steps, FX column and stem rows on the same timeline.
+    grid.style.gridTemplateColumns = sequencerGridTemplateForStepCount(stepCount);
 
     const trackNames = ['BD', 'SD', 'CH', 'OH', 'CY', 'CP', 'RS', 'CB', 'LT', 'MT', 'HT', 'MA', 'CL', 'HC', 'MC', 'LC'];
-    const trackColors = [
-        '#ff0000', '#ffa500', '#ffff00', '#00ffff',
-        '#e6194b', '#ff00ff', '#00ff00', '#f58231',
-        '#911eb4', '#46f0f0', '#f032e6', '#bcf60c',
-        '#38ceff', '#fabebe', '#008080', '#484dff'
-    ];
+    const trackColors = Array.from({ length: 16 }, (_, track) => getTrackThemeColor(track));
 
     for (let track = 0; track < 16; track++) {
         // Track label (same as createSequencer)
@@ -3848,17 +3950,31 @@ function rebuildSequencerGrid(stepCount) {
         });
 
         const name = document.createElement('span');
+        name.className = 'track-name';
         name.textContent = trackNames[track];
         name.style.color = trackColors[track];
+
+        const trackNumber = document.createElement('span');
+        trackNumber.className = 'track-number';
+        trackNumber.textContent = String(track + 1).padStart(2, '0');
+
+        const identity = document.createElement('div');
+        identity.className = 'track-identity';
+        identity.appendChild(trackNumber);
+        identity.appendChild(name);
+
+        const actions = document.createElement('div');
+        actions.className = 'track-actions';
+        actions.appendChild(volumeBtn);
+        actions.appendChild(muteBtn);
+        actions.appendChild(soloBtn);
 
         const loopIndicator = document.createElement('span');
         loopIndicator.className = 'loop-indicator';
         loopIndicator.textContent = 'LOOP';
 
-        label.appendChild(name);
-        label.appendChild(volumeBtn);
-        label.appendChild(muteBtn);
-        label.appendChild(soloBtn);
+        label.appendChild(identity);
+        label.appendChild(actions);
         label.appendChild(loopIndicator);
         label.style.borderColor = trackColors[track];
 
@@ -3994,9 +4110,10 @@ function rebuildSequencerGrid(stepCount) {
     }
 
     // Update min-width for wider grids
-    const minWidth = stepCount <= 16 ? 820 : (stepCount <= 32 ? 1200 : 2200);
+    const minWidth = sequencerMinWidthForStepCount(stepCount);
     grid.style.minWidth = minWidth + 'px';
     if (indicator) indicator.style.minWidth = minWidth + 'px';
+    renderSequencerRuler(stepCount);
 
     // Apply step-count CSS class for compact layout
     grid.classList.remove('steps-16', 'steps-32', 'steps-64');
@@ -4010,12 +4127,15 @@ function rebuildSequencerGrid(stepCount) {
 }
 
 // ── Stem rows in the sequencer grid ──────────────────────────────────────────
-const STEM_COLORS_SEQ = ['#00e5ff', '#c77dff', '#ff9f1c', '#57cc99'];
+const STEM_COLORS_SEQ = [
+    'rgb(var(--r808-accent2-rgb))',
+    'var(--r808-accent-purple)',
+    'var(--r808-accent-orange)',
+    'var(--r808-accent-green)'
+];
 
 function stemGridTemplateForStepCount(stepCount) {
-    if (stepCount <= 16) return `72px repeat(${stepCount}, 1fr) 50px`;
-    if (stepCount <= 32) return `62px repeat(${stepCount}, 1fr) 44px`;
-    return `52px repeat(${stepCount}, 1fr) 40px`;
+    return sequencerGridTemplateForStepCount(stepCount);
 }
 
 function makeStemStepCells(peaks, stepCount, occupied) {
@@ -4798,6 +4918,10 @@ function setupControls() {
     // Color mode toggle
     const colorToggle = document.getElementById('colorToggle');
     colorToggle.addEventListener('click', () => {
+        if (window.RED808Themes) {
+            window.RED808Themes.toggleMono();
+            return;
+        }
         document.body.classList.toggle('mono-mode');
         if (document.body.classList.contains('mono-mode')) {
             colorToggle.textContent = '🎶 MONO MODE';
@@ -5324,7 +5448,8 @@ function updateHeaderPatternDisplay(index, name) {
 }
 
 function syncLedMonoMode() {
-    const isMono = document.body.classList.contains('mono-mode');
+    const isMono = document.documentElement.dataset.theme === 'greyscale' ||
+        document.body.classList.contains('mono-mode');
     sendWebSocket({
         cmd: 'setLedMonoMode',
         value: isMono
@@ -5488,9 +5613,9 @@ function updateSequencerState(data) {
         if (currentPatternIndex !== data.pattern) {
             currentPatternIndex = data.pattern;
             // Pattern changed, update name and request new data
-            const patternName = data.pattern < PATTERN_NAMES.length
+            const patternName = data.patternMeta?.name || (data.pattern < PATTERN_NAMES.length
                 ? PATTERN_NAMES[data.pattern]
-                : `PATTERN ${data.pattern + 1}`;
+                : `PATTERN ${data.pattern + 1}`);
             const nameEl = document.getElementById('currentPatternName');
             if (nameEl) nameEl.textContent = patternName;
             const circEl = document.getElementById('circularPatternName');
@@ -5948,6 +6073,7 @@ function switchTab(tabId) {
     
     // Guardar preferencia
     localStorage.setItem('currentTab', tabId);
+    window.dispatchEvent(new CustomEvent('red808:tabchange', { detail: { tabId } }));
 
     // Hooks de carga por tab
     if (tabId === 'buttons') loadButtonsConfig();
@@ -6674,671 +6800,7 @@ function applyFilterPreset(filterType, cutoffFreq, customResonance, customGain) 
     }
 }
 
-// ============================================
-// MIDI FUNCTIONS
-// ============================================
-
-// ============================================
-// MIDI DASHBOARD - Professional Version
-// ============================================
-
-let midiTotalNotes = 0;
-let midiCCMessages = 0;
-let midiVelocitySum = 0;
-let midiVelocityCount = 0;
-let midiConnectTimestamp = null;
-let midiUptimeInterval = null;
-const midiMessagesQueue = [];
-const MAX_MIDI_MESSAGES_DISPLAY = 50;
-
-function handleMIDIDeviceMessage(data) {
-    const badge = document.getElementById('midiConnectionBadge');
-    const deviceCard = document.getElementById('midiDeviceCard');
-    
-    if (data.connected) {
-        // Device connected
-        badge.classList.add('connected');
-        badge.querySelector('.badge-text').textContent = 'Conectado';
-        
-        deviceCard.classList.add('connected');
-        document.getElementById('midiDeviceName').textContent = data.deviceName || 'USB MIDI Device';
-        document.getElementById('midiVendorId').textContent = data.vendorId ? `0x${data.vendorId.toString(16).toUpperCase()}` : '—';
-        document.getElementById('midiProductId').textContent = data.productId ? `0x${data.productId.toString(16).toUpperCase()}` : '—';
-        
-        // Start uptime counter
-        midiConnectTimestamp = Date.now();
-        if (midiUptimeInterval) clearInterval(midiUptimeInterval);
-        midiUptimeInterval = setInterval(updateMidiUptime, 1000);
-    } else {
-        // Device disconnected
-        badge.classList.remove('connected');
-        badge.querySelector('.badge-text').textContent = 'Desconectado';
-        
-        deviceCard.classList.remove('connected');
-        document.getElementById('midiDeviceName').textContent = 'Esperando conexión...';
-        document.getElementById('midiVendorId').textContent = '—';
-        document.getElementById('midiProductId').textContent = '—';
-        
-        // Stop uptime counter
-        if (midiUptimeInterval) {
-            clearInterval(midiUptimeInterval);
-            midiUptimeInterval = null;
-        }
-        document.getElementById('midiUptime').textContent = '00:00';
-    }
-}
-
-function handleMidiScanState(data) {
-    const toggle = document.getElementById('midiScanToggle');
-    if (toggle) toggle.checked = !!data.enabled;
-}
-
-function toggleMidiScan(enabled) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ cmd: 'setMidiScan', enabled: enabled }));
-    }
-}
-
-function updateMidiUptime() {
-    if (!midiConnectTimestamp) return;
-    
-    const elapsed = Math.floor((Date.now() - midiConnectTimestamp) / 1000);
-    const minutes = Math.floor(elapsed / 60);
-    const seconds = elapsed % 60;
-    document.getElementById('midiUptime').textContent = 
-        `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-function handleMIDIMessage(data) {
-    // Update stats
-    if (data.messageType === 'noteOn') {
-        midiTotalNotes++;
-        midiVelocitySum += data.data2 || 0;
-        midiVelocityCount++;
-        
-        document.getElementById('midiTotalNotes').textContent = midiTotalNotes;
-        const avgVel = Math.round(midiVelocitySum / midiVelocityCount);
-        document.getElementById('midiAvgVelocity').textContent = avgVel;
-        
-        // Animate velocity bar for the note
-        animateNoteVelocity(data.data1, data.data2);
-        
-        // Highlight mapping item
-        highlightMappingItem(data.data1);
-    } else if (data.messageType === 'cc') {
-        midiCCMessages++;
-        document.getElementById('midiCCMessages').textContent = midiCCMessages;
-    }
-    
-    // Add to message queue
-    const messageEntry = {
-        ...data,
-        timestamp: Date.now()
-    };
-    
-    midiMessagesQueue.unshift(messageEntry);
-    if (midiMessagesQueue.length > MAX_MIDI_MESSAGES_DISPLAY) {
-        midiMessagesQueue.pop();
-    }
-    
-    // Update monitor display
-    updateMIDIMonitorDisplay();
-}
-
-function animateNoteVelocity(note, velocity) {
-    const item = document.querySelector(`.mapping-item[data-note="${note}"]`);
-    if (!item) return;
-    const velocityFill = item.querySelector('.velocity-fill');
-    if (!velocityFill) return;
-    const percent = Math.round((velocity / 127) * 100);
-    velocityFill.style.width = `${percent}%`;
-    setTimeout(() => { velocityFill.style.width = '0%'; }, 500);
-}
-
-function highlightMappingItem(note) {
-    const item = document.querySelector(`.mapping-item[data-note="${note}"]`);
-    if (!item) return;
-    item.classList.add('active');
-    setTimeout(() => { item.classList.remove('active'); }, 300);
-}
-
-function updateMIDIMonitorDisplay() {
-    const monitor = document.getElementById('midiMonitor');
-    if (!monitor) return;
-    
-    // Remove placeholder if exists (only once)
-    const placeholder = monitor.querySelector('.monitor-placeholder');
-    if (placeholder) {
-        placeholder.remove();
-    }
-    
-    // OPTIMIZACIÓN: Solo agregar el mensaje más reciente en lugar de re-renderizar todo
-    // Esto evita el parpadeo y duplicación
-    if (midiMessagesQueue.length > 0) {
-        const latestMsg = midiMessagesQueue[0];
-        
-        // Aplicar filtro
-        if (midiMonitorFilter !== 'all' && latestMsg.messageType !== midiMonitorFilter) return;
-        
-        const entry = createMIDIMessageEntry(latestMsg);
-        
-        // Insertar al inicio (más nuevo arriba)
-        monitor.insertBefore(entry, monitor.firstChild);
-        
-        // Limitar el número de mensajes visibles (eliminar los más antiguos)
-        while (monitor.children.length > MAX_MIDI_MESSAGES_DISPLAY) {
-            monitor.removeChild(monitor.lastChild);
-        }
-    }
-}
-
-function createMIDIMessageEntry(msg) {
-    const entry = document.createElement('div');
-    entry.className = `midi-message-entry ${getMIDIMessageClass(msg.messageType)}`;
-    
-    // Header
-    const header = document.createElement('div');
-    header.className = 'message-header';
-    
-    const type = document.createElement('div');
-    type.className = `message-type ${getMIDIMessageClass(msg.messageType)}`;
-    type.innerHTML = `
-        <span class="message-type-icon">${getMIDIIcon(msg.messageType)}</span>
-        <span>${getMIDITypeName(msg.messageType)}</span>
-    `;
-    
-    const time = document.createElement('div');
-    time.className = 'message-time';
-    const elapsed = Date.now() - msg.timestamp;
-    time.textContent = elapsed < 1000 ? 'ahora' : `${Math.floor(elapsed / 1000)}s ago`;
-    
-    header.appendChild(type);
-    header.appendChild(time);
-    
-    // Details
-    const details = document.createElement('div');
-    details.className = 'message-details';
-    details.innerHTML = getMIDIDetailsHTML(msg);
-    
-    entry.appendChild(header);
-    entry.appendChild(details);
-    
-    return entry;
-}
-
-function getMIDIMessageClass(type) {
-    const classes = {
-        'noteOn': 'note-on',
-        'noteOff': 'note-off',
-        'cc': 'cc',
-        'pitchBend': 'pitchbend',
-        'program': 'program'
-    };
-    return classes[type] || 'other';
-}
-
-function getMIDIIcon(type) {
-    const icons = {
-        'noteOn': '🎹',
-        'noteOff': '⬜',
-        'cc': '🎛️',
-        'pitchBend': '🎚️',
-        'program': '📋',
-        'aftertouch': '👆'
-    };
-    return icons[type] || '📨';
-}
-
-function getMIDITypeName(type) {
-    const names = {
-        'noteOn': 'Note On',
-        'noteOff': 'Note Off',
-        'cc': 'Control Change',
-        'pitchBend': 'Pitch Bend',
-        'program': 'Program Change',
-        'aftertouch': 'Aftertouch'
-    };
-    return names[type] || type;
-}
-
-function getMIDIDetailsHTML(msg) {
-    let html = `<span><span class="label">Canal:</span> <span class="value">${msg.channel}</span></span>`;
-    
-    if (msg.messageType === 'noteOn' || msg.messageType === 'noteOff') {
-        const noteName = getNoteNameFromNumber(msg.data1);
-        html += `<span><span class="label">Nota:</span> <span class="value">${msg.data1} (${noteName})</span></span>`;
-        html += `<span><span class="label">Velocity:</span> <span class="value">${msg.data2}</span></span>`;
-    } else if (msg.messageType === 'cc') {
-        html += `<span><span class="label">CC:</span> <span class="value">${msg.data1}</span></span>`;
-        html += `<span><span class="label">Valor:</span> <span class="value">${msg.data2}</span></span>`;
-    } else if (msg.messageType === 'pitchBend') {
-        const bendValue = (msg.data1 | (msg.data2 << 7)) - 8192;
-        html += `<span><span class="label">Bend:</span> <span class="value">${bendValue}</span></span>`;
-    } else {
-        html += `<span><span class="label">Data1:</span> <span class="value">${msg.data1}</span></span>`;
-        if (msg.data2 !== undefined) {
-            html += `<span><span class="label">Data2:</span> <span class="value">${msg.data2}</span></span>`;
-        }
-    }
-    
-    return html;
-}
-
-function getNoteNameFromNumber(noteNumber) {
-    const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-    const octave = Math.floor(noteNumber / 12) - 1;
-    const noteName = notes[noteNumber % 12];
-    return `${noteName}${octave}`;
-}
-
-function formatMIDIData(msg) {
-    switch(msg.messageType) {
-        case 'noteOn':
-        case 'noteOff':
-            return `Ch${msg.channel} Note:${msg.data1} Vel:${msg.data2}`;
-        case 'cc':
-            return `Ch${msg.channel} CC:${msg.data1} Val:${msg.data2}`;
-        case 'program':
-            return `Ch${msg.channel} Program:${msg.data1}`;
-        case 'pitchBend':
-            const bend = (msg.data2 << 7) | msg.data1;
-            return `Ch${msg.channel} Bend:${bend}`;
-        default:
-            return `Ch${msg.channel} D1:${msg.data1} D2:${msg.data2}`;
-    }
-}
-
-// Update messages per second periodically
-setInterval(() => {
-    // This would need backend support to send real-time stats
-    // For now we can estimate based on message timestamps
-}, 1000);
-
-// ============================================
-// SAMPLE UPLOAD FUNCTIONS
-// ============================================
-
-function showUploadDialog(padIndex) {
-    // Crear input file oculto — abre el Sample Editor modal antes de subir
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.wav';
-    input.style.display = 'none';
-
-    input.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        if (!file.name.toLowerCase().endsWith('.wav')) {
-            if (window.showToast) {
-                window.showToast('❌ Solo se permiten archivos WAV', window.TOAST_TYPES.ERROR, 3000);
-            }
-            return;
-        }
-
-        // Abrir el editor de sample (trim, fade, preview) — él se encarga del upload
-        if (window.SampleEditor) {
-            SampleEditor.open(padIndex, file);
-        } else {
-            // fallback directo si el script no cargó
-            uploadSample(padIndex, file);
-        }
-    });
-
-    document.body.appendChild(input);
-    input.click();
-    setTimeout(() => input.remove(), 1000);
-}
-
-let currentUploadPad = -1;
-
-function uploadSample(padIndex, file) {
-    currentUploadPad = padIndex;
-    const padName = padNames[padIndex];
-    
-    // Mostrar toast de inicio
-    if (window.showToast) {
-        window.showToast(`📤 Subiendo ${file.name} a ${padName}...`, window.TOAST_TYPES.INFO, 2000);
-    }
-    
-    // Deshabilitar botón de upload durante el proceso
-    const btn = document.querySelector(`.pad-upload-btn[data-pad="${padIndex}"]`);
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = '⏳';
-    }
-    
-    // Crear FormData (sin el pad, irá en la URL)
-    const formData = new FormData();
-    formData.append('file', file);
-    
-    // Enviar via fetch con pad como query parameter
-    fetch(`/api/upload?pad=${padIndex}`, {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-    })
-    .catch(error => {
-        console.error('[Upload] Error:', error);
-        if (window.showToast) {
-            window.showToast(`❌ Error al subir archivo: ${error.message}`, window.TOAST_TYPES.ERROR, 4000);
-        }
-        
-        // Re-habilitar botón
-        if (btn) {
-            btn.disabled = false;
-            btn.textContent = '📤';
-        }
-        currentUploadPad = -1;
-    });
-}
-
-function handleUploadProgress(data) {
-    if (data.pad !== currentUploadPad) return;
-    
-    const btn = document.querySelector(`.pad-upload-btn[data-pad="${data.pad}"]`);
-    if (btn) {
-        btn.textContent = `${data.percent}%`;
-    }
-}
-
-function handleUploadComplete(data) {
-    const btn = document.querySelector(`.pad-upload-btn[data-pad="${data.pad}"]`);
-    if (btn) {
-        btn.disabled = false;
-        btn.textContent = '📤';
-    }
-    
-    if (data.success) {
-        if (window.showToast) {
-            const padName = padNames[data.pad];
-            window.showToast(`✅ ${padName}: ${data.message}`, window.TOAST_TYPES.SUCCESS, 3000);
-        }
-        
-        // Actualizar info del pad
-        refreshPadSampleInfo(data.pad);
-        
-        // Animación de éxito en el pad
-        const pad = document.querySelector(`.pad[data-pad="${data.pad}"]`);
-        if (pad) {
-            pad.style.animation = 'padPulseSuccess 0.5s ease-out';
-            setTimeout(() => {
-                pad.style.animation = '';
-            }, 500);
-        }
-    } else {
-        if (window.showToast) {
-            window.showToast(`❌ Error: ${data.message}`, window.TOAST_TYPES.ERROR, 4000);
-        }
-    }
-    
-    currentUploadPad = -1;
-}
-
-// ============================================
-// MIDI MAPPING EDITOR
-// ============================================
-
-let isEditingMapping = false;
-let originalMappings = {};
-let midiMonitorFilter = 'all';
-
-// Presets de mapeo MIDI para diferentes controladores
-const MIDI_MAPPING_PRESETS = {
-    gm: [
-        {pad:0, note:36}, {pad:1, note:38}, {pad:2, note:42}, {pad:3, note:46},
-        {pad:4, note:49}, {pad:5, note:39}, {pad:6, note:37}, {pad:7, note:56},
-        {pad:8, note:41}, {pad:9, note:47}, {pad:10, note:50}, {pad:11, note:70},
-        {pad:12, note:75}, {pad:13, note:62}, {pad:14, note:63}, {pad:15, note:64}
-    ],
-    roland: [
-        // Roland TR-8S / TD pads
-        {pad:0, note:36}, {pad:1, note:38}, {pad:2, note:42}, {pad:3, note:46},
-        {pad:4, note:49}, {pad:5, note:39}, {pad:6, note:37}, {pad:7, note:56},
-        {pad:8, note:43}, {pad:9, note:47}, {pad:10, note:48}, {pad:11, note:70},
-        {pad:12, note:75}, {pad:13, note:62}, {pad:14, note:63}, {pad:15, note:64}
-    ],
-    mpc: [
-        // Akai MPC default pad layout (A01-A16 = 60-75)
-        {pad:0, note:60}, {pad:1, note:61}, {pad:2, note:62}, {pad:3, note:63},
-        {pad:4, note:64}, {pad:5, note:65}, {pad:6, note:66}, {pad:7, note:67},
-        {pad:8, note:68}, {pad:9, note:69}, {pad:10, note:70}, {pad:11, note:71},
-        {pad:12, note:72}, {pad:13, note:73}, {pad:14, note:74}, {pad:15, note:75}
-    ]
-};
-
-function setMidiMonitorFilter(filter) {
-    midiMonitorFilter = filter;
-}
-
-async function loadMIDIMapping() {
-    try {
-        const response = await fetch('/api/midi/mapping');
-        const data = await response.json();
-        
-        if (data.mappings) {
-            // Solo actualizar los pads 0-15 (mapeos principales, no alias)
-            const primaryMappings = data.mappings.filter(m => m.pad >= 0 && m.pad <= 15);
-            // Crear mapa pad→note para búsqueda rápida
-            const padNoteMap = {};
-            // En caso de múltiples notas por pad, usar la primera
-            primaryMappings.forEach(m => {
-                if (padNoteMap[m.pad] === undefined) padNoteMap[m.pad] = m.note;
-            });
-            
-            for (let pad = 0; pad <= 15; pad++) {
-                const item = document.querySelector(`.mapping-item[data-pad="${pad}"]`);
-                if (!item) continue;
-                const note = padNoteMap[pad];
-                if (note === undefined) continue;
-                
-                const input   = item.querySelector('.note-input');
-                const valueEl = item.querySelector('.note-value');
-                const nameEl  = item.querySelector('.note-name');
-                try {
-                    if (input)   { input.value = note; item.dataset.note = note; }
-                    if (valueEl) valueEl.textContent = note;
-                    if (nameEl)  nameEl.textContent  = getNoteNameFromNumber(note);
-                } catch(ex) { /* elemento no visible aún */ }
-            }
-        }
-    } catch (error) {
-        console.error('[MIDI Mapping] Error loading:', error);
-    }
-}
-
-// Bloquear atajos globales cuando el slider de mapping tiene el foco
-function stopKeyPropForSlider(e) {
-    e.stopPropagation();
-}
-
-function toggleMappingEdit() {
-    isEditingMapping = !isEditingMapping;
-    
-    const editBtn   = document.getElementById('editMappingBtn');
-    const resetBtn  = document.getElementById('resetMappingBtn');
-    const saveBtn   = document.getElementById('saveMappingBtn');
-    const cancelBtn = document.getElementById('cancelMappingBtn');
-    const presets   = document.getElementById('mappingPresets');
-    const mappingGrid = document.getElementById('mappingGrid');
-    const inputs    = document.querySelectorAll('.note-input');
-    
-    if (isEditingMapping) {
-        editBtn.style.display  = 'none';
-        resetBtn.style.display = 'inline-block';
-        saveBtn.style.display  = 'inline-block';
-        cancelBtn.style.display = 'inline-block';
-        if (presets) presets.style.display = 'flex';
-        mappingGrid.classList.add('editing');
-        
-        // Guardar valores originales y habilitar sliders
-        inputs.forEach(input => {
-            const item = input.closest('.mapping-item');
-            originalMappings[item.dataset.pad] = input.value;
-            input.disabled = false;
-            input.classList.add('editing');
-            input.addEventListener('input', onNoteInputChange);
-            // Evitar que el teclado global intercepte las flechas del slider
-            input.addEventListener('keydown', stopKeyPropForSlider);
-        });
-        
-        if (window.showToast) window.showToast('✏️ Modo edición — arrastra los sliders y pulsa Guardar', window.TOAST_TYPES?.INFO, 3000);
-    } else {
-        // Cancelar → restaurar
-        inputs.forEach(input => {
-            const item = input.closest('.mapping-item');
-            input.value = originalMappings[item.dataset.pad] ?? input.value;
-            item.dataset.note = input.value;
-            input.disabled = true;
-            input.classList.remove('editing');
-            input.removeEventListener('input', onNoteInputChange);
-            input.removeEventListener('keydown', stopKeyPropForSlider);
-            const val = parseInt(input.value);
-            const valueEl = item.querySelector('.note-value');
-            const nameEl  = item.querySelector('.note-name');
-            if (valueEl) valueEl.textContent = val;
-            if (nameEl)  nameEl.textContent  = getNoteNameFromNumber(val);
-        });
-        editBtn.style.display   = 'inline-block';
-        resetBtn.style.display  = 'none';
-        saveBtn.style.display   = 'none';
-        cancelBtn.style.display = 'none';
-        if (presets) presets.style.display = 'none';
-        mappingGrid.classList.remove('editing');
-        originalMappings = {};
-    }
-}
-
-function cancelMappingEdit() {
-    if (isEditingMapping) toggleMappingEdit(); // restaura y sale del modo edición
-}
-
-function onNoteInputChange(e) {
-    const input = e.target;
-    const val = parseInt(input.value);
-    const item = input.closest('.mapping-item');
-    const valueEl = item.querySelector('.note-value');
-    const nameEl  = item.querySelector('.note-name');
-    if (valueEl) valueEl.textContent = val;
-    if (nameEl)  nameEl.textContent  = getNoteNameFromNumber(val);
-}
-
-function applyMappingPreset(name) {
-    const preset = MIDI_MAPPING_PRESETS[name];
-    if (!preset) return;
-    
-    preset.forEach(({pad, note}) => {
-        const item = document.querySelector(`.mapping-item[data-pad="${pad}"]`);
-        if (!item) return;
-        const input   = item.querySelector('.note-input');
-        const valueEl = item.querySelector('.note-value');
-        const nameEl  = item.querySelector('.note-name');
-        if (input)   { input.value = note; input.classList.remove('error'); }
-        if (valueEl) valueEl.textContent = note;
-        if (nameEl)  nameEl.textContent  = getNoteNameFromNumber(note);
-    });
-    
-    if (window.showToast) window.showToast(`✅ Preset "${name.toUpperCase()}" aplicado — pulsa Guardar para confirmar`, window.TOAST_TYPES?.INFO, 3000);
-}
-
-async function saveMIDIMapping() {
-    const inputs = document.querySelectorAll('.note-input');
-    const mappings = [];
-    let hasErrors = false;
-    
-    inputs.forEach(input => {
-        const item = input.closest('.mapping-item');
-        const pad  = parseInt(item.dataset.pad);
-        const note = parseInt(input.value);
-        
-        if (isNaN(note) || note < 0 || note > 127) {
-            input.classList.add('error');
-            hasErrors = true;
-            return;
-        }
-        input.classList.remove('error');
-        mappings.push({ note, pad });
-    });
-    
-    if (hasErrors) {
-        if (window.showToast) window.showToast('❌ Notas inválidas (0-127)', window.TOAST_TYPES?.ERROR, 3000);
-        return;
-    }
-    
-    try {
-        for (const mapping of mappings) {
-            const resp = await fetch('/api/midi/mapping', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(mapping)
-            });
-            if (!resp.ok) throw new Error(`Pad ${mapping.pad}`);
-        }
-        
-        // Actualizar dataset y note-names
-        inputs.forEach(input => {
-            const item    = input.closest('.mapping-item');
-            const note    = parseInt(input.value);
-            const valueEl = item.querySelector('.note-value');
-            const nameEl  = item.querySelector('.note-name');
-            item.dataset.note = note;
-            if (valueEl) valueEl.textContent = note;
-            if (nameEl)  nameEl.textContent  = getNoteNameFromNumber(note);
-        });
-        
-        // Salir modo edición
-        isEditingMapping = true;  // forzar a que toggleMappingEdit lo desactive
-        cancelMappingEdit();
-        const editBtn = document.getElementById('editMappingBtn');
-        if (editBtn) editBtn.style.display = 'inline-block';
-        
-        // Recargar desde ESP32 para confirmar valores guardados
-        await loadMIDIMapping();
-        
-        if (window.showToast) window.showToast('✅ Mapeo MIDI guardado', window.TOAST_TYPES?.SUCCESS, 3000);
-    } catch (error) {
-        console.error('[MIDI Mapping] Error saving:', error);
-        if (window.showToast) window.showToast('❌ Error al guardar mapeo', window.TOAST_TYPES?.ERROR, 3000);
-    }
-}
-
-async function resetMIDIMapping() {
-    if (!confirm('¿Resetear el mapeo MIDI al mapa GM estándar (16 pads)?')) return;
-    
-    try {
-        const resp = await fetch('/api/midi/mapping', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reset: true })
-        });
-        
-        if (resp.ok) {
-            await loadMIDIMapping();
-            if (window.showToast) window.showToast('🔄 Mapeo reseteado a GM (16 pads)', window.TOAST_TYPES?.SUCCESS, 3000);
-        } else {
-            throw new Error('Reset failed');
-        }
-    } catch (error) {
-        console.error('[MIDI Mapping] Error resetting:', error);
-        if (window.showToast) window.showToast('❌ Error al resetear mapeo', window.TOAST_TYPES?.ERROR, 3000);
-    }
-}
-
-// Cargar mapeo al abrir la tab MIDI
-document.addEventListener('DOMContentLoaded', () => {
-    const midiTab = document.querySelector('[data-tab="midi"]');
-    if (midiTab) {
-        midiTab.addEventListener('click', () => {
-            setTimeout(loadMIDIMapping, 100);
-        });
-    }
-    if (window.location.hash === '#midi' || document.getElementById('tab-midi')?.classList.contains('active')) {
-        setTimeout(loadMIDIMapping, 500);
-    }
-});
-
+// MIDI dashboard and mapping moved to midi-ui.js.
 // Export to window
 window.applyFilterPreset = applyFilterPreset;
 
@@ -7866,25 +7328,11 @@ function updateTrackVolume(track, volume) {
 }
 
 function updateTrackLabelBackground(label, track, volume) {
-    const trackColors = [
-        '#ff0000', '#ffa500', '#ffff00', '#00ffff',
-        '#e6194b', '#ff00ff', '#00ff00', '#f58231',
-        '#911eb4', '#46f0f0', '#f032e6', '#bcf60c',
-        '#38ceff', '#fabebe', '#008080', '#484dff'
-    ];
-    const color = trackColors[track];
-    if (!color) return;
-    
-    // Convert hex to RGB
-    const r = parseInt(color.slice(1, 3), 16);
-    const g = parseInt(color.slice(3, 5), 16);
-    const b = parseInt(color.slice(5, 7), 16);
-    
     // Calculate alpha based on volume (0-100 -> 0.1-0.7)
     // Min alpha 0.1 for low volume, max 0.7 for full volume (más vivo)
-    const alpha = 0.1 + (volume / 100) * 0.6;
-    
-    label.style.background = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    const alpha = 0.08 + (volume / 100) * 0.24;
+    const safeTrack = Math.max(0, Math.min(15, parseInt(track, 10) || 0));
+    label.style.background = `linear-gradient(150deg, rgba(var(--pad-color-${safeTrack}), ${alpha}), rgba(var(--pad-color-${safeTrack}), ${Math.max(0.08, alpha * 0.34)}))`;
 }
 
 window.showVolumeMenu = showVolumeMenu;
@@ -8666,173 +8114,4 @@ function _setupWaveformMarkers(modal, canvas, state) {
     });
 })();
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  DAISY SD CARD — Kit Browser & File Manager
-// ══════════════════════════════════════════════════════════════════════════════
-let _sdSelectedFile = null;   // {folder, file}
-let _sdSelectedPad  = -1;
-
-function sdRefreshStatus() {
-    sendWebSocket({cmd: 'sdGetStatus'});
-    sendWebSocket({cmd: 'sdListKits'});
-}
-
-function sdListFolders() {
-    sendWebSocket({cmd: 'sdListFolders'});
-    const bc = document.getElementById('sdBreadcrumb');
-    if (bc) bc.innerHTML = '<span class="sd-crumb sd-crumb-root" onclick="sdListFolders()">/ root</span>';
-    _sdSelectedFile = null;
-    sdUpdateAssignInfo();
-}
-
-function sdListFiles(folder) {
-    sendWebSocket({cmd: 'sdListFiles', folder});
-    const bc = document.getElementById('sdBreadcrumb');
-    if (bc) bc.innerHTML = `<span class="sd-crumb sd-crumb-root" onclick="sdListFolders()">/ root</span> <span class="sd-crumb-sep">›</span> <span class="sd-crumb">${folder}</span>`;
-    _sdSelectedFile = null;
-    sdUpdateAssignInfo();
-}
-
-function sdLoadKit(kitName) {
-    sendWebSocket({cmd: 'sdLoadKit', kit: kitName});
-    sdLog(`Loading kit: ${kitName}...`);
-}
-
-function sdUnloadKit() {
-    sendWebSocket({cmd: 'sdUnloadKit'});
-}
-
-function sdAssignFile(pad) {
-    if (!_sdSelectedFile) return;
-    sendWebSocket({cmd: 'sdLoadSample', pad, folder: _sdSelectedFile.folder, file: _sdSelectedFile.file});
-    sdLog(`Loading "${_sdSelectedFile.file}" → pad ${pad}...`);
-}
-
-function sdRenderStatus(d) {
-    const ind = document.getElementById('sdIndicator');
-    const txt = document.getElementById('sdStatusText');
-    const stats = document.getElementById('sdStats');
-    const kitSec = document.getElementById('sdCurrentKit');
-    if (ind) ind.style.color = d.present ? '#0f0' : '#f00';
-    if (txt) txt.textContent = d.present ? 'SD Card OK' : 'No SD Card';
-    if (stats && d.present) stats.textContent = `${d.freeMB}/${d.totalMB} MB free`;
-    if (kitSec) {
-        const hasKit = d.kit && d.kit.length > 0;
-        kitSec.style.display = hasKit ? 'flex' : 'none';
-        if (hasKit) {
-            const kn = document.getElementById('sdKitName');
-            const kp = document.getElementById('sdKitPads');
-            if (kn) kn.textContent = d.kit;
-            if (kp) kp.textContent = `(${d.loaded} pads)`;
-        }
-    }
-}
-
-function sdRenderKitList(kits, error) {
-    const el = document.getElementById('sdKitList');
-    if (!el) return;
-    if (error) { el.innerHTML = `<div class="sd-error">${error}</div>`; return; }
-    if (!kits.length) { el.innerHTML = '<div class="sd-empty">No kits found</div>'; return; }
-    el.innerHTML = kits.map(k => `<div class="sd-kit-item" onclick="sdLoadKit('${k}')" title="Click to load"><span class="sd-kit-icon">📁</span> ${k}</div>`).join('');
-}
-
-function sdRenderFolders(folders) {
-    const el = document.getElementById('sdFileList');
-    if (!el) return;
-    if (!folders.length) { el.innerHTML = '<div class="sd-empty">Empty</div>'; return; }
-    el.innerHTML = folders.map(f => `<div class="sd-folder-item" onclick="sdListFiles('${f}')"><span class="sd-icon">📂</span> ${f}</div>`).join('');
-}
-
-function sdRenderFiles(folder, files) {
-    const el = document.getElementById('sdFileList');
-    if (!el) return;
-    if (!files.length) { el.innerHTML = '<div class="sd-empty">No files</div>'; return; }
-    el.innerHTML = files.map(f => {
-        const sizeKB = (f.size / 1024).toFixed(1);
-        return `<div class="sd-file-item" onclick="sdSelectFile('${folder}','${f.name}',this)" title="${sizeKB} KB"><span class="sd-icon">🔊</span> ${f.name} <small>${sizeKB}K</small></div>`;
-    }).join('');
-}
-
-function sdSelectFile(folder, file, el) {
-    document.querySelectorAll('.sd-file-item.selected').forEach(e => e.classList.remove('selected'));
-    if (el) el.classList.add('selected');
-    _sdSelectedFile = {folder, file};
-    sdUpdateAssignInfo();
-}
-
-function sdUpdateAssignInfo() {
-    const el = document.getElementById('sdAssignInfo');
-    if (!el) return;
-    if (_sdSelectedFile) {
-        el.textContent = `"${_sdSelectedFile.file}" → click a pad to assign`;
-        el.classList.add('ready');
-    } else {
-        el.textContent = 'Select a file, then click a pad';
-        el.classList.remove('ready');
-    }
-}
-
-function sdHandleEvent(data) {
-    // Events from Daisy: load progress, completion, errors
-    const evtNames = {1: 'Kit loaded', 2: 'Load error', 3: 'Kit unloaded', 4: 'Sample loaded', 5: 'Boot loaded', 6: 'XTRA loaded'};
-    const name = evtNames[data.event] || `Event ${data.event}`;
-    const extra = data.name ? ` "${data.name}"` : '';
-    sdLog(`${name}${extra} (${data.padCount} pads)`);
-    if (data.event === 4 && data.name) {
-        const pads = [];
-        const maskLo = (typeof data.maskLo === 'number' ? data.maskLo : 0) & 0xFF;
-        const maskHi = (typeof data.maskHi === 'number' ? data.maskHi : 0) & 0xFF;
-        const maskXtra = (typeof data.maskXtra === 'number' ? data.maskXtra : 0) & 0xFF;
-        for (let bit = 0; bit < 8; bit++) {
-            if (maskLo & (1 << bit)) pads.push(bit);
-            if (maskHi & (1 << bit)) pads.push(8 + bit);
-            if (maskXtra & (1 << bit)) pads.push(16 + bit);
-        }
-        pads.forEach((pad) => applyDaisySampleMetadata(pad, data.name));
-    }
-    if (data.event === 1 || data.event === 3 || data.event === 4) sdRefreshStatus();
-}
-
-function sdLog(msg) {
-    const el = document.getElementById('sdLog');
-    if (!el) return;
-    const line = document.createElement('div');
-    line.className = 'sd-log-line';
-    line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    el.prepend(line);
-    while (el.children.length > 20) el.removeChild(el.lastChild);
-}
-
-// Build pad assignment grid
-(function initSdPadGrid() {
-    const grid = document.getElementById('sdPadGrid');
-    if (!grid) return;
-    const names = ['BD','SD','CH','OH','CY','CP','RS','CB','LT','MT','HT','MA','CL','HC','MC','LC'];
-    for (let i = 0; i < 16; i++) {
-        const btn = document.createElement('button');
-        btn.className = 'sd-pad-btn';
-        btn.textContent = names[i] || i;
-        btn.dataset.pad = i;
-        btn.onclick = () => {
-            _sdSelectedPad = i;
-            document.querySelectorAll('.sd-pad-btn.active').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            sdAssignFile(i);
-        };
-        grid.appendChild(btn);
-    }
-})();
-
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  LFO ENGINE — Per-Pad Organic Modulation
-// ══════════════════════════════════════════════════════════════════════════════
-document.addEventListener('DOMContentLoaded', () => {
-    const tabBtns = document.querySelectorAll('.tab-btn[data-tab]');
-    tabBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            if (btn.dataset.tab === 'daisy-sd') sdRefreshStatus();
-        });
-    });
-});
-
+// Daisy SD browser moved to sd-browser.js.

@@ -1,26 +1,26 @@
 # RED808 DrumMachine — Daisy Seed Slave
 
 Drum machine de **24 pads** con efectos completos.  
-SPI3 slave — protocolo RED808 compatible con **ESP32-S3** master.
+SPI1 slave — protocolo RED808 compatible con **ESP32-S3** master.
 
 ## Hardware
 
 | Componente | Descripción |
 |---|---|
 | **Daisy Seed** | Electro-Smith (STM32H750 + 64MB SDRAM + codec integrado) |
-| **Micro SD** | Socket SDMMC 4-bit (3.3V, NO módulo SPI) |
+| **Micro SD** | Módulo SPI de 6 pines, 3.3 V |
 | **ESP32-S3 N16R8** | Master SPI + Web UI + Sequencer |
 
 ## Conexiones
 
-### SPI3: ESP32-S3 (Master) ↔ Daisy Seed (Slave)
+### SPI1: ESP32-S3 (Master) ↔ Daisy Seed (Slave)
 
 | Señal SPI | ESP32-S3 (ejemplo) | Daisy Pin | STM32H750 |
 |-----------|---------------------|-----------|-----------|
-| SCK       | GPIO 12             | **D10**   | PC10 (SPI3_SCK) |
-| MOSI      | GPIO 11             | **D9**    | PC11 (SPI3_MOSI / RX slave) |
-| MISO      | GPIO 13             | **D8**    | PC12 (SPI3_MISO / TX slave) |
-| CS/NSS    | GPIO 10             | **D7**    | PA15 (SPI3_NSS) |
+| SCK       | GPIO 12             | **D8**    | PG11 (SPI1_SCK) |
+| MOSI      | GPIO 11             | **D10**   | PB5 (SPI1_MOSI / RX slave) |
+| MISO      | GPIO 13             | **D9**    | PB4 (SPI1_MISO / TX slave) |
+| CS/NSS    | GPIO 10             | **D7**    | PG10 (SPI1_NSS) |
 | GND       | GND                 | GND       | — |
 
 > En ESP32-S3 puedes usar otros GPIO si configuras el bus SPI por software con los mismos roles de señal.
@@ -28,16 +28,14 @@ SPI3 slave — protocolo RED808 compatible con **ESP32-S3** master.
 > **SPI Mode 0**, MSB first, 8-bit, Hardware NSS.  
 > Bring-up @ 2 MHz → estable @ 20 MHz.
 
-### SD Card (SDMMC 4-bit)
+### SD Card (SPI3 master)
 
 | SD Pin | Daisy Pin |
 |--------|-----------|
-| CLK    | D18       |
-| CMD    | D19       |
-| DAT0   | D20       |
-| DAT1   | D21       |
-| DAT2   | D22       |
-| DAT3   | D23       |
+| CS     | D0 / PB12 |
+| MISO   | D1 / PC11 |
+| SCK    | D2 / PC10 |
+| MOSI   | D6 / PC12 |
 | VCC    | 3V3       |
 | GND    | GND       |
 
@@ -48,7 +46,7 @@ Codec integrado en la Daisy Seed → salida por **jack de 3.5mm**.
 
 | Parámetro | Valor |
 |-----------|-------|
-| Sample rate | **44100 Hz** |
+| Sample rate | **48000 Hz** |
 | Block size | **128 samples** |
 | Max pads | **24** (16 seq + 8 XTRA) |
 | Max voces | **32** polyphonic |
@@ -168,7 +166,15 @@ make program
 3. **Master cambia sample individual**: `CMD_SD_LIST_FILES` (0xB1) lista .wav de una familia → `CMD_SD_LOAD_SAMPLE` (0xB3) carga uno en un pad concreto.
 4. **Master consulta info**: `CMD_SD_LIST_FOLDERS` (0xB0) lista todas las carpetas, `CMD_SD_FILE_INFO` (0xB2) devuelve tamaño/sr/bps/duración.
 
-**Formatos WAV soportados:** 8/16/24-bit, mono o estéreo, cualquier sample rate (se almacena tal cual).
+**Formatos WAV soportados:** PCM 8/16/24-bit, mono o estéreo, 1–384 kHz. El motor conserva el sample rate de origen y remuestrea linealmente a 48 kHz durante la reproducción.
+
+### TR-505 PCM
+
+El preset de sintetizador **505 / preset 5** enlaza los pads canónicos 0–15 cargados actualmente como banco PCM de la TR-505. Cada slot ausente conserva la voz procedural como fallback. Los presets 0–4 siguen usando el motor procedural y no confunden el kit 808 por defecto con una ROM 505.
+
+### TR-909 híbrida
+
+El preset de sintetizador **909 / preset 5** mantiene kick, snare, clap, toms y rimshot procedurales, y enlaza PCM para los instrumentos digitales de la 909: closed hat desde pad 2, open hat desde pad 3, crash desde pad 4 y ride desde pad 7. Conserva choke CH→OH, resampling según el WAV y fallback procedural individual si falta un archivo.
 
 ## Módulos DaisySP utilizados
 
@@ -182,6 +188,21 @@ make program
 | Wavefolder | `Fold` |
 | Phaser | `Phaser` |
 | Filters | `Biquad` custom (LP/HP/BP/Notch/Peak/Shelf) |
+
+## Demo autónoma para presentación
+
+Compila una versión que arranca con un showcase musical de ocho escenas:
+
+```bash
+make RED808_STARTUP_SHOWCASE_DEMO=1 -j4
+```
+
+La demo recorre intro synthwave, Detroit, electro, acid, breakdown, UK garage,
+peak-time e industrial. Se repite continuamente y conserva la autoridad de
+audio aunque el Master esté conectado; esta imagen está pensada exclusivamente
+para presentación.
+El antiguo `RED808_STARTUP_808_SELF_TEST=1` se mantiene como diagnóstico de
+instrumentos y no debe usarse para una presentación.
 
 ## Debug USB
 

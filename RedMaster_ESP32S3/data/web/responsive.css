@@ -1,0 +1,55 @@
+/* RED808 responsive domain overrides.
+ * Kept separate from the component styles so mobile regressions can be tested
+ * and evolved without adding another cascade layer to style.css/admin.css. */
+
+@media (max-width: 600px) {
+  html, body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 100%;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .header,
+  .header-controls,
+  .hdr-transport,
+  .meter,
+  .meter-sequencer,
+  #meter-seq-volume {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  .header-controls,
+  .hdr-transport {
+    flex-wrap: wrap;
+  }
+
+  .tabs,
+  .tab-buttons,
+  .main-tabs {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .adm-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .adm-status-wrap {
+    width: 100%;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}
+

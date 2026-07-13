@@ -695,13 +695,14 @@ function createSynthOverlay(padIndex) {
     overlay.appendChild(canvas);
     pad.appendChild(overlay);
 
-    // Params button — positioned at top of pad, between loop btn and upload btn
+    // Params button — fourth action slot, away from the engine selector
     const existingBtn = pad.querySelector('.synth-params-btn');
     if (existingBtn) existingBtn.remove();
     const paramsBtn = document.createElement('button');
     paramsBtn.className = 'synth-params-btn' + (engine === 4 ? ' synth-params-btn--wt' : '');
-    paramsBtn.innerHTML = '🎛️';
-    paramsBtn.title = 'Edit synth parameters';
+    paramsBtn.textContent = 'SYN';
+    paramsBtn.title = 'Editar parámetros del sintetizador';
+    paramsBtn.setAttribute('aria-label', `Editar parámetros de sintetizador del pad ${padIndex + 1}`);
     const stopProp = (e) => { e.stopPropagation(); };
     paramsBtn.addEventListener('touchstart', stopProp);
     paramsBtn.addEventListener('mousedown', stopProp);
@@ -715,7 +716,7 @@ function createSynthOverlay(padIndex) {
         e.stopPropagation();
         openSynthModal(padIndex);
     });
-    pad.appendChild(paramsBtn);
+    (pad.querySelector('.pad-action-bar') || pad).appendChild(paramsBtn);
 
     // Draw initial waveform
     drawSynthWaveformInPad(canvas, engine, padIndex);
