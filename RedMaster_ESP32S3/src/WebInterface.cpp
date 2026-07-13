@@ -1167,8 +1167,10 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     conf.ap.beacon_interval = 100;
     esp_wifi_set_config(WIFI_IF_AP, &conf);
 
-    // Start AP first so it's always reachable
-    startAp(11);
+    // Start AP first so it's always reachable. Channel 6 is the most
+    // universally-supported 2.4GHz client channel (some phones/regulatory
+    // domains struggle to associate reliably on channel 11).
+    startAp(6);
 
     // Now try STA with static IP (192.168.1.80 — the "808" IP!)
     IPAddress staIP(192, 168, 1, 80);
@@ -1188,7 +1190,7 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
       // Restart AP on SAME channel as STA to eliminate radio channel switching
       // (channel hopping causes hardware interrupts that jitter Core1 audio)
       uint8_t staCh = WiFi.channel();
-      if (staCh > 0 && staCh != 1) {
+      if (staCh > 0 && staCh != 6) {
         startAp(staCh);
       }
       Serial.printf("[WiFi] STA connected: %s  IP: %s  ch=%d\n",
@@ -1200,7 +1202,7 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   } else {
     // --- AP-only mode ---
     WiFi.mode(WIFI_AP);
-    delay(50);
+    delay(100);
 
     // Set protocol and TX power BEFORE softAP so the AP config is stable
     // from the first beacon. Calling esp_wifi_set_protocol after softAP()
@@ -1214,9 +1216,10 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     conf.ap.beacon_interval = 100;
     esp_wifi_set_config(WIFI_IF_AP, &conf);
 
-    startAp(11);
+    startAp(6);
   }
 
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.setSleep(false);
   
   // Crear servidor web
@@ -3509,7 +3512,7 @@ void WebInterface::update() {
         WiFi.softAPConfig(local_IP, gateway, subnet);
         bool apOk = false;
         for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
-          apOk = WiFi.softAP("RED808", "red808esp32", 11, 0, 4);
+          apOk = WiFi.softAP("RED808", "red808esp32", 6, 0, 4);
           if (!apOk) delay(120);
         }
         if (!apOk) {
