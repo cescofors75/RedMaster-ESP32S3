@@ -533,6 +533,7 @@ extern void dsqUploadPattern(int pattern);           // upload one pattern to Da
 extern void dsqUploadPatternDeferred(int pattern);   // safe from Core0: sets flag for Core1
 extern void dsqSelectPatternDeferred(int pattern);   // select-only path (1 SPI cmd, no reupload)
 extern void dsqUploadAndPlayDeferred(int pattern);   // upload + select + play, en orden garantizado
+extern void setTrackSynthEngine(int track, int8_t engine);  // fwd: definido en main.cpp, usado por el pattern bank loader
 
 // Helper: lee todos los param locks de un step del Sequencer y los envía a Daisy
 static void dsqSyncParamLock(int pat, int track, int step) {
@@ -582,7 +583,9 @@ static bool loadPatternBankFromFs(const String& requestPath, String* errMsg = nu
     return false;
   }
 
-  DynamicJsonDocument doc(32768);
+  // PSRAM doc: un banco de 20+ patrones con notas melódicas supera de largo
+  // los 32KB que costeaba el antiguo DynamicJsonDocument en heap interno.
+  PsramJsonDocument doc(131072);
   DeserializationError error = deserializeJson(doc, f);
   f.close();
   if (error) {
@@ -611,6 +614,14 @@ static bool loadPatternBankFromFs(const String& requestPath, String* errMsg = nu
     bool stepsData[MAX_TRACKS][STEPS_PER_PATTERN] = {};
     uint8_t velsData[MAX_TRACKS][STEPS_PER_PATTERN];
     memset(velsData, 127, sizeof(velsData));
+    // Melodía opcional por track: "notes" (MIDI, 0=silencio), "accents"/"slides"
+    // (0/1 → stepFlags bit0/bit1, los consume el step callback del 303/SH101/FM).
+    // Estáticos para no cargar 2KB extra en el stack del handler web.
+    static uint8_t notesData[MAX_TRACKS][STEPS_PER_PATTERN];
+    static uint8_t flagsData[MAX_TRACKS][STEPS_PER_PATTERN];
+    memset(notesData, 0, sizeof(notesData));
+    memset(flagsData, 0, sizeof(flagsData));
+    bool hasMelody = false;
 
     JsonArrayConst tracks = patObj["tracks"].as<JsonArrayConst>();
     for (JsonObjectConst trObj : tracks) {
@@ -618,6 +629,9 @@ static bool loadPatternBankFromFs(const String& requestPath, String* errMsg = nu
       if (track < 0 || track >= MAX_TRACKS) continue;
       JsonArrayConst steps = trObj["steps"].as<JsonArrayConst>();
       JsonArrayConst velocities = trObj["velocities"].as<JsonArrayConst>();
+      JsonArrayConst notes = trObj["notes"].as<JsonArrayConst>();
+      JsonArrayConst accents = trObj["accents"].as<JsonArrayConst>();
+      JsonArrayConst slides = trObj["slides"].as<JsonArrayConst>();
       for (int step = 0; step < stepCount && step < STEPS_PER_PATTERN; step++) {
         bool active = false;
         if (!steps.isNull() && step < (int)steps.size()) {
@@ -628,11 +642,43 @@ static bool loadPatternBankFromFs(const String& requestPath, String* errMsg = nu
           int velocity = velocities[step].as<int>();
           velsData[track][step] = constrain(velocity, 1, 127);
         }
+        if (!notes.isNull() && step < (int)notes.size()) {
+          int note = notes[step].as<int>();
+          if (note > 0) {
+            notesData[track][step] = (uint8_t)constrain(note, 1, 127);
+            hasMelody = true;
+          }
+        }
+        uint8_t flags = 0;
+        if (!accents.isNull() && step < (int)accents.size() && accents[step].as<int>() != 0) flags |= 0x01;
+        if (!slides.isNull() && step < (int)slides.size() && slides[step].as<int>() != 0) flags |= 0x02;
+        flagsData[track][step] = flags;
+      }
+      // Engine opcional por track (-1=sample, 3=303, 5=SH101, ...): se aplica
+      // globalmente (los engines no son por-patrón) y se sincroniza a la Daisy
+      // para que no dispare el sample en paralelo.
+      int engine = trObj["engine"] | -2;
+      if (engine >= -1 && engine <= 8) {
+        setTrackSynthEngine(track, (int8_t)engine);
+        spiMaster.dsqSetTrackEngine((uint8_t)track, (int8_t)engine);
+        spiMaster.dsqSetMute((uint8_t)track, false);
       }
     }
 
     sequencer.clearPattern(slot);
     sequencer.setPatternBulk(slot, stepsData, velsData);
+    if (hasMelody) {
+      for (int track = 0; track < MAX_TRACKS; track++) {
+        for (int step = 0; step < stepCount && step < STEPS_PER_PATTERN; step++) {
+          if (notesData[track][step] > 0) {
+            sequencer.setStepNote(slot, track, step, notesData[track][step]);
+          }
+          if (flagsData[track][step] != 0) {
+            sequencer.setStepFlags(slot, track, step, flagsData[track][step]);
+          }
+        }
+      }
+    }
   }
 
   JsonArrayConst songChain = doc["songChain"].as<JsonArrayConst>();
