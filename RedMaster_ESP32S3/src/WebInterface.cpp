@@ -1271,6 +1271,9 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   esp_wifi_set_ps(WIFI_PS_NONE);
   WiFi.setTxPower(WIFI_POWER_15dBm);
   WiFi.setSleep(false);
+  // Marcador de build para confirmar por serie que el firmware con el fix de
+  // estabilidad está realmente flasheado (deja de adivinar "¿lo cargué?").
+  Serial.println("[WiFi] STABILITY v2: ps=NONE txpower=15dBm ch=11");
 
   // Crear servidor web
   server = new AsyncWebServer(80);
