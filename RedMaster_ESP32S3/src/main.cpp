@@ -957,8 +957,18 @@ void setup() {
         delay(500);
     }
 
-        // El banco profesional integrado es la fuente segura si no se carga una biblioteca desde LittleFS.
-        syslog("BOOT", "Professional 16-pattern bank ready (Master library -> Daisy resident cache)");
+    // Cargar el banco "20 Bangers 808" desde LittleFS encima del banco
+    // integrado de 16. Si el archivo no existe (fs sin subir), se mantiene
+    // el integrado como fallback seguro.
+    {
+        String bankErr;
+        if (webInterface.loadPatternBank("10_temas_referencia_808", &bankErr)) {
+            syslog("BOOT", "Pattern bank '20 Bangers 808' cargado desde LittleFS");
+        } else {
+            syslog("BOOT", "Banco JSON no cargado (%s) - usando 16 integrados",
+                   bankErr.c_str());
+        }
+    }
 
     webInterface.setMIDIController(&midiController);
     midiController.setMessageCallback([](const MIDIMessage& msg) {
