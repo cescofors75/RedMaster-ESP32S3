@@ -323,11 +323,12 @@
 		{
 			"label": "PlatformIO: Monitor Master S3",
 			"type": "shell",
-			"command": "${userHome}/.platformio/penv/Scripts/platformio.exe",
+			"command": "pwsh.exe",
 			"args": [
-				"device", "monitor",
-				"--project-dir", "${workspaceFolder}/RedMaster_ESP32S3",
-				"--environment", "redmaster-s3-r8n16"
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/.vscode/monitor_device.ps1",
+				"-Device", "s3"
 			],
 			"problemMatcher": [],
 			"presentation": {
