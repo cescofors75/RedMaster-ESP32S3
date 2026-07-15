@@ -34,8 +34,11 @@
 #define HOME_WIFI_TIMEOUT  12000      // ms para intentar conectar (12s)
 
 // AP fallback (siempre disponible si STA falla)
+// Password vacío = red ABIERTA (sin WPA): asociación instantánea y máxima
+// compatibilidad con cualquier dispositivo. Es un AP local de instrumento,
+// no expone internet.
 #define AP_SSID     "RED808"
-#define AP_PASSWORD "red808esp32"
+#define AP_PASSWORD ""
 
 
 // Daisy-first workflow: samples se gestionan desde SD en Daisy vía comandos SD_*.

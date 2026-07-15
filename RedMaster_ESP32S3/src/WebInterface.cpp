@@ -1158,7 +1158,8 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
     bool apOk = false;
     for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
-      apOk = WiFi.softAP(apSsid, apPassword, channel, 0, 4);
+      // Password vacío = AP abierto. 8 clientes máx (web + móvil + tablet...).
+      apOk = WiFi.softAP(apSsid, apPassword, channel, 0, 8);
       if (!apOk) delay(120);
     }
     delay(200);
@@ -1260,14 +1261,9 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     }
     next();
   });
-  if (_staConnected) {
-    auto* auth = new AsyncAuthenticationMiddleware();
-    auth->setUsername("red808");
-    auth->setPassword(apPassword);
-    auth->setRealm("RED808");
-    auth->setAuthFailureMessage("Authentication required for RED808 STA mode");
-    server->addMiddleware(auth);
-  }
+  // Sin autenticación HTTP: el AP es una red local de instrumento y el
+  // login básico añadía un round-trip 401 por conexión y un prompt de
+  // usuario/contraseña que entorpecía el uso normal.
   ws->handleHandshake([](AsyncWebServerRequest* request) {
     return webRequestHasTrustedOrigin(request);
   });
@@ -3540,7 +3536,7 @@ void WebInterface::update() {
         WiFi.softAPConfig(local_IP, gateway, subnet);
         bool apOk = false;
         for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
-          apOk = WiFi.softAP("RED808", "red808esp32", 11, 0, 4);
+          apOk = WiFi.softAP("RED808", "", 11, 0, 8);
           if (!apOk) delay(120);
         }
         if (!apOk) {
