@@ -1150,6 +1150,33 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   WiFi.mode(WIFI_OFF);
   delay(100);
 
+  // Log de eventos AP en serie: ver asociaciones y asignación de IP en vivo
+  // (imprescindible para diagnosticar "el PC no conecta" sin adivinar).
+  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch (event) {
+      case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+        Serial.printf("[WiFi] STA %02X:%02X:%02X:%02X:%02X:%02X asociada al AP\n",
+                      info.wifi_ap_staconnected.mac[0], info.wifi_ap_staconnected.mac[1],
+                      info.wifi_ap_staconnected.mac[2], info.wifi_ap_staconnected.mac[3],
+                      info.wifi_ap_staconnected.mac[4], info.wifi_ap_staconnected.mac[5]);
+        break;
+      case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+        Serial.printf("[WiFi] STA %02X:%02X:%02X:%02X:%02X:%02X desconectada del AP\n",
+                      info.wifi_ap_stadisconnected.mac[0], info.wifi_ap_stadisconnected.mac[1],
+                      info.wifi_ap_stadisconnected.mac[2], info.wifi_ap_stadisconnected.mac[3],
+                      info.wifi_ap_stadisconnected.mac[4], info.wifi_ap_stadisconnected.mac[5]);
+        break;
+      case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+        Serial.println("[WiFi] DHCP: IP asignada a un cliente del AP");
+        break;
+      default: break;
+    }
+  });
+
+  // Secuencia PROBADA (la de main que siempre funcionó): softAPConfig →
+  // softAP → delay → protocolo/beacon/txpower DESPUÉS. El orden invertido
+  // de la rama de auditoría (config antes de softAP) dejaba asociaciones
+  // colgadas en algunos clientes.
   auto startAp = [&](uint8_t channel) {
     IPAddress local_IP(192, 168, 4, 1);
     IPAddress gateway(192, 168, 4, 1);
@@ -1158,15 +1185,27 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
     bool apOk = false;
     for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
-      // Password vacío = AP abierto. 8 clientes máx (web + móvil + tablet...).
-      apOk = WiFi.softAP(apSsid, apPassword, channel, 0, 8);
+      // Password vacío = AP abierto (sin WPA), asociación inmediata.
+      apOk = WiFi.softAP(apSsid, apPassword, channel, 0, 4);
       if (!apOk) delay(120);
     }
     delay(200);
+
+    // Protocolo b/g/n y beacon 100ms — después del softAP, como en main.
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    wifi_config_t conf;
+    esp_wifi_get_config(WIFI_IF_AP, &conf);
+    conf.ap.beacon_interval = 100;
+    esp_wifi_set_config(WIFI_IF_AP, &conf);
+
     if (!apOk || WiFi.softAPIP() == IPAddress((uint32_t)0)) {
       Serial.printf("[WiFi] AP start failed (ssid=%s ch=%u)\n", apSsid, channel);
       return false;
     }
+    Serial.printf("[WiFi] AP '%s' activo: ch=%u ip=%s open=%s\n",
+                  apSsid, channel, WiFi.softAPIP().toString().c_str(),
+                  (apPassword == nullptr || apPassword[0] == '\0') ? "si" : "no");
     return true;
   };
 
@@ -1177,18 +1216,6 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     // --- STA + AP dual mode ---
     WiFi.mode(WIFI_AP_STA);
     delay(50);
-
-    // Set protocol and TX power BEFORE softAP so the AP config is stable
-    // from the first beacon. Calling esp_wifi_set_protocol after softAP()
-    // triggers an internal AP restart that drops incoming association requests.
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);
-    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-
-    // Apply beacon interval via config struct before starting AP
-    wifi_config_t conf;
-    esp_wifi_get_config(WIFI_IF_AP, &conf);
-    conf.ap.beacon_interval = 100;
-    esp_wifi_set_config(WIFI_IF_AP, &conf);
 
     // Start AP first so it's always reachable. Canal 11: el 6 (probado en
     // la rama de auditoría) es el más saturado en entornos domésticos y
@@ -1226,18 +1253,6 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     // --- AP-only mode ---
     WiFi.mode(WIFI_AP);
     delay(100);
-
-    // Set protocol and TX power BEFORE softAP so the AP config is stable
-    // from the first beacon. Calling esp_wifi_set_protocol after softAP()
-    // triggers an internal AP restart that drops incoming association requests.
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);
-    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-
-    // Apply beacon interval via config struct before starting AP
-    wifi_config_t conf;
-    esp_wifi_get_config(WIFI_IF_AP, &conf);
-    conf.ap.beacon_interval = 100;
-    esp_wifi_set_config(WIFI_IF_AP, &conf);
 
     // Canal 11 (ver comentario en el modo dual): el canal 6 penalizaba
     // asociación y throughput en entornos con muchos routers vecinos.
