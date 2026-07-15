@@ -1192,7 +1192,8 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     delay(200);
 
     // Protocolo b/g/n y beacon 100ms — después del softAP, como en main.
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    // 15dBm (no 19.5): más estable en placas con regulador débil.
+    WiFi.setTxPower(WIFI_POWER_15dBm);
     esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
     wifi_config_t conf;
     esp_wifi_get_config(WIFI_IF_AP, &conf);
@@ -1259,9 +1260,18 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     startAp(11);
   }
 
-  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  // ── Estabilidad del AP ──────────────────────────────────────────────
+  // El cliente asociaba y recibía IP pero se caía y reconectaba cada 30-50s
+  // (visto en el monitor). Dos causas típicas en placas S3 baratas:
+  //   1. Power-save residual: WiFi.setSleep(false) no siempre basta en modo
+  //      AP; esp_wifi_set_ps(WIFI_PS_NONE) lo desactiva a nivel IDF.
+  //   2. TX a 19.5dBm satura el PA de placas con regulador débil y provoca
+  //      micro-brownouts de RF que tiran la asociación. 15dBm es de sobra
+  //      para uso en la misma sala y estabiliza mucho.
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  WiFi.setTxPower(WIFI_POWER_15dBm);
   WiFi.setSleep(false);
-  
+
   // Crear servidor web
   server = new AsyncWebServer(80);
   ws = new AsyncWebSocket("/ws");
