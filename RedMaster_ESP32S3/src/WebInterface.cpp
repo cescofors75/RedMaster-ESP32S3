@@ -1192,8 +1192,9 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     delay(200);
 
     // Protocolo b/g/n y beacon 100ms — después del softAP, como en main.
-    // 15dBm (no 19.5): más estable en placas con regulador débil.
-    WiFi.setTxPower(WIFI_POWER_15dBm);
+    // Potencia máxima (19.5dBm): a 15dBm el móvil ni veía el SSID. La
+    // estabilidad la da esp_wifi_set_ps(WIFI_PS_NONE), no bajar potencia.
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
     esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
     wifi_config_t conf;
     esp_wifi_get_config(WIFI_IF_AP, &conf);
@@ -1269,11 +1270,11 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   //      micro-brownouts de RF que tiran la asociación. 15dBm es de sobra
   //      para uso en la misma sala y estabiliza mucho.
   esp_wifi_set_ps(WIFI_PS_NONE);
-  WiFi.setTxPower(WIFI_POWER_15dBm);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.setSleep(false);
   // Marcador de build para confirmar por serie que el firmware con el fix de
   // estabilidad está realmente flasheado (deja de adivinar "¿lo cargué?").
-  Serial.println("[WiFi] STABILITY v2: ps=NONE txpower=15dBm ch=11");
+  Serial.println("[WiFi] STABILITY v3: ps=NONE txpower=19.5dBm ch=11");
 
   // Crear servidor web
   server = new AsyncWebServer(80);
