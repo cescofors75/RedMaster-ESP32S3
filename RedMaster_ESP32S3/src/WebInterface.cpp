@@ -3551,7 +3551,7 @@ void WebInterface::update() {
         WiFi.softAPConfig(local_IP, gateway, subnet);
         bool apOk = false;
         for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
-          apOk = WiFi.softAP("RED808", "", 11, 0, 8);
+          apOk = WiFi.softAP("RED808", "red808esp32", 11, 0, 4);
           if (!apOk) delay(120);
         }
         if (!apOk) {

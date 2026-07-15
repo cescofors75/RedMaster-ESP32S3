@@ -34,11 +34,12 @@
 #define HOME_WIFI_TIMEOUT  12000      // ms para intentar conectar (12s)
 
 // AP fallback (siempre disponible si STA falla)
-// Password vacío = red ABIERTA (sin WPA): asociación instantánea y máxima
-// compatibilidad con cualquier dispositivo. Es un AP local de instrumento,
-// no expone internet.
+// WPA2 con password: aunque parezca contradictorio, en Windows 10/11 una red
+// ABIERTA falla al asociar ("No es posible conectarse a esta red") por la
+// detección de portal cautivo. WPA2 es MÁS compatible y sólo añade ~100ms de
+// handshake. La velocidad la dan canal 11 + sin auth HTTP + orden de arranque.
 #define AP_SSID     "RED808"
-#define AP_PASSWORD ""
+#define AP_PASSWORD "red808esp32"
 
 
 // Daisy-first workflow: samples se gestionan desde SD en Daisy vía comandos SD_*.
