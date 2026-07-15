@@ -1189,10 +1189,10 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     conf.ap.beacon_interval = 100;
     esp_wifi_set_config(WIFI_IF_AP, &conf);
 
-    // Start AP first so it's always reachable. Channel 6 is the most
-    // universally-supported 2.4GHz client channel (some phones/regulatory
-    // domains struggle to associate reliably on channel 11).
-    startAp(6);
+    // Start AP first so it's always reachable. Canal 11: el 6 (probado en
+    // la rama de auditoría) es el más saturado en entornos domésticos y
+    // hacía lenta la asociación y la carga de la web en despliegues reales.
+    startAp(11);
 
     // Now try STA with static IP (192.168.1.80 — the "808" IP!)
     IPAddress staIP(192, 168, 1, 80);
@@ -1238,7 +1238,9 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     conf.ap.beacon_interval = 100;
     esp_wifi_set_config(WIFI_IF_AP, &conf);
 
-    startAp(6);
+    // Canal 11 (ver comentario en el modo dual): el canal 6 penalizaba
+    // asociación y throughput en entornos con muchos routers vecinos.
+    startAp(11);
   }
 
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
@@ -1333,6 +1335,10 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
   server->on("/studio-workspaces.css", HTTP_GET, [](AsyncWebServerRequest *request){
     sendWebAsset(request, "/studio-workspaces.css", "text/css", "no-cache");
+  });
+
+  server->on("/theme-sync.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/theme-sync.js", "application/javascript", "no-cache");
   });
 
   server->on("/workspace-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -3534,7 +3540,7 @@ void WebInterface::update() {
         WiFi.softAPConfig(local_IP, gateway, subnet);
         bool apOk = false;
         for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
-          apOk = WiFi.softAP("RED808", "red808esp32", 6, 0, 4);
+          apOk = WiFi.softAP("RED808", "red808esp32", 11, 0, 4);
           if (!apOk) delay(120);
         }
         if (!apOk) {
