@@ -1173,10 +1173,10 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     }
   });
 
-  // Secuencia PROBADA (la de main que siempre funcionó): softAPConfig →
-  // softAP → delay → protocolo/beacon/txpower DESPUÉS. El orden invertido
-  // de la rama de auditoría (config antes de softAP) dejaba asociaciones
-  // colgadas en algunos clientes.
+  // Bring-up EXACTO del firmware de esta mañana (2423ec9), que un móvil ve y
+  // asocia sin problemas. Canal 6: cambiarlo a 11 hizo que el móvil dejara de
+  // ver el SSID y provocó desconexiones — el 6 es el que funciona en este
+  // entorno. protocolo/beacon/txpower se fijan ANTES del softAP.
   auto startAp = [&](uint8_t channel) {
     IPAddress local_IP(192, 168, 4, 1);
     IPAddress gateway(192, 168, 4, 1);
@@ -1185,29 +1185,16 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
     bool apOk = false;
     for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
-      // Password vacío = AP abierto (sin WPA), asociación inmediata.
       apOk = WiFi.softAP(apSsid, apPassword, channel, 0, 4);
       if (!apOk) delay(120);
     }
     delay(200);
-
-    // Protocolo b/g/n y beacon 100ms — después del softAP, como en main.
-    // Potencia máxima (19.5dBm): a 15dBm el móvil ni veía el SSID. La
-    // estabilidad la da esp_wifi_set_ps(WIFI_PS_NONE), no bajar potencia.
-    WiFi.setTxPower(WIFI_POWER_19_5dBm);
-    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-    wifi_config_t conf;
-    esp_wifi_get_config(WIFI_IF_AP, &conf);
-    conf.ap.beacon_interval = 100;
-    esp_wifi_set_config(WIFI_IF_AP, &conf);
-
     if (!apOk || WiFi.softAPIP() == IPAddress((uint32_t)0)) {
       Serial.printf("[WiFi] AP start failed (ssid=%s ch=%u)\n", apSsid, channel);
       return false;
     }
-    Serial.printf("[WiFi] AP '%s' activo: ch=%u ip=%s open=%s\n",
-                  apSsid, channel, WiFi.softAPIP().toString().c_str(),
-                  (apPassword == nullptr || apPassword[0] == '\0') ? "si" : "no");
+    Serial.printf("[WiFi] AP '%s' activo: ch=%u ip=%s\n",
+                  apSsid, channel, WiFi.softAPIP().toString().c_str());
     return true;
   };
 
@@ -1219,10 +1206,16 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     WiFi.mode(WIFI_AP_STA);
     delay(50);
 
-    // Start AP first so it's always reachable. Canal 11: el 6 (probado en
-    // la rama de auditoría) es el más saturado en entornos domésticos y
-    // hacía lenta la asociación y la carga de la web en despliegues reales.
-    startAp(11);
+    // Protocolo y TX ANTES de softAP para que el AP sea estable desde el
+    // primer beacon (llamar esp_wifi_set_protocol tras softAP reinicia el AP).
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    wifi_config_t conf;
+    esp_wifi_get_config(WIFI_IF_AP, &conf);
+    conf.ap.beacon_interval = 100;
+    esp_wifi_set_config(WIFI_IF_AP, &conf);
+
+    startAp(6);
 
     // Now try STA with static IP (192.168.1.80 — the "808" IP!)
     IPAddress staIP(192, 168, 1, 80);
@@ -1256,25 +1249,21 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     WiFi.mode(WIFI_AP);
     delay(100);
 
-    // Canal 11 (ver comentario en el modo dual): el canal 6 penalizaba
-    // asociación y throughput en entornos con muchos routers vecinos.
-    startAp(11);
+    // Protocolo y TX ANTES de softAP (ver comentario en modo dual).
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    wifi_config_t conf;
+    esp_wifi_get_config(WIFI_IF_AP, &conf);
+    conf.ap.beacon_interval = 100;
+    esp_wifi_set_config(WIFI_IF_AP, &conf);
+
+    startAp(6);
   }
 
-  // ── Estabilidad del AP ──────────────────────────────────────────────
-  // El cliente asociaba y recibía IP pero se caía y reconectaba cada 30-50s
-  // (visto en el monitor). Dos causas típicas en placas S3 baratas:
-  //   1. Power-save residual: WiFi.setSleep(false) no siempre basta en modo
-  //      AP; esp_wifi_set_ps(WIFI_PS_NONE) lo desactiva a nivel IDF.
-  //   2. TX a 19.5dBm satura el PA de placas con regulador débil y provoca
-  //      micro-brownouts de RF que tiran la asociación. 15dBm es de sobra
-  //      para uso en la misma sala y estabiliza mucho.
-  esp_wifi_set_ps(WIFI_PS_NONE);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.setSleep(false);
-  // Marcador de build para confirmar por serie que el firmware con el fix de
-  // estabilidad está realmente flasheado (deja de adivinar "¿lo cargué?").
-  Serial.println("[WiFi] STABILITY v3: ps=NONE txpower=19.5dBm ch=11");
+  // Marcador de build para confirmar por serie qué firmware está flasheado.
+  Serial.println("[WiFi] STABILITY v4: ch=6 txpower=19.5dBm (config de la manana)");
 
   // Crear servidor web
   server = new AsyncWebServer(80);
@@ -3565,7 +3554,7 @@ void WebInterface::update() {
         WiFi.softAPConfig(local_IP, gateway, subnet);
         bool apOk = false;
         for (int attempt = 0; attempt < 3 && !apOk; attempt++) {
-          apOk = WiFi.softAP("RED808", "red808esp32", 11, 0, 4);
+          apOk = WiFi.softAP("RED808", "red808esp32", 6, 0, 4);
           if (!apOk) delay(120);
         }
         if (!apOk) {
