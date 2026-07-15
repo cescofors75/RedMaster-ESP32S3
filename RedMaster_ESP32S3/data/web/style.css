@@ -2279,6 +2279,15 @@ body:not(.mono-mode) .pad.tremolo-active {
     font-size: 10px;
 }
 
+/* Al cambiar de patrón se atenúan los pasos del patrón anterior mientras
+   llega la respuesta getPattern por WebSocket, para no confundirlos con
+   los del patrón recién seleccionado. */
+.sequencer-grid.pattern-loading {
+    opacity: 0.35;
+    transition: opacity 0.15s ease;
+    pointer-events: none;
+}
+
 /* ── Compact grid for 32/64 step modes ─────────── */
 .sequencer-grid.steps-32 {
     grid-template-columns: 62px repeat(32, 1fr) 44px;

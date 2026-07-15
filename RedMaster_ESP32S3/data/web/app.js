@@ -18,12 +18,19 @@ let lastSynthSwitchMs = new Array(16).fill(0);
 let synthSwitchPendingTimers = new Array(16).fill(null);
 let currentPatternIndex = 0; // Track current pattern for keyboard nav
 
+// Fallback: nombres del banco de 20 patrones por defecto (10_temas_referencia_808.json).
+// Solo se usa mientras no ha llegado aún el nombre real del servidor
+// (data.patternMeta.name / data.name) — el servidor manda el nombre real
+// del patrón que esté cargado, aunque el banco sea otro distinto a este.
 const PATTERN_NAMES = [
-    'BOOM BAP 90s', 'DETROIT TECHNO', 'JUNGLE/AMEN 90s', 'CHICAGO HOUSE',
-    'SYNTHPOP LINN 80s', 'NEW WAVE/GATED DRUMS', 'ITALO DISCO',
-    'ELECTRO/FREESTYLE 80s', 'ACID HOUSE 1988', 'MIAMI BASS',
-    'NEW JACK SWING', 'CLASSIC HOUSE 90s', 'UK GARAGE 90s', 'TRIP-HOP',
-    'RAVE/BREAKBEAT', 'INDUSTRIAL/EBM'
+    'Afrika Bambaataa - Planet Rock', 'Marvin Gaye - Sexual Healing',
+    'Beastie Boys - Paul Revere', 'Cybotron - Clear',
+    'LL Cool J - I Need a Beat', 'Egyptian Lover - Egypt Egypt',
+    "Run-DMC - It's Like That", 'Mantronix - Needle to the Groove',
+    'Whitney Houston - I Wanna Dance', 'Public Enemy - Rebel Without a Pause',
+    'Acid Warehouse', 'Miami Bass Attack', 'Trap Reaper', 'Boom Bap Classic',
+    'DnB Breaker', 'Deep House Groover', 'Electro Funk 2088',
+    'Afro Latin Fire', 'Berlin Techno', 'Breakdance Battle'
 ];
 
 function clearTimerMap(timerMap) {
@@ -72,6 +79,7 @@ function scheduleWebSocketReconnect() {
 let syncLedsEnabled = false;
 let _cachedPadEls = null; // cached pad DOM elements for sync LEDs
 let _syncFlashTimer = null; // single timer for all sync flashes
+let _patternSwitchTimer = null; // guard: evita getPattern duplicados si el usuario pulsa PAT+/- rápido
 
 // Sequencer caches
 let currentStepCount = 16;  // 16, 32, or 64
@@ -1173,6 +1181,9 @@ function handleTrackFxUpdate(data) {
 }
 
 function loadPatternData(data) {
+    const _gridEl = document.getElementById('sequencerGrid');
+    if (_gridEl) _gridEl.classList.remove('pattern-loading');
+
     // Clear circular data
     circularSequencerData = Array.from({ length: 16 }, () => Array(currentStepCount).fill(false));
     
@@ -5912,8 +5923,20 @@ function selectPattern(index) {
     if (circEl) circEl.textContent = name;
     updateHeaderPatternDisplay(index, name);
 
-    // Request pattern data from server
-    setTimeout(() => sendWebSocket({ cmd: 'getPattern' }), 50);
+    // Los pasos del patrón anterior siguen pintados hasta que llegue la
+    // respuesta de getPattern (round-trip WS): atenuar el grid evita que
+    // se vean como si fueran los del patrón nuevo mientras tanto.
+    const grid = document.getElementById('sequencerGrid');
+    if (grid) grid.classList.add('pattern-loading');
+
+    // Request pattern data from server. Cancela cualquier petición pendiente
+    // de un cambio de patrón anterior (PAT+/- rápido) para no encadenar
+    // respuestas fuera de orden que pinten un patrón que ya no es el actual.
+    if (_patternSwitchTimer) clearTimeout(_patternSwitchTimer);
+    _patternSwitchTimer = setTimeout(() => {
+        _patternSwitchTimer = null;
+        sendWebSocket({ cmd: 'getPattern' });
+    }, 50);
 }
 
 
