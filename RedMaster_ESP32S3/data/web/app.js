@@ -80,6 +80,7 @@ let syncLedsEnabled = false;
 let _cachedPadEls = null; // cached pad DOM elements for sync LEDs
 let _syncFlashTimer = null; // single timer for all sync flashes
 let _patternSwitchTimer = null; // guard: evita getPattern duplicados si el usuario pulsa PAT+/- rápido
+let _lastUserPatternSelectTime = 0; // timestamp del último selectPattern() local, para ignorar broadcasts periódicos que aún reflejen el patrón viejo
 
 // Sequencer caches
 let currentStepCount = 16;  // 16, 32, or 64
@@ -4906,17 +4907,19 @@ function setupControls() {
             
             const pattern = parseInt(btn.dataset.pattern);
             const patternName = btn.textContent.trim();
-            
+            _lastUserPatternSelectTime = Date.now();
+            currentPatternIndex = pattern;
+
             // Actualizar display del patrón
             document.getElementById('currentPatternName').textContent = patternName;
             updateHeaderPatternDisplay(pattern, patternName);
-            
+
             // Update circular pattern name
             const circularPatternName = document.getElementById('circularPatternName');
             if (circularPatternName) {
                 circularPatternName.textContent = patternName;
             }
-            
+
             // Cambiar pattern directamente por WebSocket
             // El backend envía automáticamente los datos del patrón
             sendWebSocket({
@@ -5620,8 +5623,15 @@ function updateSequencerState(data) {
     
     // Update pattern button
     if (data.pattern !== undefined) {
-        // Update pattern tracking
-        if (currentPatternIndex !== data.pattern) {
+        // Update pattern tracking. El broadcast periódico de estado puede
+        // llegar con el patrón AÚN viejo justo tras un selectPattern() local
+        // (el ESP32 no lo ha procesado todavía cuando arma este paquete) —
+        // eso revertía el nombre un instante ("nombre viejo, luego nuevo")
+        // antes de que el siguiente broadcast lo corrigiera. Si acabamos de
+        // elegir patrón nosotros mismos hace poco, nuestra elección local
+        // manda sobre un broadcast que la contradiga durante ese margen.
+        const recentLocalSelect = (Date.now() - _lastUserPatternSelectTime) < 600;
+        if (currentPatternIndex !== data.pattern && !recentLocalSelect) {
             currentPatternIndex = data.pattern;
             // Pattern changed, update name and request new data
             const patternName = data.patternMeta?.name || (data.pattern < PATTERN_NAMES.length
@@ -5681,6 +5691,8 @@ function updateSongModeUI(enabled, length, currentPattern) {
             btn.textContent = i + 1;
             btn.title = `Bar ${i + 1}`;
             btn.addEventListener('click', () => {
+                _lastUserPatternSelectTime = Date.now();
+                currentPatternIndex = i;
                 sendWebSocket({ cmd: 'selectPattern', index: i });
                 // Update local state immediately
                 updateSongBarHighlight(i);
@@ -5911,6 +5923,7 @@ function changePattern(delta) {
 function selectPattern(index) {
     if (index < 0 || index >= 128) return;
     currentPatternIndex = index;
+    _lastUserPatternSelectTime = Date.now();
 
     // Send pattern change to ESP32
     sendWebSocket({ cmd: 'selectPattern', index: index });
