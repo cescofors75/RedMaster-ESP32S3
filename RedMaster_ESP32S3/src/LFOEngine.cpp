@@ -10,6 +10,17 @@
 #include "SPIMaster.h"
 #include <math.h>
 
+// PRNG local (xorshift32) para S&H: el random() de Arduino comparte estado
+// global con codigo de Core0 (no thread-safe entre nucleos). Update() corre
+// en Core1.
+static inline float lfoRandUnit() {
+    static uint32_t s = 0;
+    if (s == 0) s = ((uint32_t)micros() ^ 0xBADC0FFE) | 1u;
+    s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+    // Map a [-1.0, +1.0]
+    return ((float)(s % 2001u) - 1000.0f) / 1000.0f;
+}
+
 // ══════════════════════════════════════════════════════
 // Constructor
 // ══════════════════════════════════════════════════════
@@ -203,7 +214,7 @@ void LFOEngine::update(float bpm, SPIMaster& spi) {
             case LFO_WAVE_SH:
                 // Sample & Hold: latch new random value on each cycle start
                 if (lfo.phase < hz * dtSec) {
-                    lfo.shValue = ((float)random(-1000, 1001)) / 1000.0f;
+                    lfo.shValue = lfoRandUnit();
                 }
                 rawValue = lfo.shValue;
                 break;

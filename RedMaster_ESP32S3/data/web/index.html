@@ -2,11 +2,17 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>RED808 Drum Machine</title>
-    <link rel="icon" href="data:,">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RED808 Studio</title>
+    <script src="nav.js"></script>
+    <link rel="icon" href="/favicon.ico" type="image/svg+xml">
     <link rel="stylesheet" href="theme-vars.css">
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="daisy-controls.css">
+    <link rel="stylesheet" href="responsive.css">
+    <link rel="stylesheet" href="ui-2026.css">
+    <link rel="stylesheet" href="workspace-2026.css">
+    <link rel="stylesheet" href="studio-workspaces.css">
     <link rel="stylesheet" href="keyboard-styles.css" media="print" onload="this.media='all'">
 </head>
 <body>
@@ -28,7 +34,6 @@
                     <span class="hdr-pattern-readout" id="headerPatternReadout">P01</span>
                     <span class="hdr-step-readout" id="headerStepIndicator" title="Step activo">S--</span>
                     <button class="hdr-transport-btn hdr-panic-btn" id="headerPanicBtn" title="Apagar todas las notas colgadas (ESC)">🛑</button>
-                    <button class="hdr-transport-btn hdr-stem-btn" id="headerStemUploadBtn" title="Subir WAV a la primera clean track libre" onclick="showCleanTrackUploadDialog()">SUBIR STEM</button>
                 </div>
                 <!-- BPM -->
                 <div class="hdr-ctrl" id="meter-bpm">
@@ -97,17 +102,54 @@
             </div>
         </header>
 
-        <!-- Tab Navigation Bar -->
-        <nav class="tab-navigation">
-            <button class="tab-btn active" data-tab="performance">🎹 LIVE PADS</button>
-            <button class="tab-btn" data-tab="xtra-pads">🎲 XTRA PADS</button>
-            <button class="tab-btn tab-btn-stems" data-tab="stems">🎼 STEMS</button>
-            <button class="tab-btn" data-tab="sequencer">🎵 SEQUENCER</button>
-            <button class="tab-btn" data-tab="volumes">🎚️ VOLUMENES</button>
-            <button class="tab-btn" data-tab="melody">🎼 MELODY</button>
-            <a href="/patchbay" class="tab-btn" title="Signal Patchbay">⬡ PATCH</a>
-            <a href="/multiview.html" class="tab-btn tab-btn-multiview" title="Ver múltiples secciones a la vez">🖥 MULTIVIEW</a>
+        <!-- Workspace navigation: four primary musical workflows + secondary tools -->
+        <nav class="tab-navigation workspace-navigation" aria-label="Espacios de trabajo">
+            <div class="workspace-primary-tabs" role="tablist" aria-label="Flujo principal">
+                <button class="tab-btn active" data-tab="performance" data-short-label="LIVE">PADS</button>
+                <button class="tab-btn" data-tab="sequencer" data-short-label="SEQ">SEQUENCER</button>
+                <button class="tab-btn" data-tab="volumes" data-short-label="MIX">MIXER</button>
+                <button class="tab-btn" data-tab="melody" data-short-label="NOTE">MELODÍA</button>
+                <button type="button" class="tab-btn workspace-path-link" data-short-label="PATH" title="Abrir rutas de señal, filtros y efectos" onclick="window.location.href='/patchbay'">PATH</button>
+            </div>
+            <details class="workspace-more" id="workspaceMoreMenu">
+                <summary>MÁS <span aria-hidden="true">⌄</span></summary>
+                <div class="workspace-more-menu">
+                    <button class="tab-btn workspace-secondary-tab" data-tab="xtra-pads">
+                        <strong>XTRA PADS</strong><span>Disparos y samples independientes</span>
+                    </button>
+                    <button class="tab-btn workspace-secondary-tab" data-tab="stems">
+                        <strong>STEMS</strong><span>Pistas largas y acompañamientos</span>
+                    </button>
+                    <p>Multiview, Mobile y Admin continúan disponibles en el menú global <b>808</b>.</p>
+                </div>
+            </details>
         </nav>
+
+        <div class="workspace-overview" id="workspaceOverview">
+            <div class="workspace-overview-copy">
+                <span class="workspace-kicker" id="workspaceKicker">PERFORMANCE</span>
+                <h2 id="workspaceTitle">PADS</h2>
+                <p id="workspaceDescription">Toca, carga y transforma tus sonidos principales.</p>
+            </div>
+            <div class="workspace-view-actions" aria-label="Opciones de interfaz">
+                <details class="workspace-theme-picker" id="workspaceThemePicker">
+                    <summary aria-label="Seleccionar tema visual">
+                        <span class="workspace-theme-current-swatch" id="workspaceThemeSwatch" aria-hidden="true"></span>
+                        <span id="workspaceThemeName">RED808</span>
+                        <span aria-hidden="true">⌄</span>
+                    </summary>
+                    <div class="workspace-theme-menu" id="workspaceThemeMenu" role="radiogroup" aria-label="Tema visual">
+                        <button type="button" role="radio" data-theme="red808" style="--theme-swatch:#e23d22"><strong>RED808</strong><span>Clásico cálido</span></button>
+                        <button type="button" role="radio" data-theme="ocean" style="--theme-swatch:#4a9eff"><strong>OCEAN</strong><span>Azul profundo</span></button>
+                        <button type="button" role="radio" data-theme="neon" style="--theme-swatch:#39ff14"><strong>NEON</strong><span>Verde eléctrico</span></button>
+                        <button type="button" role="radio" data-theme="sunset" style="--theme-swatch:#ff6b35"><strong>SUNSET</strong><span>Naranja y violeta</span></button>
+                        <button type="button" role="radio" data-theme="rainbow" style="--theme-swatch:#ff00aa"><strong>RAINBOW</strong><span>Pistas multicolor</span></button>
+                        <button type="button" role="radio" data-theme="greyscale" style="--theme-swatch:#cccccc"><strong>GREYSCALE</strong><span>Monocromo técnico</span></button>
+                    </div>
+                </details>
+                <button type="button" class="workspace-view-btn workspace-focus-btn" id="focusModeBtn" aria-pressed="false">MODO FOCO</button>
+            </div>
+        </div>
 
         <!-- TAB: Performance (Live Pads) -->
         <div id="tab-performance" class="tab-content active">
@@ -183,57 +225,64 @@
             <section id="section-sequencer" class="sequencer-section" data-section="sequencer" data-title="Sequencer">
                 <div class="sequencer-header">
                     <div class="sequencer-controls">
-                        <button id="playBtn" class="seq-btn seq-btn-play" title="Play/Pause">
-                            <span class="seq-btn-bg"></span>
-                            <span class="seq-btn-icon">▶</span>
-                            <span class="seq-btn-label">PLAY</span>
-                        </button>
-                        <button id="stopBtn" class="seq-btn seq-btn-stop" title="Stop">
-                            <span class="seq-btn-bg"></span>
-                            <span class="seq-btn-icon">⬛</span>
-                            <span class="seq-btn-label">STOP</span>
-                        </button>
-                        <button id="clearBtn" class="seq-btn seq-btn-clear" title="Clear Pattern">
-                            <span class="seq-btn-bg"></span>
-                            <span class="seq-btn-icon">⚡</span>
-                            <span class="seq-btn-label">CLEAR</span>
-                        </button>
-                        <button id="viewModeBtn" class="seq-btn seq-btn-view-mode" title="Cambiar vista: Grid / Circular">
-                            <span class="seq-btn-bg"></span>
-                            <span class="seq-btn-icon">⭘</span>
-                            <span class="seq-btn-label">CIRCULAR</span>
-                        </button>
-                        <button id="midiImportBtn" class="seq-btn seq-btn-midi-import" title="Importar archivo MIDI" onclick="showMidiImportDialog()">
-                            <span class="seq-btn-bg"></span>
-                            <span class="seq-btn-icon">📂</span>
-                            <span class="seq-btn-label">MIDI</span>
-                        </button>
-                        <button id="exportBtn" class="seq-btn seq-btn-export" title="Exportar patrón (MIDI/WAV/JSON)" onclick="showExportDialog()">
-                            <span class="seq-btn-bg"></span>
-                            <span class="seq-btn-icon">💾</span>
-                            <span class="seq-btn-label">EXPORT</span>
-                        </button>
-                        <button id="muteAllBtn" class="seq-btn seq-btn-mute-all" title="Mute/Unmute All Tracks" onclick="toggleAllMuted()">
-                            <span class="seq-btn-bg"></span>
-                            <span class="seq-btn-icon">🔇</span>
-                            <span class="seq-btn-label">MUTE ALL</span>
-                        </button>
-                        <div class="step-count-selector" id="stepCountSelector">
-                            <button class="step-count-btn active" data-steps="16" onclick="setStepCount(16)">16</button>
-                            <button class="step-count-btn" data-steps="32" onclick="setStepCount(32)">32</button>
-                            <button class="step-count-btn" data-steps="64" onclick="setStepCount(64)">64</button>
+                        <div class="seq-control-cluster seq-transport-cluster" aria-label="Transporte">
+                            <button id="playBtn" class="seq-btn seq-btn-play" title="Play/Pause">
+                                <span class="seq-btn-bg"></span>
+                                <span class="seq-btn-icon">▶</span>
+                                <span class="seq-btn-label">PLAY</span>
+                            </button>
+                            <button id="stopBtn" class="seq-btn seq-btn-stop" title="Stop">
+                                <span class="seq-btn-bg"></span>
+                                <span class="seq-btn-icon">■</span>
+                                <span class="seq-btn-label">STOP</span>
+                            </button>
+                            <button id="clearBtn" class="seq-btn seq-btn-clear" title="Limpiar patrón">
+                                <span class="seq-btn-bg"></span>
+                                <span class="seq-btn-icon">⌫</span>
+                                <span class="seq-btn-label">CLEAR</span>
+                            </button>
                         </div>
-                        <!-- AI Chat disabled
-                        <button id="aiToggleBtn" class="seq-btn seq-btn-ai-toggle" title="Activar/Desactivar AI Chat">
-                            <span class="seq-btn-bg"></span>
-                            <span class="seq-btn-icon">🤖</span>
-                            <span class="seq-btn-label">AI OFF</span>
-                        </button>
-                        -->
-                        <span class="sync-badge">🔗 SYNCED</span>
-                        <div class="pattern-display">
-                            <span class="pattern-label">PATTERN</span>
-                            <span id="currentPatternName" class="pattern-name">HIP HOP</span>
+
+                        <div class="seq-control-cluster seq-tools-cluster" aria-label="Herramientas de patrón">
+                            <button id="viewModeBtn" class="seq-btn seq-btn-view-mode" title="Cambiar vista: Grid / Circular">
+                                <span class="seq-btn-bg"></span>
+                                <span class="seq-btn-icon">◎</span>
+                                <span class="seq-btn-label">VISTA</span>
+                            </button>
+                            <button id="midiImportBtn" class="seq-btn seq-btn-midi-import" title="Importar archivo MIDI" onclick="showMidiImportDialog()">
+                                <span class="seq-btn-bg"></span>
+                                <span class="seq-btn-icon">⇥</span>
+                                <span class="seq-btn-label">MIDI</span>
+                            </button>
+                            <button id="exportBtn" class="seq-btn seq-btn-export" title="Exportar patrón (MIDI/WAV/JSON)" onclick="showExportDialog()">
+                                <span class="seq-btn-bg"></span>
+                                <span class="seq-btn-icon">⇧</span>
+                                <span class="seq-btn-label">EXPORT</span>
+                            </button>
+                            <a id="pathBtn" class="seq-btn seq-btn-patchbay" href="/patchbay" title="Abrir PATH: rutas, filtros y efectos">
+                                <span class="seq-btn-bg"></span>
+                                <span class="seq-btn-label">PATH</span>
+                            </a>
+                            <button id="muteAllBtn" class="seq-btn seq-btn-mute-all" title="Silenciar o activar todas las pistas" onclick="toggleAllMuted()">
+                                <span class="seq-btn-bg"></span>
+                                <span class="seq-btn-icon">M</span>
+                                <span class="seq-btn-label">ALL</span>
+                            </button>
+                        </div>
+
+                        <div class="seq-control-cluster seq-timing-cluster" aria-label="Longitud y estado">
+                            <div class="step-count-selector" id="stepCountSelector" aria-label="Pasos del patrón">
+                                <span class="step-count-label">STEPS</span>
+                                <button class="step-count-btn active" data-steps="16" onclick="setStepCount(16)">16</button>
+                                <button class="step-count-btn" data-steps="32" onclick="setStepCount(32)">32</button>
+                                <button class="step-count-btn" data-steps="64" onclick="setStepCount(64)">64</button>
+                            </div>
+                            <span class="sync-badge"><i aria-hidden="true"></i> DAISY SYNC</span>
+                        </div>
+
+                        <div class="pattern-display" aria-label="Patrón actual">
+                            <span class="pattern-label">PATRÓN ACTUAL</span>
+                            <span id="currentPatternName" class="pattern-name">BOOM BAP 90s</span>
                         </div>
                     </div>
                 </div>
@@ -252,7 +301,9 @@
                             <!-- Bar buttons generated dynamically -->
                         </div>
                     </div>
-                    
+
+                    <div class="sequencer-ruler" id="sequencerRuler" aria-hidden="true"></div>
+
                     <div class="sequencer-grid" id="sequencerGrid">
                         <!-- 8 tracks x 16 steps -->
                     </div>
@@ -267,7 +318,7 @@
                         <canvas id="circularCanvas"></canvas>
                         <div class="circular-center-display">
                             <div class="circular-step-number" id="circularStepNumber">1</div>
-                            <div class="circular-pattern-name" id="circularPatternName">HIP HOP</div>
+                            <div class="circular-pattern-name" id="circularPatternName">BOOM BAP 90s</div>
                         </div>
                         <div class="circular-track-labels" id="circularTrackLabels">
                             <!-- Track labels dinámicos -->
@@ -1457,11 +1508,10 @@
                 </div>
             </section>
 
-            <section id="section-clean-tracks" class="device-info" data-section="clean-tracks" data-title="Clean Tracks">
-                <div class="info-title">🎚️ CLEAN TRACKS</div>
-                <div class="clean-tracks-summary" id="cleanTracksSummary">0/4 ocupadas • modelo híbrido en preparación</div>
-                <div class="clean-tracks-grid" id="cleanTracksGrid"></div>
-            </section>
+            <!-- Seccion "clean tracks" duplicada eliminada: los IDs
+                 cleanTracksGrid/cleanTracksSummary ya existen en el tab STEMS
+                 (el unico que app.js actualiza); este bloque legacy quedaba
+                 congelado con el texto placeholder. -->
 
             <!-- Instruments Info Section -->
         <section id="section-instruments" class="device-info" data-section="instruments" data-title="Instrument Map">
@@ -1609,6 +1659,9 @@
 
     <!-- Feature modules loaded sequentially by app.js to avoid TCP congestion on ESP32 AP -->
     <script src="sample-editor.js" defer></script>
+    <script src="sd-browser.js" defer></script>
+    <script src="midi-ui.js" defer></script>
     <script src="app.js" defer></script>
+    <script src="workspace-ui.js" defer></script>
 </body>
 </html>

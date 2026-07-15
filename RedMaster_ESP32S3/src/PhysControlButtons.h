@@ -9,7 +9,7 @@
  *   GPIO 12 → Botón 2     GPIO 13 → Botón 3
  *   GPIO 14 → DIN cadena WS2812B (4 píxeles, uno por botón)
  *
- * INPUT_PULLUP: LOW = pulsado.
+ * INPUT_PULLDOWN: HIGH = pulsado (ver begin() en el .cpp).
  * El color y la función de cada botón son configurables desde la web.
  */
 

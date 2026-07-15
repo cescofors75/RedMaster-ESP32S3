@@ -721,11 +721,12 @@ console.log('%c[chat-agent.js] SCRIPT LOADED', 'color:#0ff;font-weight:bold;font
                     if (t >= 0) send({ cmd: 'setStutter', track: t, value: on, interval: p.interval || 100 });
                 }
                 else if (fx === 'scratch') {
-                    const t = instrumentToTrack(p.instrument || args.instrument);
-                    if (t >= 0) {
-                        send({ cmd: 'setScratch', track: t, value: on });
-                        if (p.rate !== undefined) send({ cmd: 'setScratch', track: t, value: on, rate: p.rate });
-                    }
+                    // 'setScratch' no existe en el firmware (verificado contra
+                    // processCommand): se enviaba y se descartaba en silencio,
+                    // y el agente reportaba un exito falso. Avisar en el chat
+                    // hasta que el comando exista en el servidor.
+                    console.warn('[chat-agent] scratch no soportado por el firmware');
+                    appendMessage('assistant', '⚠️ El efecto "scratch" aún no está soportado por el firmware.');
                 }
                 else if (fx === 'pitchshift' || fx === 'pitch') {
                     const t = instrumentToTrack(p.instrument || args.instrument);

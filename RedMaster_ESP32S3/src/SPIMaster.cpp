@@ -149,7 +149,11 @@ bool SPIMaster::begin() {
         }
         delay(200);
     }
-    
+
+    // Intencionadamente devolvemos true aunque la Daisy no responda: el
+    // dispositivo debe arrancar igualmente (UI/web operativas) y process()
+    // reintenta la conexion cada 3s. El caller debe consultar isConnected().
+    Serial.println("[SPI] WARN: Daisy no responde al boot (10 pings) - seguira reintentando");
     return true;
 }
 
@@ -219,14 +223,17 @@ bool SPIMaster::sendCommandDirect(uint8_t cmd, const void* payload, uint16_t pay
     header.magic = SPI_MAGIC_CMD;
     header.cmd = cmd;
     header.length = payloadLen;
-    header.sequence = seqNumber++;
     header.checksum = (payload && payloadLen > 0) ? crc16((const uint8_t*)payload, payloadLen) : 0;
-    
+
     // Acquire mutex (thread safety Core0 ↔ Core1)
     if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(30)) != pdTRUE) {
         return false;
     }
-    
+    // seqNumber se incrementa BAJO el mutex: se escribe desde ambos nucleos y
+    // un ++ concurrente duplicaba/saltaba secuencias, rompiendo la verificacion
+    // de secuencia del slave.
+    header.sequence = seqNumber++;
+
     const uint16_t totalLen = sizeof(SPIPacketHeader) + payloadLen;
     if (totalLen > sizeof(txBuffer)) {
         xSemaphoreGive(spiMutex);
@@ -278,12 +285,12 @@ bool SPIMaster::sendAndReceive(uint8_t cmd, const void* payload, uint16_t payloa
     header.magic = SPI_MAGIC_CMD;
     header.cmd = cmd;
     header.length = payloadLen;
-    header.sequence = seqNumber++;
     header.checksum = (payload && payloadLen > 0) ? crc16((const uint8_t*)payload, payloadLen) : 0;
-    
+
     if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
         return false;
     }
+    header.sequence = seqNumber++;  // bajo mutex (ver sendCommandDirect)
 
     const uint16_t totalLen = sizeof(SPIPacketHeader) + payloadLen;
     if (totalLen > sizeof(txBuffer)) {
@@ -369,9 +376,15 @@ void SPIMaster::process() {
     // ── 1. Drain commands queued from Core0 (WS/WiFi task) ──
     drainCmdQueue();
 
+    // Backlog en la cola = transfer bulk en curso (sample/clean-track/DSQ).
+    // Saltar el polling de telemetria mientras tanto: cada round-trip de
+    // peaks/status retiene spiMutex ~0.8-6ms y compite con el drenado de
+    // chunks, alargando los uploads y arriesgando drops.
+    const bool bulkBacklog = spiCmdQueue && uxQueueMessagesWaiting(spiCmdQueue) > 0;
+
     // ── 2. Keepalive PING every 2s (with RTT tracking for telemetry) ──
     static uint32_t lastHeartbeat = 0;
-    if (stm32Connected && (millis() - lastHeartbeat > 2000)) {
+    if (stm32Connected && !bulkBacklog && (millis() - lastHeartbeat > 2000)) {
         uint32_t rttUs = 0;
         if (ping(rttUs)) {
             lastPingRttMs = (float)rttUs / 1000.0f;
@@ -381,14 +394,14 @@ void SPIMaster::process() {
 
     // ── 3. Poll audio peaks every 200ms (was 120ms — reduces SPI mutex hold time) ──
     static uint32_t lastPeakPoll = 0;
-    if (stm32Connected && (millis() - lastPeakPoll > 200)) {
+    if (stm32Connected && !bulkBacklog && (millis() - lastPeakPoll > 200)) {
         requestPeaks();
         lastPeakPoll = millis();
     }
 
     // ── 4. Refresh status for /adm telemetry every 3s (immediate on first run) ──
     static bool firstStatusPoll = true;
-    if (firstStatusPoll || millis() - lastStatusPoll > 3000) {
+    if ((firstStatusPoll || millis() - lastStatusPoll > 3000) && !bulkBacklog) {
         firstStatusPoll = false;
         if (stm32Connected) {
             requestStatus();
@@ -1802,10 +1815,17 @@ bool SPIMaster::drainEvents() {
 // ═══════════════════════════════════════════════════════
 
 const FilterPreset* SPIMaster::getFilterPreset(FilterType type) {
-    if (type >= 0 && type <= FILTER_STUTTER) {
-        return &filterPresets[type];
+    // El enum FilterType tiene huecos (LADDER=10, SVF=11..13, COMB=14,
+    // REVERSE=17, HALFSPEED=18, STUTTER=19) pero filterPresets[] es denso.
+    // Indexar por el valor del enum leia fuera de limites (tipos 13-19) o
+    // devolvia el preset equivocado (10-12). Buscamos por .type.
+    const size_t n = sizeof(filterPresets) / sizeof(filterPresets[0]);
+    for (size_t i = 0; i < n; i++) {
+        if (filterPresets[i].type == type) {
+            return &filterPresets[i];
+        }
     }
-    return &filterPresets[0];
+    return &filterPresets[0];  // "None" como fallback seguro
 }
 
 const char* SPIMaster::getFilterName(FilterType type) {
@@ -1987,6 +2007,19 @@ bool SPIMaster::dsqSetParamLock(uint8_t pattern, uint8_t track, uint8_t step,
     p.volume    = volume;
     p.reserved[0] = p.reserved[1] = 0;
     return sendCommand(CMD_DSQ_SET_PARAM_LOCK, &p, sizeof(p));
+}
+
+bool SPIMaster::dsqSetStepNotes(uint8_t pattern, uint8_t track, uint8_t step,
+                                uint8_t flags, const uint8_t notes[4])
+{
+    if (!notes || step >= DSQ_MAX_STEPS) return false;
+    DsqSetStepNotesPayload p{};
+    p.pattern = pattern % DSQ_PATTERNS;
+    p.track = track & 15;
+    p.step = step;
+    p.flags = flags & 0x03;
+    memcpy(p.notes, notes, sizeof(p.notes));
+    return sendCommand(CMD_DSQ_SET_STEP_NOTES, &p, sizeof(p));
 }
 
 bool SPIMaster::dsqGetPos(uint8_t& outStep, uint8_t& outPattern, bool& outPlaying)

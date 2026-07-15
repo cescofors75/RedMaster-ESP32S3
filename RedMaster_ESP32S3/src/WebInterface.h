@@ -101,7 +101,7 @@ private:
   void releaseWsReassemblySlot(uint32_t clientId);
   void releaseWsReassemblySlot(WsReassemblySlot* slot);
   WsReassemblySlot wsReassemblySlots[4];
-  void processCommand(const JsonDocument& doc);  // Función común para procesar comandos
+  void processCommand(const JsonDocument& doc, bool* handled = nullptr);  // common command dispatcher
   void sendUdpJsonTo(IPAddress ip, uint16_t port, const JsonDocument& doc);
   void sendUdpStateSync(IPAddress ip, uint16_t port);
   void broadcastUdpStateSync();

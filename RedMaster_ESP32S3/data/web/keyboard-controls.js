@@ -116,37 +116,37 @@ function handleKeyboardShortcut(e) {
   if (key === 'Q' && !selectedCell) {
     e.preventDefault();
     if (window.selectPattern) window.selectPattern(0);
-    showToast('🎶 HIP HOP', TOAST_TYPES.INFO, 1500);
+    showToast('🎶 BOOM BAP 90s', TOAST_TYPES.INFO, 1500);
     return true;
   }
   if (key === 'W' && !selectedCell) {
     e.preventDefault();
     if (window.selectPattern) window.selectPattern(1);
-    showToast('🎶 TECHNO', TOAST_TYPES.INFO, 1500);
+    showToast('🎶 DETROIT TECHNO', TOAST_TYPES.INFO, 1500);
     return true;
   }
   if (key === 'E' && !selectedCell) {
     e.preventDefault();
     if (window.selectPattern) window.selectPattern(2);
-    showToast('🎶 DnB', TOAST_TYPES.INFO, 1500);
+    showToast('🎶 JUNGLE/AMEN 90s', TOAST_TYPES.INFO, 1500);
     return true;
   }
   if (key === 'R' && !selectedCell) {
     e.preventDefault();
     if (window.selectPattern) window.selectPattern(3);
-    showToast('🎶 BREAK', TOAST_TYPES.INFO, 1500);
+    showToast('🎶 CHICAGO HOUSE', TOAST_TYPES.INFO, 1500);
     return true;
   }
   if (key === 'T' && !selectedCell) {
     e.preventDefault();
     if (window.selectPattern) window.selectPattern(4);
-    showToast('🎶 HOUSE', TOAST_TYPES.INFO, 1500);
+    showToast('🎶 SYNTHPOP LINN 80s', TOAST_TYPES.INFO, 1500);
     return true;
   }
   if (key === 'Y' && !selectedCell) {
     e.preventDefault();
     if (window.selectPattern) window.selectPattern(5);
-    showToast('🎶 TRAP', TOAST_TYPES.INFO, 1500);
+    showToast('🎶 NEW WAVE/GATED DRUMS', TOAST_TYPES.INFO, 1500);
     return true;
   }
   
@@ -170,9 +170,14 @@ function handleKeyboardShortcut(e) {
     return true;
   }
   
-  // M: Toggle Color Mode
+  // M / Shift+M: next / previous visual theme
   if (key === 'M' && !selectedCell) {
     e.preventDefault();
+    if (window.RED808Themes) {
+      const theme = window.RED808Themes.cycle(e.shiftKey ? -1 : 1);
+      showToast(`🎨 Tema ${window.RED808Themes.name(theme)}`, TOAST_TYPES.INFO, 1500);
+      return true;
+    }
     const colorToggle = document.getElementById('colorToggle');
     if (colorToggle) {
       colorToggle.click();
@@ -1076,7 +1081,8 @@ function createKeyboardSidebar() {
           <div class="key-item"><kbd>B</kbd><span>Prev Pattern</span></div>
           <div class="key-item"><kbd>[</kbd><span>BPM -5</span></div>
           <div class="key-item"><kbd>]</kbd><span>BPM +5</span></div>
-          <div class="key-item"><kbd>M</kbd><span>Color Mode</span></div>
+          <div class="key-item"><kbd>M</kbd><span>Tema siguiente</span></div>
+          <div class="key-item"><kbd>Shift + M</kbd><span>Tema anterior</span></div>
         </div>
       </div>
       
@@ -1126,14 +1132,14 @@ function createKeyboardSidebar() {
       </div>
       
       <div class="key-section">
-        <h3>🎵 Patterns (1-6)</h3>
+        <h3>🎵 Patterns (acceso rápido 1-6)</h3>
         <div class="key-list">
-          <div class="key-item"><kbd>Q</kbd><span>HIP HOP</span></div>
-          <div class="key-item"><kbd>W</kbd><span>TECHNO</span></div>
-          <div class="key-item"><kbd>E</kbd><span>DnB</span></div>
-          <div class="key-item"><kbd>R</kbd><span>BREAK</span></div>
-          <div class="key-item"><kbd>T</kbd><span>HOUSE</span></div>
-          <div class="key-item"><kbd>Y</kbd><span>TRAP</span></div>
+          <div class="key-item"><kbd>Q</kbd><span>BOOM BAP 90s</span></div>
+          <div class="key-item"><kbd>W</kbd><span>DETROIT TECHNO</span></div>
+          <div class="key-item"><kbd>E</kbd><span>JUNGLE/AMEN 90s</span></div>
+          <div class="key-item"><kbd>R</kbd><span>CHICAGO HOUSE</span></div>
+          <div class="key-item"><kbd>T</kbd><span>SYNTHPOP LINN 80s</span></div>
+          <div class="key-item"><kbd>Y</kbd><span>NEW WAVE/GATED DRUMS</span></div>
         </div>
         <div class="key-note">Use N / B for next / prev (see Transport).</div>
       </div>

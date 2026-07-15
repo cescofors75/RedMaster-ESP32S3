@@ -512,17 +512,29 @@ public:
     float tone   = 0.6f;
     float volume = 1.0f;
 
-    void Init(float sr) { BaseInit(sr, 8000.0f); }
+    void Init(float sr) {
+        BaseInit(sr, 8000.0f);
+        chokeGain_ = 1.0f;
+        choking_ = false;
+    }
 
-    void Trigger(float v = 1.0f) { BaseTrigger(v); }
+    void Trigger(float v = 1.0f) {
+        BaseTrigger(v);
+        chokeGain_ = 1.0f;
+        choking_ = false;
+    }
 
-    void Choke() { active_ = false; }
+    void Choke() { if (active_) choking_ = true; }
 
     float Process() {
         if (!active_) return 0.0f;
         float hp  = hpFilter_.ProcessHP(MetallicCore());
         float env = expf(-time_ / decay);
-        float out = FastTanh(hp * (0.75f + tone * 0.95f) * 3.2f) * env;
+        if (choking_) {
+            chokeGain_ *= 0.94f;
+            if (chokeGain_ < 0.001f) active_ = false;
+        }
+        float out = FastTanh(hp * (0.75f + tone * 0.95f) * 3.2f) * env * chokeGain_;
         time_ += dt_;
         if (env < 0.0005f) active_ = false;
         return out * volume * vel_;
@@ -530,6 +542,10 @@ public:
 
     bool IsActive() const { return active_; }
     void SetDecay(float d) { decay = Clamp(d, 0.05f, 2.0f); }
+
+private:
+    float chokeGain_ = 1.0f;
+    bool  choking_ = false;
 };
 
 /* =====================================================================
@@ -1080,6 +1096,20 @@ public:
     MidPerc     midPerc;
     LowPerc     lowPerc;
 
+    /* Optional PCM slots for the digital half of the original TR-909.
+     * Main binds CH/OH/Ride/Crash; other slots remain procedural. */
+    struct PcmSlot {
+        const int16_t* data = nullptr;
+        uint32_t length = 0;
+        float sourceRate = 48000.0f;
+        float pos = 0.0f;
+        float step = 1.0f;
+        float velocity = 1.0f;
+        float chokeGain = 1.0f;
+        bool choking = false;
+        bool active = false;
+    };
+
     void Init(float sampleRate) {
         sr_ = sampleRate;
         kick.Init(sr_);     snare.Init(sr_);    clap.Init(sr_);
@@ -1092,6 +1122,7 @@ public:
         for (int i = 0; i < INST_COUNT; i++) {
             chanVol_[i]  = 1.0f;
             chanMute_[i] = false;
+            pcm_[i] = PcmSlot{};
         }
         masterVol_  = 0.92f;
         limitState_ = 0.0f;
@@ -1099,12 +1130,27 @@ public:
 
     void Trigger(uint8_t inst, float velocity = 1.0f) {
         velocity = Clamp(velocity, 0.0f, 1.0f);
+        if (inst >= INST_COUNT) return;
+        if (inst == INST_HIHAT_C) {
+            hihatO.Choke();
+            if (pcm_[INST_HIHAT_O].active)
+                pcm_[INST_HIHAT_O].choking = true;
+        }
+        if (pcm_[inst].data != nullptr && pcm_[inst].length > 0) {
+            PcmSlot& slot = pcm_[inst];
+            slot.pos = 0.0f;
+            slot.step = slot.sourceRate / sr_;
+            slot.velocity = VelCurve(velocity);
+            slot.chokeGain = 1.0f;
+            slot.choking = false;
+            slot.active = true;
+            return;
+        }
         switch (inst) {
             case INST_KICK:     kick.Trigger(velocity);    break;
             case INST_SNARE:    snare.Trigger(velocity);   break;
             case INST_CLAP:     clap.Trigger(velocity);    break;
-            case INST_HIHAT_C:  hihatO.Choke();
-                                hihatC.Trigger(velocity);  break;
+            case INST_HIHAT_C:  hihatC.Trigger(velocity);  break;
             case INST_HIHAT_O:  hihatO.Trigger(velocity);  break;
             case INST_LOW_TOM:  lowTom.Trigger(velocity);  break;
             case INST_MID_TOM:  midTom.Trigger(velocity);  break;
@@ -1124,7 +1170,10 @@ public:
         float mix = 0.0f;
 
         auto add = [&](uint8_t id, auto& inst) {
-            if (!chanMute_[id] && inst.IsActive()) mix += inst.Process() * chanVol_[id];
+            if (inst.IsActive()) {
+                float sample = inst.Process();
+                if (!chanMute_[id]) mix += sample * chanVol_[id];
+            }
         };
 
         add(INST_KICK,    kick);
@@ -1144,6 +1193,28 @@ public:
         add(INST_MID_PERC, midPerc);
         add(INST_LOW_PERC, lowPerc);
 
+        for (uint8_t id = 0; id < INST_COUNT; id++) {
+            PcmSlot& slot = pcm_[id];
+            if (!slot.active || slot.data == nullptr || slot.length == 0) continue;
+            uint32_t idx = (uint32_t)slot.pos;
+            if (idx >= slot.length) {
+                slot.active = false;
+                continue;
+            }
+            float frac = slot.pos - (float)idx;
+            float s0 = slot.data[idx] / 32768.0f;
+            float s1 = (idx + 1u < slot.length) ? slot.data[idx + 1u] / 32768.0f : 0.0f;
+            float sample = s0 + frac * (s1 - s0);
+            if (slot.choking) {
+                slot.chokeGain *= 0.94f;
+                if (slot.chokeGain < 0.001f) slot.active = false;
+            }
+            slot.pos += slot.step;
+            if (slot.pos >= (float)slot.length) slot.active = false;
+            if (!chanMute_[id])
+                mix += sample * slot.velocity * slot.chokeGain * chanVol_[id];
+        }
+
         /* Soft limiter: peak follower con attack instantaneo
          * y release ~0.2s -- evita clipping sin comer transientes */
         mix *= masterVol_;
@@ -1153,6 +1224,33 @@ public:
             mix *= 0.98f / limitState_;
 
         return mix;
+    }
+
+    bool SetPcmSample(uint8_t inst, const int16_t* data, uint32_t length,
+                      float sourceRate = 48000.0f) {
+        if (inst >= INST_COUNT || data == nullptr || length == 0) return false;
+        PcmSlot& slot = pcm_[inst];
+        slot.data = data;
+        slot.length = length;
+        slot.sourceRate = Clamp(sourceRate, 1000.0f, 384000.0f);
+        slot.pos = 0.0f;
+        slot.step = slot.sourceRate / sr_;
+        slot.chokeGain = 1.0f;
+        slot.choking = false;
+        slot.active = false;
+        return true;
+    }
+
+    void ClearPcmSample(uint8_t inst) {
+        if (inst < INST_COUNT) pcm_[inst] = PcmSlot{};
+    }
+
+    void ClearPcmSamples() {
+        for (uint8_t i = 0; i < INST_COUNT; i++) pcm_[i] = PcmSlot{};
+    }
+
+    bool HasPcmSample(uint8_t inst) const {
+        return inst < INST_COUNT && pcm_[inst].data != nullptr && pcm_[inst].length > 0;
     }
 
     /* -- Mixer -- */
@@ -1193,6 +1291,8 @@ public:
         if (hiPerc.IsActive())  c++;
         if (midPerc.IsActive()) c++;
         if (lowPerc.IsActive()) c++;
+        for (uint8_t i = 0; i < INST_COUNT; i++)
+            if (pcm_[i].active) c++;
         return c;
     }
 
@@ -1202,6 +1302,7 @@ private:
     float  limitState_  = 0.0f;
     float  chanVol_[INST_COUNT]  = {};
     bool   chanMute_[INST_COUNT] = {};
+    PcmSlot pcm_[INST_COUNT];
 };
 
 } /* namespace TR909 */

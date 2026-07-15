@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#080b10">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>RED808 Mobile</title>
+    <script src="nav.js"></script>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/theme-vars.css">
+  <link rel="stylesheet" href="/mobile.css">
+  <link rel="stylesheet" href="/ui-2026.css">
+</head>
+<body>
+  <!-- Top transport bar -->
+  <header class="m-top">
+    <div class="m-top-row m-top-row1">
+      <div class="m-brand">
+        <span class="m-dot" id="connDot" title="Conexión"></span>
+        <span class="m-logo">RED<b>808</b></span>
+      </div>
+      <button class="m-theme-btn" id="themeBtn" aria-label="Tema visual" title="Tema visual">🎨</button>
+    </div>
+    <div class="m-top-row m-top-row2">
+      <div class="m-transport">
+        <button class="m-play" id="playBtn" aria-label="Play/Stop">▶</button>
+        <div class="m-bpm">
+          <button class="m-bpm-btn" id="bpmDown">−</button>
+          <span class="m-bpm-val" id="bpmVal">120</span>
+          <button class="m-bpm-btn" id="bpmUp">+</button>
+        </div>
+        <div class="m-pattern-sel">
+          <button class="m-pat-btn" id="patPrev" aria-label="Patrón anterior">−</button>
+          <span class="m-pat-name" id="patName">—</span>
+          <button class="m-pat-btn" id="patNext" aria-label="Patrón siguiente">+</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- View container -->
+  <main class="m-main">
+    <!-- PADS -->
+    <section class="m-view is-active" id="view-pads">
+      <div class="m-roll-bar">
+        <span class="m-roll-label">🥁 Pads</span>
+        <div class="m-roll-rates" id="rollBar"></div>
+        <button class="m-pads-upload" id="padsUploadBtn">📁 Sonidos</button>
+      </div>
+      <div class="m-pads" id="padsGrid"></div>
+    </section>
+
+    <!-- PIANO (modo niño: teclas grandes y de colores) -->
+    <section class="m-view" id="view-piano">
+      <div class="m-piano-bar">
+        <span class="m-piano-hint">🎹 ¡Toca las teclas!</span>
+        <div class="m-oct">
+          <button id="octDown" aria-label="Más grave">🔉</button>
+          <span id="octVal">4</span>
+          <button id="octUp" aria-label="Más agudo">🔊</button>
+        </div>
+      </div>
+      <div class="m-piano kid" id="piano"></div>
+    </section>
+
+    <!-- SEQUENCER (grid of colored dots) -->
+    <section class="m-view" id="view-seq">
+      <div class="m-seq-tools">
+        <div class="m-step-count" id="stepCountSel"></div>
+        <div class="m-seq-allbtns">
+          <button class="m-seqall m-seqall-mute" id="seqMuteAll">🔇 Todo</button>
+          <button class="m-seqall m-seqall-unmute" id="seqUnmuteAll">🔊 Todo</button>
+        </div>
+        <button class="m-clear" id="seqClear">Limpiar</button>
+      </div>
+      <div class="m-seq-scroll">
+        <div class="m-seq" id="seqGrid"></div>
+      </div>
+    </section>
+
+    <!-- FILTERS / FX (modo niño: efectos divertidos para todo) -->
+    <section class="m-view" id="view-fx">
+      <div class="m-fx-hint">✨ Elige un efecto</div>
+      <div class="m-fx-presets" id="fxPresets"></div>
+      <label class="m-slider m-tono">
+        <span>🎚️ Tono <b id="tonoVal">medio</b></span>
+        <input type="range" id="tono" min="0" max="100" step="1" value="50">
+      </label>
+    </section>
+
+    <!-- JAM (toca con los dedos: samples + synth, mucho efecto visual) -->
+    <section class="m-view m-view-jam" id="view-jam">
+      <video id="jamVideo" class="m-jam-video" playsinline muted></video>
+      <canvas id="jamCanvas" class="m-jam-canvas"></canvas>
+      <div class="m-jam-pills">
+        <button class="m-jam-pill active" id="jamModeSamples" title="Pads (posición)">🥁</button>
+        <button class="m-jam-pill" id="jamModeSynth" title="Theremin">🎻</button>
+        <button class="m-jam-pill" id="jamModePose" title="Poses (gestos)">✋</button>
+        <button class="m-jam-pill" id="jamModeOrbs" title="Lanza-ritmos">🪀</button>
+        <button class="m-jam-pill" id="jamModeBass" title="Bajo wobble (Skrillex)">🔊</button>
+        <button class="m-jam-pill" id="jamCamBtn" title="Manos con cámara (MediaPipe)">📷</button>
+      </div>
+      <div class="m-jam-tip" id="jamTip">👆 ¡Toca con los dedos! · 📷 para manos</div>
+    </section>
+  </main>
+
+  <!-- Theme picker (bottom sheet) -->
+  <div class="m-sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <div class="m-theme-sheet" id="themeSheet" hidden>
+    <div class="m-theme-sheet-head">🎨 Tema visual</div>
+    <div class="m-theme-options" id="themeOptions"></div>
+  </div>
+
+  <!-- Sample picker (long-press en un pad) -->
+  <div class="m-sheet-backdrop" id="sampleBackdrop" hidden></div>
+  <div class="m-theme-sheet m-sample-sheet" id="sampleSheet" hidden>
+    <div class="m-theme-sheet-head">🎵 Sonido en pad <span id="sampleTargetName"></span></div>
+    <div class="m-pad-chips" id="padChips"></div>
+    <button class="m-upload-btn" id="sampleUploadBtn">📁 Subir WAV/MP3 desde mi dispositivo</button>
+    <input type="file" id="sampleFileInput" accept=".wav,.mp3,.WAV,.MP3,audio/*" hidden>
+    <div class="m-upload-status" id="sampleUploadStatus" hidden></div>
+    <div class="m-fam-chips" id="famChips"></div>
+    <div class="m-sample-list" id="sampleList"><div class="se-empty">Elige una familia…</div></div>
+  </div>
+
+  <!-- Bottom view switcher -->
+  <nav class="m-nav">
+    <button class="m-tab is-active" data-view="pads">🥁<span>Pads</span></button>
+    <button class="m-tab" data-view="piano">🎹<span>Piano</span></button>
+    <button class="m-tab" data-view="jam">🎉<span>Jam</span></button>
+    <button class="m-tab" data-view="seq">🟢<span>Seq</span></button>
+    <button class="m-tab" data-view="fx">🎛️<span>Filtros</span></button>
+  </nav>
+
+  <script src="/mobile.js" defer></script>
+</body>
+</html>

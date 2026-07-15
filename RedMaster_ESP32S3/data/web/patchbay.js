@@ -34,8 +34,8 @@ const FX_DEFS = {
   highshelf: { label:'HI SHELF',  color:'lavender',icon:'⏣', params:[ {id:'cutoff', label:'Freq',   min:200,max:16000, def:8000, unit:'Hz', log:true}, {id:'gain', label:'Gain', min:-12, max:12, def:6, unit:'dB', step:0.5} ] },
   resonant:  { label:'RESONANT',  color:'hotpink', icon:'⏣', params:[ {id:'cutoff', label:'Cutoff', min:100, max:16000, def:800,  unit:'Hz', log:true}, {id:'resonance', label:'Res', min:0.5, max:20, def:5,     step:0.1}  ] },
   // ── FX ──
-  echo:       { label:'REVERB',      color:'orange', icon:'◎', params:[ {id:'time', label:'Time', min:10, max:200, def:100, unit:'ms'}, {id:'feedback', label:'Feedback', min:0, max:95, def:40, unit:'%'}, {id:'mix', label:'Mix', min:0, max:100, def:50, unit:'%'} ] },
-  delay:      { label:'DELAY',       color:'yellow', icon:'◉', params:[ {id:'time', label:'Time', min:10, max:200, def:100, unit:'ms'}, {id:'feedback', label:'Feedback', min:0, max:95, def:50, unit:'%'}, {id:'mix', label:'Mix', min:0, max:100, def:50, unit:'%'} ] },
+  echo:       { label:'ECHO (LEGACY)', color:'orange', icon:'◎', params:[ {id:'time', label:'Time', min:10, max:200, def:100, unit:'ms'}, {id:'feedback', label:'Feedback', min:0, max:95, def:40, unit:'%'}, {id:'mix', label:'Mix', min:0, max:100, def:50, unit:'%'} ] },
+  delay:      { label:'ECHO / DELAY', color:'yellow', icon:'◉', params:[ {id:'time', label:'Time', min:10, max:200, def:100, unit:'ms'}, {id:'feedback', label:'Feedback', min:0, max:95, def:50, unit:'%'}, {id:'mix', label:'Mix', min:0, max:100, def:50, unit:'%'} ] },
   bitcrusher: { label:'BITCRUSHER',  color:'purple', icon:'▦', params:[ {id:'bits', label:'Bit Depth', min:1, max:16, def:8, step:1} ] },
   distortion: { label:'DISTORTION',  color:'pink',   icon:'⚡', params:[ {id:'amount', label:'Amount', min:0, max:100, def:50, unit:'%'}, {id:'mode', label:'Mode', type:'select', options:['SOFT','HARD','TUBE','FUZZ'], def:0} ] },
   compressor: { label:'COMPRESSOR',  color:'green',  icon:'▬', params:[ {id:'threshold', label:'Threshold', min:0, max:100, def:60, unit:'%'}, {id:'ratio', label:'Ratio', min:1, max:20, def:4, step:0.5} ] },
@@ -44,6 +44,14 @@ const FX_DEFS = {
 };
 
 const FILTER_TYPE_MAP = { lowpass:1, highpass:2, bandpass:3, notch:4, allpass:5, peaking:6, lowshelf:7, highshelf:8, resonant:9 };
+const FX_SLOT_BY_TYPE = {
+  lowpass:'filter', highpass:'filter', bandpass:'filter', notch:'filter', allpass:'filter',
+  peaking:'filter', lowshelf:'filter', highshelf:'filter', resonant:'filter',
+  echo:'echo', delay:'echo', bitcrusher:'bitcrusher', distortion:'distortion',
+  compressor:'compressor', flanger:'flanger'
+};
+const TRACK_FX_SLOTS = ['filter', 'distortion', 'bitcrusher', 'echo', 'flanger', 'compressor'];
+const UNSUPPORTED_PRE_FX = new Set(['phaser']);
 
 const FACTORY_PRESETS = [
   {
@@ -68,7 +76,7 @@ const FACTORY_PRESETS = [
   {
     id: 'space-wide',
     name: 'SPACE WIDE',
-    description: 'BandPass + Phaser + Reverb + Comp — atmósfera amplia',
+    description: 'BandPass + Echo + Comp — atmósfera amplia',
     chain: [
       { key: 'bp', fxType: 'bandpass', x: 680, y: 440, params: { cutoff: 1450, resonance: 1.1 } },
       { key: 'ph', fxType: 'phaser', x: 1020, y: 600, params: { rate: 34, depth: 62, feedback: 28 } },
@@ -79,7 +87,7 @@ const FACTORY_PRESETS = [
   {
     id: 'dub-echo',
     name: 'DUB ECHO',
-    description: 'Delay largo + Reverb — ecos jamaicanos',
+    description: 'Echo largo + LowPass — ecos jamaicanos',
     chain: [
       { key: 'dly', fxType: 'delay', x: 720, y: 480, params: { time: 180, feedback: 72, mix: 55 } },
       { key: 'rv', fxType: 'echo', x: 1100, y: 640, params: { time: 200, feedback: 50, mix: 45 } },
@@ -138,7 +146,7 @@ const FACTORY_PRESETS = [
   {
     id: 'ambient-wash',
     name: 'AMBIENT WASH',
-    description: 'Reverb larga + Phaser lento — paisaje sonoro etéreo',
+    description: 'Echo largo — paisaje sonoro etéreo',
     chain: [
       { key: 'rv', fxType: 'echo', x: 720, y: 540, params: { time: 200, feedback: 60, mix: 65 } },
       { key: 'ph', fxType: 'phaser', x: 1140, y: 380, params: { rate: 10, depth: 45, feedback: 20 } },
@@ -197,7 +205,7 @@ const FACTORY_PRESETS = [
   {
     id: 'massive-reverb',
     name: '⚡ MASSIVE REVERB',
-    description: 'Reverb al MÁXIMO — cola infinita, 100% wet',
+    description: 'Echo al MÁXIMO — feedback y mezcla extremos',
     chain: [
       { key: 'rv', fxType: 'echo', x: 780, y: 500, params: { time: 200, feedback: 92, mix: 95 } },
       { key: 'lpf', fxType: 'lowpass', x: 1260, y: 640, params: { cutoff: 3000, resonance: 1.5 } }
@@ -214,7 +222,7 @@ const FACTORY_PRESETS = [
   {
     id: 'cathedral',
     name: '⚡ CATHEDRAL',
-    description: 'Doble Reverb + Phaser — catedral espacial gigante',
+    description: 'Echo amplio — espacio denso y profundo',
     chain: [
       { key: 'rv1', fxType: 'echo', x: 680, y: 440, params: { time: 200, feedback: 85, mix: 80 } },
       { key: 'ph', fxType: 'phaser', x: 1100, y: 680, params: { rate: 8, depth: 70, feedback: 60 } },
@@ -224,7 +232,7 @@ const FACTORY_PRESETS = [
   {
     id: 'robot-voice',
     name: '⚡ ROBOT VOICE',
-    description: 'Flanger extremo + Phaser + Crusher — droide loco',
+    description: 'Flanger extremo + Crusher — droide loco',
     chain: [
       { key: 'fl', fxType: 'flanger', x: 680, y: 660, params: { rate: 95, depth: 90, feedback: 85 } },
       { key: 'ph', fxType: 'phaser', x: 1100, y: 440, params: { rate: 80, depth: 90, feedback: 75 } },
@@ -262,12 +270,14 @@ let trackPeaks = new Array(16).fill(0);
 let trackMuted = new Array(16).fill(false);
 const throttledCmdTimers = new Map();
 const queuedWsPayloads = [];
+const appliedRouteSlots = Array.from({ length: 16 }, () => new Map());
+let routeReconcileTimer = null;
+let routeReconcileForce = false;
 let wsFlushTimer = null;
 let lastWsSendTs = 0;
 const WS_MIN_SEND_GAP_MS = 12;
 const WS_MAX_QUEUE = 240;
 const WS_BOOT_SYNC_DELAY_MS = 34;
-const WS_BOOT_SYNC_MAX_CABLES = 48;
 let activeMacroScene = 'A';
 let macrosEnabled = true;
 let macroScenes = {
@@ -604,6 +614,8 @@ function connectWS() {
   ws.onopen = () => {
     wsConnected = true;
     document.getElementById('pbWsStatus').classList.add('connected');
+    const status = document.getElementById('pbStatus');
+    if (status) status.textContent = 'Sincronizando rutas…';
     flushWsQueue();
     syncConnectionsAfterReconnect();
     sendCmd('getTrackVolumes', {});
@@ -611,6 +623,8 @@ function connectWS() {
   ws.onclose = () => {
     wsConnected = false;
     document.getElementById('pbWsStatus').classList.remove('connected');
+    const status = document.getElementById('pbStatus');
+    if (status) status.textContent = 'OFFLINE · reconectando…';
     queuedWsPayloads.length = 0;
     if (wsFlushTimer) {
       clearTimeout(wsFlushTimer);
@@ -637,7 +651,8 @@ function resetFirmwareFX() {
     const delay = t * WS_BOOT_SYNC_DELAY_MS;
     setTimeout(() => {
       sendCmd('clearTrackFilter',   { track });
-      sendCmd('clearTrackFX',       { track });
+      sendCmd('setTrackDistortion', { track, amount: 0, mode: 0 });
+      sendCmd('setTrackBitCrush',   { track, value: 16 });
       sendCmd('setTrackEcho',       { track, active: false, time: 200, feedback: 40, mix: 50 });
       sendCmd('setTrackFlanger',    { track, active: false, rate: 30, depth: 50, feedback: 40 });
       sendCmd('setTrackCompressor', { track, active: false, threshold: 60, ratio: 4 });
@@ -651,20 +666,11 @@ function syncConnectionsAfterReconnect() {
   queuedWsPayloads.length = 0;
   if (wsFlushTimer) { clearTimeout(wsFlushTimer); wsFlushTimer = null; }
 
-  /* Re-aplicar cables existentes sin reset global para no pisar FX de otras vistas */
-  if (!Array.isArray(cables) || cables.length === 0) {
-    console.log('[PATCH] Reconnect sync: sin cables, no se altera estado global de FX.');
-    return;
-  }
-  const total = cables.length;
-  const count = Math.min(total, WS_BOOT_SYNC_MAX_CABLES);
-  for (let i = 0; i < count; i++) {
-    setTimeout(() => applyConnection(cables[i]), i * WS_BOOT_SYNC_DELAY_MS);
-  }
-  if (total > count) {
-    console.warn(`[PATCH] Sync limitado: ${count}/${total} cables.`);
-  }
-  console.log(`[PATCH] Re-sync de ${count} cables sin reset global.`);
+  /* Recalcular por slots reales, no por número de cables. Esto cubre grafos
+     grandes y evita que dos filtros/Echos visuales compitan silenciosamente. */
+  appliedRouteSlots.forEach(slots => slots.clear());
+  scheduleRouteReconcile(true);
+  console.log(`[PATCH] Re-sync determinista de ${cables.length} cables.`);
 }
 
 function flushWsQueue() {
@@ -861,6 +867,13 @@ window.pbToggleMacros = function() {
 };
 
 function handleWSMessage(msg) {
+  if (msg.type === 'error') {
+    const status = document.getElementById('pbStatus');
+    if (status) {
+      status.classList.add('is-warning');
+      status.textContent = `ERROR · ${msg.cmd || msg.code || msg.msg || 'comando rechazado'}`;
+    }
+  }
   if ((msg.type === 'playState' || msg.type === 'sequencerState' || msg.type === 'status' || msg.type === 'state') && typeof msg.playing !== 'undefined') {
     isPlaying = !!msg.playing;
     serverPlaying = !!msg.playing;
@@ -931,11 +944,18 @@ function handleWSMessage(msg) {
       statusEl.style.color = '#ff8a50';
       setTimeout(() => { statusEl.style.color = ''; updateStatus(); }, 4000);
     }
+    const winner = getTrackRouteWinners(parseInt(msg.track, 10)).winners.get('filter');
+    const winnerEl = winner ? document.getElementById('node-' + winner.id) : null;
+    if (winnerEl) winnerEl.classList.add('is-rejected');
+    appliedRouteSlots[parseInt(msg.track, 10)]?.delete('filter');
     console.warn('[PATCH] setTrackFilter rechazado por firmware (límite 8 activos)');
   }
 
   /* Sync: firmware tells us a filter was set (from sequencer or another client) */
   if (msg.type === 'trackFilterSet' && msg.success === true) {
+    const winner = getTrackRouteWinners(parseInt(msg.track, 10)).winners.get('filter');
+    const winnerEl = winner ? document.getElementById('node-' + winner.id) : null;
+    if (winnerEl) winnerEl.classList.remove('is-rejected');
     syncFxFromFirmware(msg.track, 'filter', {
       filterType: msg.filterType,
       cutoff: msg.cutoff,
@@ -1303,6 +1323,8 @@ function renderNode(node) {
     `;
   } else if (node.type === 'fx') {
     const def = FX_DEFS[node.fxType];
+    const slot = FX_SLOT_BY_TYPE[node.fxType];
+    const scopeLabel = UNSUPPORTED_PRE_FX.has(node.fxType) ? 'MASTER · POST' : `TRACK · ${(slot || 'FX').toUpperCase()}`;
     el.classList.add('pb-fx');
     if (node.bypass) el.classList.add('is-bypassed');
     el.setAttribute('data-color', def.color);
@@ -1312,10 +1334,11 @@ function renderNode(node) {
       return p.label + ': ' + disp;
     }).join('  ·  ');
     el.innerHTML = `
-      <button class="pb-node-delete" data-node="${node.id}" onclick="event.stopPropagation();pbDeleteNode('${node.id}')">✕</button>
-      <button class="pb-node-bypass ${node.bypass ? 'active' : ''}" data-node="${node.id}" onclick="event.stopPropagation();pbBypassNode('${node.id}')" title="Bypass FX">B</button>
-      <button class="pb-node-edit" data-node="${node.id}" onclick="event.stopPropagation();pbEditNode('${node.id}')">⚙</button>
+      <button class="pb-node-delete" aria-label="Eliminar ${def.label}" data-node="${node.id}" onclick="event.stopPropagation();pbDeleteNode('${node.id}')">✕</button>
+      <button class="pb-node-bypass ${node.bypass ? 'active' : ''}" aria-label="Bypass ${def.label}" data-node="${node.id}" onclick="event.stopPropagation();pbBypassNode('${node.id}')" title="Bypass FX">B</button>
+      <button class="pb-node-edit" aria-label="Editar ${def.label}" data-node="${node.id}" onclick="event.stopPropagation();pbEditNode('${node.id}')">⚙</button>
       <div class="pb-node-header">${def.icon} ${node.label}${node.bypass ? ' <span style="color:#ff9100;font-size:10px">[BYP]</span>' : ''}</div>
+      <div class="pb-node-scope">${scopeLabel}</div>
       <div class="pb-node-params">${paramText}</div>
       <div class="pb-connector in" data-node="${node.id}" data-dir="in"></div>
       <div class="pb-connector out" data-node="${node.id}" data-dir="out"></div>
@@ -1340,6 +1363,7 @@ function renderNode(node) {
   }
 
   nodesEl.appendChild(el);
+  scheduleRouteReconcile();
 }
 
 function updateNodeDisplay(node) {
@@ -1662,55 +1686,157 @@ function wouldCreateCycle(fromId, toId) {
   return hasPath(toId, fromId);
 }
 
-function applyConnection(cable, _visited) {
-  const toNode = nodes.find(n => n.id === cable.to);
-  if (!toNode) return;
+function getReachableFxForTrack(track) {
+  const source = nodes.find(n => n.type === 'pad' && n.track === track);
+  if (!source) return [];
 
-  /* Cycle guard */
-  const visited = _visited || new Set();
-  if (visited.has(cable.id)) return;
-  visited.add(cable.id);
-
-  /* Apply FX only if target is an FX node (not bus/master/pad) */
-  if (toNode.type === 'fx') {
-    if (toNode.bypass) {
-      console.log('[PATCH] applyConnection SKIPPED (bypass):', toNode.label);
-    } else {
-      const tracks = getTracksForNode(cable.to);
-      console.log('[PATCH] applyConnection:', cable.from, '→', cable.to, '| tracks:', tracks, '| fx:', toNode.fxType);
-      tracks.forEach(track => applyFxToTrack(track, toNode));
-      updateSharedFxState();
-    }
+  const bestDepth = new Map([[source.id, 0]]);
+  const queue = [{ id: source.id, depth: 0 }];
+  const candidates = [];
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || current.depth > nodes.length + 2) continue;
+    cables.filter(c => c.from === current.id).forEach(cable => {
+      const next = nodes.find(n => n.id === cable.to);
+      if (!next) return;
+      const depth = current.depth + 1;
+      if ((bestDepth.get(next.id) ?? -1) >= depth) return;
+      bestDepth.set(next.id, depth);
+      queue.push({ id: next.id, depth });
+      /* A node only affects audio when it belongs to a complete source →
+         master path. Dangling editor nodes stay visibly unrouted. */
+      if (next.type === 'fx' && hasPath(next.id, 'master')) {
+        candidates.push({ node: next, depth });
+      }
+    });
   }
+  return candidates;
+}
 
-  /* ALWAYS propagate downstream — buses/masters pass through to FX nodes after them */
-  cables.filter(c => c.from === cable.to).forEach(downCable => {
-    applyConnection(downCable, visited);
+function getTrackRouteWinners(track) {
+  const candidates = getReachableFxForTrack(track)
+    .filter(item => !item.node.bypass && FX_SLOT_BY_TYPE[item.node.fxType])
+    .sort((a, b) => (a.depth - b.depth) || a.node.id.localeCompare(b.node.id));
+  const winners = new Map();
+  candidates.forEach(item => winners.set(FX_SLOT_BY_TYPE[item.node.fxType], item.node));
+  return { candidates, winners };
+}
+
+function fxRouteSignature(node) {
+  return node ? JSON.stringify([node.id, node.fxType, node.params || {}]) : '';
+}
+
+function clearFxSlot(track, slot) {
+  switch (slot) {
+    case 'filter':
+      sendCmd('clearTrackFilter', { track });
+      break;
+    case 'distortion':
+      sendCmd('setTrackDistortion', { track, amount: 0, mode: 0 });
+      break;
+    case 'bitcrusher':
+      sendCmd('setTrackBitCrush', { track, value: 16 });
+      break;
+    case 'echo':
+      sendCmd('setTrackEcho', { track, active: false, time: 100, feedback: 40, mix: 0 });
+      break;
+    case 'flanger':
+      sendCmd('setTrackFlanger', { track, active: false, rate: 30, depth: 0, feedback: 0 });
+      break;
+    case 'compressor':
+      sendCmd('setTrackCompressor', { track, active: false, threshold: -20, ratio: 1 });
+      break;
+  }
+}
+
+function updateRouteDiagnostics(routeData) {
+  const winnerIds = new Set();
+  const routedIds = new Set();
+  const shadowedIds = new Set();
+  let activeSlots = 0;
+
+  routeData.forEach(({ candidates, winners }) => {
+    const bySlot = new Map();
+    candidates.forEach(item => {
+      routedIds.add(item.node.id);
+      const slot = FX_SLOT_BY_TYPE[item.node.fxType];
+      if (!bySlot.has(slot)) bySlot.set(slot, []);
+      bySlot.get(slot).push(item.node.id);
+    });
+    winners.forEach(node => { winnerIds.add(node.id); activeSlots++; });
+    bySlot.forEach(ids => {
+      if (ids.length > 1) ids.slice(0, -1).forEach(id => shadowedIds.add(id));
+    });
+  });
+
+  nodes.filter(n => n.type === 'fx').forEach(node => {
+    const el = document.getElementById('node-' + node.id);
+    if (!el) return;
+    const unsupported = UNSUPPORTED_PRE_FX.has(node.fxType);
+    el.classList.toggle('is-route-active', winnerIds.has(node.id));
+    el.classList.toggle('is-shadowed', shadowedIds.has(node.id) && !winnerIds.has(node.id));
+    el.classList.toggle('is-unrouted', !routedIds.has(node.id) && !unsupported);
+    el.classList.toggle('is-unsupported', unsupported);
+    if (unsupported) el.title = 'Este efecto es global. Usa la pestaña POST.';
+    else if (shadowedIds.has(node.id) && !winnerIds.has(node.id)) el.title = 'Otro nodo posterior ocupa el mismo slot de Daisy.';
+    else if (!routedIds.has(node.id)) el.title = 'Conecta una fuente para activar este nodo.';
+    else el.removeAttribute('title');
+  });
+
+  const status = document.getElementById('pbStatus');
+  if (!status) return;
+  const conflicts = [...shadowedIds].filter(id => !winnerIds.has(id)).length;
+  const unsupported = nodes.filter(n => n.type === 'fx' && UNSUPPORTED_PRE_FX.has(n.fxType)).length;
+  status.classList.toggle('is-warning', conflicts > 0 || unsupported > 0);
+  status.textContent = conflicts || unsupported
+    ? `RUTA · ${activeSlots} slots · ${conflicts} solapados · ${unsupported} globales`
+    : `RUTA OK · ${activeSlots} slots activos`;
+}
+
+function reconcileAllTrackRoutes(force = false) {
+  const routeData = Array.from({ length: 16 }, (_, track) => getTrackRouteWinners(track));
+  updateRouteDiagnostics(routeData);
+  if (!wsConnected) return;
+
+  routeData.forEach(({ winners }, track) => {
+    const applied = appliedRouteSlots[track];
+    TRACK_FX_SLOTS.forEach(slot => {
+      const nextNode = winners.get(slot) || null;
+      const nextSignature = fxRouteSignature(nextNode);
+      const previous = applied.get(slot);
+      if (!force && previous?.signature === nextSignature) return;
+      if (previous) clearFxSlot(track, slot);
+      if (nextNode) {
+        applyFxToTrack(track, nextNode);
+        applied.set(slot, { nodeId: nextNode.id, signature: nextSignature });
+      } else {
+        applied.delete(slot);
+      }
+    });
   });
 }
 
+function scheduleRouteReconcile(force = false) {
+  routeReconcileForce = routeReconcileForce || force;
+  if (routeReconcileTimer) return;
+  routeReconcileTimer = setTimeout(() => {
+    routeReconcileTimer = null;
+    const runForce = routeReconcileForce;
+    routeReconcileForce = false;
+    reconcileAllTrackRoutes(runForce);
+  }, 24);
+}
+
+function applyConnection(cable, _visited) {
+  if (!cable) return;
+  scheduleRouteReconcile();
+  updateSharedFxState();
+}
+
 function clearConnection(cable) {
-  const toNode = nodes.find(n => n.id === cable.to);
-  if (!toNode) return;
-
-  if (toNode.type === 'fx') {
-    const fromNode = nodes.find(n => n.id === cable.from);
-    const tracksToRemove = [];
-
-    if (fromNode && fromNode.type === 'pad') {
-      tracksToRemove.push(fromNode.track);
-    } else if (fromNode) {
-      tracksToRemove.push(...getTracksForNode(cable.from));
-    }
-
-    tracksToRemove.forEach(track => clearFxFromTrack(track, toNode));
-    updateSharedFxState();
-  }
-
-  /* Propagate downstream: clear FX on nodes connected after this one */
-  cables.filter(c => c.from === cable.to).forEach(downCable => {
-    clearConnection(downCable);
-  });
+  if (!cable) return;
+  scheduleRouteReconcile();
+  updateSharedFxState();
 }
 
 function applyFxToTrack(track, fxNode) {
@@ -1752,11 +1878,7 @@ function applyFxToTrack(track, fxNode) {
       break;
     }
     case 'phaser':
-      /* Phaser is master-only in firmware, use master commands */
-      sendCmd('setPhaserActive', { value: true });
-      sendCmd('setPhaserRate', { value: p.rate });
-      sendCmd('setPhaserDepth', { value: p.depth });
-      sendCmd('setPhaserFeedback', { value: p.feedback });
+      console.warn('[PATCH] Phaser es master-only; usa POST para aplicarlo.');
       break;
   }
 }
@@ -1776,8 +1898,10 @@ function clearFxFromTrack(track, fxNode) {
       sendCmd('clearTrackFilter', { track });
       break;
     case 'bitcrusher':
+      sendCmd('setTrackBitCrush', { track, value: 16 });
+      break;
     case 'distortion':
-      sendCmd('clearTrackFX', { track });
+      sendCmd('setTrackDistortion', { track, amount: 0, mode: 0 });
       break;
     case 'echo':
     case 'delay':
@@ -1790,7 +1914,7 @@ function clearFxFromTrack(track, fxNode) {
       sendCmd('setTrackCompressor', { track, active: false });
       break;
     case 'phaser':
-      sendCmd('setPhaserActive', { value: false });
+      console.warn('[PATCH] Phaser PRE ignorado; el módulo global se controla en POST.');
       break;
   }
 }
@@ -1861,17 +1985,21 @@ function syncFxFromFirmware(track, fxCategory, params) {
 
 /* ──────────── SHARED FX STATE (localStorage sync between pages) ──────────── */
 function updateSharedFxState() {
-  /* Build track → FX map from current patchbay cables/nodes */
+  /* Share the effective Daisy state, not every visible editor node.
+     This keeps the sequencer consistent with complete source → master paths
+     and with the last-node-wins rule for each hardware slot. */
   const state = {};
-  cables.forEach(cable => {
-    const toNode = nodes.find(n => n.id === cable.to);
-    if (!toNode || toNode.type !== 'fx' || toNode.bypass) return;
-    const tracks = getTracksForNode(cable.to);
-    tracks.forEach(t => {
-      if (!state[t]) state[t] = [];
-      state[t].push({ fxType: toNode.fxType, params: {...toNode.params} });
+  for (let track = 0; track < 16; track++) {
+    const { winners } = getTrackRouteWinners(track);
+    winners.forEach((node, slot) => {
+      if (!state[track]) state[track] = [];
+      state[track].push({
+        slot,
+        fxType: node.fxType === 'echo' ? 'delay' : node.fxType,
+        params: { ...node.params }
+      });
     });
-  });
+  }
   try {
     localStorage.setItem('r808_shared_fx', JSON.stringify(state));
   } catch(ex) {}
@@ -1950,16 +2078,17 @@ function showParamEditor(nodeId, anchorX, anchorY) {
 
   /* Position editor near the node */
   editor.classList.remove('hidden');
-  const rect = canvasEl.getBoundingClientRect();
-  let ex = anchorX - rect.left + 10;
-  let ey = anchorY - rect.top - 20;
+  let ex = anchorX + 12;
+  let ey = anchorY - 20;
   /* Keep on screen */
-  const ew = 280, eh = 200;
-  if (ex + ew > window.innerWidth) ex = anchorX - rect.left - ew - 10;
-  if (ey + eh > window.innerHeight) ey = window.innerHeight - eh - 20;
-  if (ey < 0) ey = 10;
-  editor.style.left = (anchorX - 30) + 'px';
-  editor.style.top  = (anchorY + 20) + 'px';
+  const ew = editor.offsetWidth || 340;
+  const eh = editor.offsetHeight || 260;
+  if (ex + ew > window.innerWidth - 12) ex = anchorX - ew - 12;
+  if (ey + eh > window.innerHeight - 12) ey = window.innerHeight - eh - 12;
+  ex = Math.max(12, ex);
+  ey = Math.max(12, ey);
+  editor.style.left = ex + 'px';
+  editor.style.top  = ey + 'px';
 }
 
 function closeParamEditor() {
@@ -1969,8 +2098,7 @@ function closeParamEditor() {
 
 function resendFxNode(fxNode) {
   if (fxNode.bypass) return; /* Bypassed nodes don't apply FX */
-  const tracks = getTracksForNode(fxNode.id);
-  tracks.forEach(t => applyFxToTrack(t, fxNode));
+  scheduleRouteReconcile();
 }
 
 function getColorHex(name) {
@@ -2289,6 +2417,10 @@ function onKeyDown(e) {
       removeCable(selectedCable);
       selectedCable = null;
       renderCables();
+    } else if (selectedNodeIds.size) {
+      e.preventDefault();
+      [...selectedNodeIds].forEach(nodeId => window.pbDeleteNode(nodeId));
+      clearNodeSelection();
     }
   }
   if (e.key === 'Escape') {
@@ -2330,10 +2462,19 @@ window.togglePBMenu = function() {
 
 window.pbAddEffect = function(fxType) {
   setPBMenuOpen(false);
+  if (fxType === 'echo') fxType = 'delay';
+  if (UNSUPPORTED_PRE_FX.has(fxType)) {
+    window.pbSwitchTab('post');
+    const status = document.getElementById('pbStatus');
+    if (status) status.textContent = 'Phaser es global · configúralo en POST';
+    return;
+  }
   /* Place new node at center of visible viewport */
   const r = canvasEl.getBoundingClientRect();
-  const cx = canvasEl.scrollLeft + r.width / 2 - 85 + Math.random() * 80 - 40;
-  const cy = canvasEl.scrollTop + r.height / 2 - 40 + Math.random() * 80 - 40;
+  const sameTypeCount = nodes.filter(n => n.type === 'fx' && n.fxType === fxType).length;
+  const offset = (sameTypeCount % 4) * 36;
+  const cx = (canvasEl.scrollLeft + r.width / 2) / viewZoom - 160 + offset;
+  const cy = (canvasEl.scrollTop + r.height / 2) / viewZoom - 70 + offset;
   const node = createFxNode(fxType, cx, cy);
   if (node) {
     /* Scroll to make node visible */
@@ -2471,6 +2612,8 @@ window.pbClearAll = function() {
   saveState();
   /* Reset firmware FX state to match the now-empty canvas */
   resetFirmwareFX();
+  appliedRouteSlots.forEach(slots => slots.clear());
+  scheduleRouteReconcile();
 };
 
 window.pbResetLayout = function() {
@@ -2516,7 +2659,9 @@ window.pbAutoRoute = function() {
 
 window.pbBuildChain = function() {
   setPBMenuOpen(false);
-  const fxNodes = nodes.filter(n => n.type === 'fx').sort((a, b) => (a.x - b.x) || (a.y - b.y));
+  const fxNodes = nodes
+    .filter(n => n.type === 'fx' && !UNSUPPORTED_PRE_FX.has(n.fxType))
+    .sort((a, b) => (a.x - b.x) || (a.y - b.y));
   if (fxNodes.length === 0) return;
 
   cables.forEach(c => clearConnection(c));
@@ -2629,14 +2774,7 @@ window.pbBypassNode = function(nodeId) {
   /* Re-render the full node to update [BYP] tag and classes */
   renderNode(node);
 
-  const tracks = getTracksForNode(nodeId);
-  if (node.bypass) {
-    /* Bypass ON: clear FX from all connected tracks */
-    tracks.forEach(track => clearFxFromTrack(track, node));
-  } else {
-    /* Bypass OFF: re-apply FX to all connected tracks */
-    tracks.forEach(track => applyFxToTrack(track, node));
-  }
+  scheduleRouteReconcile();
 
   saveState();
 };
@@ -2962,7 +3100,19 @@ function createFactoryPresetState(preset) {
   let idCounter = nextId;
   const keyToId = {};
 
-  const fxNodes = preset.chain.map(def => {
+  /* Factory presets predate the final Daisy slot contract. Remove master-only
+     Phaser nodes and keep only the last node for each per-track hardware slot. */
+  const migrated = preset.chain
+    .filter(def => !UNSUPPORTED_PRE_FX.has(def.fxType))
+    .map(def => ({ ...def, fxType: def.fxType === 'echo' ? 'delay' : def.fxType }));
+  const lastSlotIndex = new Map();
+  migrated.forEach((def, index) => lastSlotIndex.set(FX_SLOT_BY_TYPE[def.fxType] || def.key, index));
+  const effectiveChain = migrated.filter((def, index) =>
+    lastSlotIndex.get(FX_SLOT_BY_TYPE[def.fxType] || def.key) === index
+  );
+  if (!effectiveChain.length) return null;
+
+  const fxNodes = effectiveChain.map(def => {
     const id = `fx-${idCounter++}`;
     keyToId[def.key] = id;
     return {
@@ -2975,8 +3125,8 @@ function createFactoryPresetState(preset) {
   });
 
   const chainCables = [];
-  const firstFxId = keyToId[preset.chain[0].key];
-  const lastFxId = keyToId[preset.chain[preset.chain.length - 1].key];
+  const firstFxId = keyToId[effectiveChain[0].key];
+  const lastFxId = keyToId[effectiveChain[effectiveChain.length - 1].key];
 
   if (firstFxId) {
     current.padPositions.forEach(pad => {
@@ -2984,9 +3134,9 @@ function createFactoryPresetState(preset) {
     });
   }
 
-  for (let i = 0; i < preset.chain.length - 1; i++) {
-    const fromId = keyToId[preset.chain[i].key];
-    const toId = keyToId[preset.chain[i + 1].key];
+  for (let i = 0; i < effectiveChain.length - 1; i++) {
+    const fromId = keyToId[effectiveChain[i].key];
+    const toId = keyToId[effectiveChain[i + 1].key];
     if (fromId && toId) chainCables.push({ from: fromId, to: toId });
   }
 
@@ -3241,7 +3391,9 @@ window.pbOpenFxTester = function() {
   /* Populate FX type selector */
   const fxSel = document.getElementById('pbTestFxType');
   if (fxSel && fxSel.options.length === 0) {
-    Object.entries(FX_DEFS).forEach(([key, def]) => {
+    Object.entries(FX_DEFS)
+      .filter(([key]) => key !== 'echo' && !UNSUPPORTED_PRE_FX.has(key))
+      .forEach(([key, def]) => {
       const opt = document.createElement('option');
       opt.value = key;
       opt.textContent = `${def.icon} ${def.label}`;
@@ -3397,12 +3549,12 @@ window.pbTestClearAll = function() {
 
   tracks.forEach(track => {
     sendCmd('clearTrackFilter', { track });
-    sendCmd('clearTrackFX', { track });
+    sendCmd('setTrackDistortion', { track, amount: 0, mode: 0 });
+    sendCmd('setTrackBitCrush', { track, value: 16 });
     sendCmd('setTrackEcho', { track, active: false });
     sendCmd('setTrackFlanger', { track, active: false });
     sendCmd('setTrackCompressor', { track, active: false });
   });
-  sendCmd('setPhaserActive', { value: false });
 
   testerLog(`✓ TODOS los FX limpiados en ${tracks.length} track(s)`, 'log-ok');
 };
@@ -3411,12 +3563,12 @@ function updateStatus() {
   document.getElementById('pbNodeCount').textContent = nodes.length;
   document.getElementById('pbCableCount').textContent = cables.length;
 
-  /* Count active (non-bypassed) FX nodes that have at least one connected track */
-  let activeFx = 0;
-  nodes.filter(n => n.type === 'fx' && !n.bypass).forEach(n => {
-    const tracks = getTracksForNode(n.id);
-    if (tracks.length > 0) activeFx++;
-  });
+  /* Count effective hardware-slot winners, not merely visible connected nodes. */
+  const activeNodeIds = new Set();
+  for (let track = 0; track < 16; track++) {
+    getTrackRouteWinners(track).winners.forEach(node => activeNodeIds.add(node.id));
+  }
+  let activeFx = activeNodeIds.size;
   /* Also count active POST master FX */
   activeFx += postActiveCount();
   const fxEl = document.getElementById('pbFxActive');

@@ -170,11 +170,16 @@ struct LoFiProcessor {
      * bitDepth o sampleRateDiv cambien (via UpdateLoFi del instrumento).
      * NUNCA llamar UpdateCache() desde Process() -- extremadamente caro. */
     void UpdateCache() {
-        levels_  = powf(2.0f, bitDepth);          /* 1x por cambio, no por sample */
+        /* Signed PCM has 2^(bits-1)-1 positive quantisation steps. */
+        levels_  = powf(2.0f, bitDepth - 1.0f) - 1.0f;
+        if (levels_ < 1.0f) levels_ = 1.0f;
         divInt_  = Clamp((int)roundf(sampleRateDiv), 1, 16);  /* entero para comparacion rapida */
     }
 
+    void SetBypass(bool bypass) { bypass_ = bypass; }
+
     float Process(float input) {
+        if (bypass_) return input;
         /* S&H primero: samplea a frecuencia reducida */
         if (++counter_ >= divInt_) {
             counter_ = 0;
@@ -187,10 +192,11 @@ struct LoFiProcessor {
     void Reset() { counter_ = 0; held_ = 0.0f; }
 
 private:
-    float levels_  = 256.0f; /* 2^8, sincronizado con bitDepth=8 por defecto */
+    float levels_  = 127.0f; /* signed 8-bit positive range */
     int   divInt_  = 3;
     int   counter_ = 0;
     float held_    = 0.0f;
+    bool  bypass_  = false;
 };
 
 /* =====================================================================
@@ -278,6 +284,7 @@ private:
         lofiProc_.bitDepth      = 14.0f - lofi * 9.0f;
         lofiProc_.sampleRateDiv = 1.0f  + lofi * 5.0f;
         lofiProc_.UpdateCache();  /* precalcula levels_ / divInt_ */
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -369,6 +376,7 @@ private:
         lofiProc_.bitDepth      = 13.0f - lofi * 8.0f;
         lofiProc_.sampleRateDiv = 1.0f  + lofi * 5.0f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -459,6 +467,7 @@ private:
         lofiProc_.bitDepth      = 12.0f - lofi * 7.0f;
         lofiProc_.sampleRateDiv = 1.5f  + lofi * 4.5f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -506,6 +515,7 @@ protected:
         lofiProc_.bitDepth      = 14.0f - l * 6.0f;
         lofiProc_.sampleRateDiv = 1.0f  + l * 4.0f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(l <= 0.0f);
     }
 };
 
@@ -655,6 +665,7 @@ protected:
         lofiProc_.bitDepth      = 13.0f - lofi * 7.0f;
         lofiProc_.sampleRateDiv = 1.0f  + lofi * 4.0f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -747,6 +758,7 @@ private:
         lofiProc_.bitDepth      = 11.0f - lofi * 6.0f;
         lofiProc_.sampleRateDiv = 2.0f  + lofi * 4.0f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -814,6 +826,7 @@ private:
         lofiProc_.bitDepth      = 12.0f - lofi * 7.0f;
         lofiProc_.sampleRateDiv = 1.5f  + lofi * 3.5f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -884,6 +897,7 @@ private:
         lofiProc_.bitDepth      = 12.0f - lofi * 7.0f;
         lofiProc_.sampleRateDiv = 1.5f  + lofi * 3.0f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -951,6 +965,7 @@ private:
         lofiProc_.bitDepth      = 11.0f - lofi * 6.0f;
         lofiProc_.sampleRateDiv = 2.0f  + lofi * 4.5f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -1019,6 +1034,7 @@ private:
         lofiProc_.bitDepth      = 12.0f - lofi * 7.0f;
         lofiProc_.sampleRateDiv = 1.5f  + lofi * 3.5f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -1091,6 +1107,7 @@ protected:
         lofiProc_.bitDepth      = 12.0f - lofi * 7.0f;
         lofiProc_.sampleRateDiv = 1.5f  + lofi * 4.5f;
         lofiProc_.UpdateCache();
+        lofiProc_.SetBypass(lofi <= 0.0f);
     }
 };
 
@@ -1166,7 +1183,7 @@ static const KitPreset LoFiHipHop = { "Lo-Fi Hip-Hop",
     0.65f
 };
 
-/* Pure 505: sin lofi, fiel al original digital limpio */
+/* Pure 505 procedural: sin LoFi. Para PCM real usar el backend PcmSlot. */
 static const KitPreset Pure505 = { "Pure 505",
         { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
             1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f },
@@ -1202,6 +1219,18 @@ public:
     MidPerc     midPerc;
     LowPerc     lowPerc;
 
+    /* Optional PCM ROM slots. Populated slots override their procedural
+     * voice; missing slots keep the procedural engine as a safe fallback. */
+    struct PcmSlot {
+        const int16_t* data = nullptr;
+        uint32_t length = 0;
+        float sourceRate = 48000.0f;
+        float pos = 0.0f;
+        float step = 1.0f;
+        float velocity = 1.0f;
+        bool active = false;
+    };
+
     void Init(float sampleRate) {
         sr_ = sampleRate;
         kick.Init(sr_);     snare.Init(sr_);    clap.Init(sr_);
@@ -1214,6 +1243,7 @@ public:
         for (int i = 0; i < INST_COUNT; i++) {
             chanVol_[i]  = 1.0f;
             chanMute_[i] = false;
+            pcm_[i] = PcmSlot{};
         }
         masterVol_  = 0.92f;
         limitState_ = 0.0f;
@@ -1221,12 +1251,23 @@ public:
 
     void Trigger(uint8_t inst, float velocity = 1.0f) {
         velocity = Clamp(velocity, 0.0f, 1.0f);
+        if (inst >= INST_COUNT) return;
+        if (inst == INST_HIHAT_C) {
+            hihatO.Choke();
+            pcm_[INST_HIHAT_O].active = false;
+        }
+        if (pcm_[inst].data != nullptr && pcm_[inst].length > 0) {
+            pcm_[inst].pos = 0.0f;
+            pcm_[inst].step = pcm_[inst].sourceRate / sr_;
+            pcm_[inst].velocity = VelCurve(velocity);
+            pcm_[inst].active = true;
+            return;
+        }
         switch (inst) {
             case INST_KICK:     kick.Trigger(velocity);    break;
             case INST_SNARE:    snare.Trigger(velocity);   break;
             case INST_CLAP:     clap.Trigger(velocity);    break;
-            case INST_HIHAT_C:  hihatO.Choke();
-                                hihatC.Trigger(velocity);  break;
+            case INST_HIHAT_C:  hihatC.Trigger(velocity);  break;
             case INST_HIHAT_O:  hihatO.Trigger(velocity);  break;
             case INST_LOW_TOM:  lowTom.Trigger(velocity);  break;
             case INST_MID_TOM:  midTom.Trigger(velocity);  break;
@@ -1246,7 +1287,10 @@ public:
         float mix = 0.0f;
 
         auto add = [&](uint8_t id, auto& inst) {
-            if (!chanMute_[id] && inst.IsActive()) mix += inst.Process() * chanVol_[id];
+            if (inst.IsActive()) {
+                float sample = inst.Process();
+                if (!chanMute_[id]) mix += sample * chanVol_[id];
+            }
         };
 
         add(INST_KICK,    kick);
@@ -1265,6 +1309,23 @@ public:
         add(INST_HI_PERC, hiPerc);
         add(INST_MID_PERC, midPerc);
         add(INST_LOW_PERC, lowPerc);
+
+        for (uint8_t id = 0; id < INST_COUNT; id++) {
+            PcmSlot& slot = pcm_[id];
+            if (!slot.active || slot.data == nullptr || slot.length == 0) continue;
+            uint32_t idx = (uint32_t)slot.pos;
+            if (idx >= slot.length) {
+                slot.active = false;
+                continue;
+            }
+            float frac = slot.pos - (float)idx;
+            float s0 = slot.data[idx] / 32768.0f;
+            float s1 = (idx + 1u < slot.length) ? slot.data[idx + 1u] / 32768.0f : 0.0f;
+            float sample = s0 + frac * (s1 - s0);
+            slot.pos += slot.step;
+            if (slot.pos >= (float)slot.length) slot.active = false;
+            if (!chanMute_[id]) mix += sample * slot.velocity * chanVol_[id];
+        }
 
         /* Soft limiter */
         mix *= masterVol_;
@@ -1286,6 +1347,31 @@ public:
         cowbell.SetLoFi(l);   cymbal.SetLoFi(l);    rimshot.SetLoFi(l);
         shaker.SetLoFi(l);    clave.SetLoFi(l);
         hiPerc.SetLoFi(l);    midPerc.SetLoFi(l);   lowPerc.SetLoFi(l);
+    }
+
+    bool SetPcmSample(uint8_t inst, const int16_t* data, uint32_t length,
+                      float sourceRate = 48000.0f) {
+        if (inst >= INST_COUNT || data == nullptr || length == 0) return false;
+        PcmSlot& slot = pcm_[inst];
+        slot.data = data;
+        slot.length = length;
+        slot.sourceRate = Clamp(sourceRate, 1000.0f, 384000.0f);
+        slot.pos = 0.0f;
+        slot.step = slot.sourceRate / sr_;
+        slot.active = false;
+        return true;
+    }
+
+    void ClearPcmSample(uint8_t inst) {
+        if (inst < INST_COUNT) pcm_[inst] = PcmSlot{};
+    }
+
+    void ClearPcmSamples() {
+        for (uint8_t i = 0; i < INST_COUNT; i++) pcm_[i] = PcmSlot{};
+    }
+
+    bool HasPcmSample(uint8_t inst) const {
+        return inst < INST_COUNT && pcm_[inst].data != nullptr && pcm_[inst].length > 0;
     }
 
     /* -- Mixer -- */
@@ -1327,6 +1413,8 @@ public:
         if (hiPerc.IsActive())  c++;
         if (midPerc.IsActive()) c++;
         if (lowPerc.IsActive()) c++;
+        for (uint8_t i = 0; i < INST_COUNT; i++)
+            if (pcm_[i].active) c++;
         return c;
     }
 
@@ -1336,6 +1424,7 @@ private:
     float  limitState_  = 0.0f;
     float  chanVol_[INST_COUNT]  = {};
     bool   chanMute_[INST_COUNT] = {};
+    PcmSlot pcm_[INST_COUNT];
 };
 
 } /* namespace TR505 */

@@ -27,7 +27,7 @@
  *    9   Index      [0.0..20.0]     FM depth (modulation index)
  *    10  Feedback   [0.0..1.0]      modulator self-feedback
  *    11  Algorithm  0=M→C  1=M+C (additive)  2=C+C ring-mod
- *    12  Detune     [-50..+50] cents desintonizacion carriersub//mod
+ *    12  Detune     [-50..+50] cents desintonizacion del modulador
  *    13  Velocity   sensitividad index con velocidad [0.0..1.0]
  *    14  Volume     [0.0..1.0]
  *
@@ -75,22 +75,40 @@ class Adsr {
 public:
     enum Stage { IDLE=0, ATTACK, DECAY, SUSTAIN, RELEASE };
 
-    void Init(float sr)  { sr_ = sr; stage_ = IDLE; val_ = 0.0f; }
+    void Init(float sr)  {
+        sr_ = sr;
+        stage_ = IDLE;
+        val_ = 0.0f;
+        cachedAtk_ = cachedDec_ = cachedRel_ = -1.0f;
+    }
     void Gate(bool on)   { stage_ = on ? ATTACK : (stage_ != IDLE ? RELEASE : IDLE); }
     void Retrigger()     { stage_ = ATTACK; }
     bool IsIdle() const  { return stage_ == IDLE; }
     float Value() const  { return val_; }
 
     float Process(float atk, float dec, float sus, float rel) {
+        /* Envelope times only change at control rate. Cache the expensive
+         * reciprocal/exp calculations instead of repeating them per sample. */
+        if (atk != cachedAtk_) {
+            cachedAtk_ = atk;
+            attackInc_ = 1.0f / Clamp(atk * sr_, 1.0f, sr_ * 20.0f);
+        }
+        if (dec != cachedDec_) {
+            cachedDec_ = dec;
+            decayCoef_ = expf(-1.0f / Clamp(dec * sr_, 1.0f, sr_ * 30.0f));
+        }
+        if (rel != cachedRel_) {
+            cachedRel_ = rel;
+            releaseCoef_ = expf(-1.0f / Clamp(rel * sr_, 1.0f, sr_ * 30.0f));
+        }
         switch (stage_) {
             case ATTACK:
-                val_ += 1.0f / Clamp(atk * sr_, 1.0f, sr_ * 20.0f);
+                val_ += attackInc_;
                 if (val_ >= 1.0f) { val_ = 1.0f; stage_ = DECAY; }
                 break;
             case DECAY: {
-                float coef = expf(-1.0f / Clamp(dec * sr_, 1.0f, sr_ * 30.0f));
                 float tgt  = Clamp(sus, 0.0f, 1.0f);
-                val_ = tgt + (val_ - tgt) * coef;
+                val_ = tgt + (val_ - tgt) * decayCoef_;
                 if (fabsf(val_ - tgt) < 0.0003f) { val_ = tgt; stage_ = SUSTAIN; }
                 break;
             }
@@ -98,8 +116,7 @@ public:
                 val_ = Clamp(sus, 0.0f, 1.0f);
                 break;
             case RELEASE: {
-                float coef = expf(-1.0f / Clamp(rel * sr_, 1.0f, sr_ * 30.0f));
-                val_ *= coef;
+                val_ *= releaseCoef_;
                 if (val_ < 0.0001f) { val_ = 0.0f; stage_ = IDLE; }
                 break;
             }
@@ -113,6 +130,8 @@ public:
 private:
     float  sr_    = 48000.0f;
     float  val_   = 0.0f;
+    float  cachedAtk_ = -1.0f, cachedDec_ = -1.0f, cachedRel_ = -1.0f;
+    float  attackInc_ = 1.0f, decayCoef_ = 0.0f, releaseCoef_ = 0.0f;
     Stage  stage_ = IDLE;
 };
 
@@ -199,7 +218,7 @@ public:
 
         /* ── Phase advance ── */
         modPhase_ += modFreq_ * dt_;
-        if (modPhase_ >= 1.0f) modPhase_ -= 1.0f;
+        if (modPhase_ >= 1.0f) modPhase_ -= (uint32_t)modPhase_;
 
         carPhase_ += carFreq_ * dt_;
         if (carPhase_ >= 1.0f) carPhase_ -= 1.0f;
@@ -212,10 +231,11 @@ public:
                 break;
             case 1: /* Aditivo: carrier + modulator en paralelo */
                 output  = sinf(FM2OP_TWOPI * carPhase_) * 0.7f;
-                output += modOsc * effIndex * 0.3f;
+                output += modOsc * Clamp(effIndex, 0.0f, 1.0f) * 0.3f;
                 break;
             case 2: /* Ring modulation */
-                output = sinf(FM2OP_TWOPI * carPhase_) * modOsc;
+                output = sinf(FM2OP_TWOPI * carPhase_) * modOsc
+                       * Clamp(effIndex, 0.0f, 1.0f);
                 break;
             default:
                 output = sinf(FM2OP_TWOPI * carPhase_ + effIndex * modOsc);
@@ -258,8 +278,8 @@ public:
 private:
     void UpdateCachedFreqs() {
         const float detuneMult = (params.detune != 0.0f) ? SemitoneRatio(params.detune) : 1.0f;
-        carFreq_ = baseFreq_ * detuneMult;
-        modFreq_ = carFreq_ * params.ratio;
+        carFreq_ = baseFreq_;
+        modFreq_ = baseFreq_ * params.ratio * detuneMult;
     }
 
     float    sr_       = 48000.0f;

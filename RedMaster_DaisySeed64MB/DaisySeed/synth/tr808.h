@@ -1076,7 +1076,10 @@ public:
         float mix = 0.0f;
 
         auto add = [&](uint8_t id, auto& inst) {
-            if (!chanMute_[id] && inst.IsActive()) mix += inst.Process() * chanVol_[id];
+            if (inst.IsActive()) {
+                float sample = inst.Process();
+                if (!chanMute_[id]) mix += sample * chanVol_[id];
+            }
         };
 
         add(INST_KICK,      kick);

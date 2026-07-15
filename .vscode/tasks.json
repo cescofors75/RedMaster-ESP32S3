@@ -172,6 +172,45 @@
 			}
 		},
 		{
+			"label": "PlatformIO: Build Daisy (Showcase)",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/RedMaster_DaisySeed64MB/build_daisy.ps1",
+				"-ShowcaseDemo",
+				"-BuildDir", "build_showcase"
+			],
+			"problemMatcher": [],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "PlatformIO: Flash Daisy (Showcase)",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/RedMaster_DaisySeed64MB/flash_daisy.ps1",
+				"-ShowcaseDemo"
+			],
+			"dependsOn": "PlatformIO: Build Daisy (Showcase)",
+			"dependsOrder": "sequence",
+			"problemMatcher": [],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
 			"label": "PlatformIO: Build Daisy (Clean)",
 			"type": "shell",
 			"command": "pwsh.exe",
