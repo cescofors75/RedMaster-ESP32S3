@@ -679,7 +679,10 @@ void MIDIController::saveMappings() {
 
 void MIDIController::loadMappings() {
   Preferences prefs;
-  if (!prefs.begin("midi_map", true)) {  // read-only
+  // Open read/write so Preferences creates the namespace on first boot.
+  // Opening a namespace that does not exist in read-only mode makes the ESP-IDF
+  // print nvs_open NOT_FOUND even though using the defaults is expected.
+  if (!prefs.begin("midi_map", false)) {
     return;
   }
   int count = prefs.getInt("count", -1);

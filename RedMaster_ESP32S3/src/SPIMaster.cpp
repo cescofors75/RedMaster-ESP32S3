@@ -142,7 +142,11 @@ bool SPIMaster::begin() {
     
     // Try to connect to Daisy
     uint32_t rtt;
-    for (int attempt = 0; attempt < 10; attempt++) {
+    // Daisy may still be mounting/scanning its SD card when both boards receive
+    // power together. Two seconds was too short and made the S3 continue with
+    // every boot-time audio command lost. Give the audio board up to 8 seconds.
+    static constexpr int kBootPingAttempts = 40;
+    for (int attempt = 0; attempt < kBootPingAttempts; attempt++) {
         if (ping(rtt)) {
             stm32Connected = true;
             return true;
@@ -153,7 +157,8 @@ bool SPIMaster::begin() {
     // Intencionadamente devolvemos true aunque la Daisy no responda: el
     // dispositivo debe arrancar igualmente (UI/web operativas) y process()
     // reintenta la conexion cada 3s. El caller debe consultar isConnected().
-    Serial.println("[SPI] WARN: Daisy no responde al boot (10 pings) - seguira reintentando");
+    Serial.printf("[SPI] WARN: Daisy no responde al boot (%d pings / 8s) - seguira reintentando\n",
+                  kBootPingAttempts);
     return true;
 }
 
@@ -419,9 +424,17 @@ void SPIMaster::process() {
     // ── 5. Reconnect if link dropped ──
     if (!stm32Connected) {
         static uint32_t lastRetry = 0;
+        static uint32_t lastRetryLog = 0;
         if (millis() - lastRetry > 3000) {
             uint32_t rtt;
-            if (ping(rtt)) stm32Connected = true;
+            if (ping(rtt)) {
+                stm32Connected = true;
+                Serial.printf("[SPI] Daisy reconectada (RTT %lu us)\n", (unsigned long)rtt);
+            } else if (millis() - lastRetryLog >= 15000) {
+                Serial.printf("[SPI] Daisy sigue OFFLINE (errores SPI=%lu); revise alimentacion, GND, CS7/SCK4/MOSI5/MISO6 y firmware Daisy\n",
+                              (unsigned long)spiErrorCount);
+                lastRetryLog = millis();
+            }
             lastRetry = millis();
         }
     }

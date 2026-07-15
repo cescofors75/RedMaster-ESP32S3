@@ -115,5 +115,19 @@ if (-not $found) {
 }
 
 Write-Host ("Monitor en " + $found.port + " @ " + $Baud) -ForegroundColor Green
+$projectDir = Join-Path (Split-Path $PSScriptRoot -Parent) 'RedMaster_ESP32S3'
+if ($Device -eq 's3' -and (Test-Path (Join-Path $projectDir 'platformio.ini'))) {
+    # The decoder resolves firmware.elf from the current PlatformIO project.
+    # This shared launcher lives one directory above the S3 project.
+    Push-Location $projectDir
+    try {
+        & $pio device monitor --port $found.port --baud $Baud --filter esp32_exception_decoder --filter time
+        $monitorExit = $LASTEXITCODE
+    } finally {
+        Pop-Location
+    }
+    exit $monitorExit
+}
+
 & $pio device monitor --port $found.port --baud $Baud --filter esp32_exception_decoder --filter time
 exit $LASTEXITCODE

@@ -800,7 +800,11 @@ void setup() {
         delay(3000);
         ESP.restart();
     }
-    syslog("BOOT", "SPI Master OK");
+    if (spiMaster.isConnected()) {
+        syslog("BOOT", "SPI Master OK - Daisy connected");
+    } else {
+        syslog("BOOT", "SPI bus initialized, Daisy OFFLINE - audio unavailable until reconnect");
+    }
     
     
     showLoadingSamplesLED();
@@ -1207,7 +1211,16 @@ void setup() {
     twdtConfig.timeout_ms = 10000;
     twdtConfig.idle_core_mask = 0;
     twdtConfig.trigger_panic = true;
-    esp_task_wdt_init(&twdtConfig);
+    // Arduino/IDF normally creates TWDT before setup(). Try that existing
+    // instance first: calling init() first emits an ESP-IDF error even if we
+    // immediately reconfigure it successfully afterwards.
+    esp_err_t twdtErr = esp_task_wdt_reconfigure(&twdtConfig);
+    if (twdtErr == ESP_ERR_INVALID_STATE) {
+        twdtErr = esp_task_wdt_init(&twdtConfig);
+    }
+    if (twdtErr != ESP_OK) {
+        syslog("BOOT", "WARN: TWDT setup failed: %s", esp_err_to_name(twdtErr));
+    }
 
     // --- DUAL-CORE TASKS ---
 
