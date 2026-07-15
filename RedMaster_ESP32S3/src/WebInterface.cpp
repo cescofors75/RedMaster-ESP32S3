@@ -536,6 +536,7 @@ extern void dsqUploadPatternDeferred(int pattern);   // safe from Core0: sets fl
 extern void dsqSelectPatternDeferred(int pattern);   // select-only path (1 SPI cmd, no reupload)
 extern void dsqUploadAndPlayDeferred(int pattern);   // upload + select + play, en orden garantizado
 extern int dsqGetResidentSlot(int masterPattern);
+extern void setTrackSynthEngine(int track, int8_t engine);  // fwd: definido en main.cpp, usado por el pattern bank loader
 
 static bool dsqSetResidentStep(int masterPattern, int track, int step,
                                uint8_t active, uint8_t velocity,
