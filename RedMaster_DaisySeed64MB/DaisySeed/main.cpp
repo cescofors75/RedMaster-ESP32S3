@@ -1906,6 +1906,17 @@ static constexpr bool kStartupShowcaseDemo = (RED808_STARTUP_SHOWCASE_DEMO != 0)
 static constexpr bool kStartupStressReport = (RED808_STARTUP_STRESS_REPORT != 0);
 static constexpr uint32_t kStartupStressSeconds = RED808_STARTUP_STRESS_SECONDS;
 
+/* SD boot-load: por defecto DESACTIVADO. Sin tarjeta SD, f_mount() fuerza un
+ * acceso a un bus SPI3 con MISO flotante y el driver FatFS se cuelga de forma
+ * intermitente en el arranque (se queda en la fase 3-4, no llega a inicializar
+ * el SPI esclavo y el ESP32 ve la Daisy OFFLINE). En este montaje no hay SD:
+ * los samples vienen de QSPI o por SPI desde el ESP32. Ponlo a 1 solo si vas
+ * a usar tarjeta microSD. */
+#ifndef RED808_ENABLE_SD_BOOTLOAD
+#define RED808_ENABLE_SD_BOOTLOAD 0
+#endif
+static constexpr bool kEnableSdBootLoad = (RED808_ENABLE_SD_BOOTLOAD != 0);
+
 static void ApplySynthPreset(uint8_t engine, uint8_t presetId);
 static void ReleaseAllSynthEngines();
 static constexpr bool kBypassIncomingCrc = false; /* producción: validar CRC de comandos entrantes */
@@ -8972,7 +8983,7 @@ int main()
     /* ── SD boot load ──
      * Si no hay blob QSPI usable, intentamos recuperar el kit por defecto
      * desde /data en la microSD para evitar un arranque completamente mudo. */
-    if(!kStartupStressReport && loadedCount == 0)
+    if(kEnableSdBootLoad && !kStartupStressReport && loadedCount == 0)
     {
         Log("Sin samples en QSPI: intentando init SD + autoload...");
         sdOk = InitSD();
@@ -8988,6 +8999,10 @@ int main()
 
         loadedCount = 0;
         for(int i = 0; i < MAX_PADS; i++) if(sampleLoaded[i]) loadedCount++;
+    }
+    else if(loadedCount == 0)
+    {
+        Log("Sin samples en QSPI y SD boot-load desactivado: arranque sin muestras locales (OK, llegan por SPI)");
     }
 
     Log("Samples cargados: %d / %d", loadedCount, MAX_PADS);
