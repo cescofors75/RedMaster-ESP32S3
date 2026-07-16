@@ -145,6 +145,15 @@ struct PsramAllocator {
 };
 using PsramJsonDocument = BasicJsonDocument<PsramAllocator>;
 
+// Alimenta el TWDT solo si el task actual está suscrito. Llamar a
+// esp_task_wdt_reset() desde un task NO suscrito (p.ej. async_tcp durante
+// una subida HTTP de WAV) no alimenta nada y además imprime
+// "task_wdt: task not found" por serie EN CADA CHUNK — el log a 115200
+// bloquea ~1ms por línea y arrastraba todo el dispositivo durante subidas.
+static inline void feedTaskWdtIfSubscribed() {
+  if (esp_task_wdt_status(NULL) == ESP_OK) esp_task_wdt_reset();
+}
+
 // Persistent JSON document in PSRAM — reused for every state broadcast.
 // Allocated once in begin(), never freed. clear() between uses.
 static PsramJsonDocument* _stateDoc = nullptr;
@@ -389,7 +398,7 @@ static bool streamWavFileToCleanTrack(int slot, const char* path, char* err, siz
   uint32_t samplesSent = 0;
 
   while (bytesRemaining > 0) {
-    esp_task_wdt_reset();
+    feedTaskWdtIfSubscribed();
     size_t toRead = bytesRemaining > sizeof(inBuf) ? sizeof(inBuf) : bytesRemaining;
     size_t readNow = file.read(inBuf, toRead);
     if (readNow == 0) {
@@ -436,7 +445,7 @@ static bool streamWavFileToCleanTrack(int slot, const char* path, char* err, siz
         return false;
       }
       samplesSent += pcmCount;
-      esp_task_wdt_reset();
+      feedTaskWdtIfSubscribed();
       yield();
     }
 
@@ -860,14 +869,38 @@ static void sendWebAsset(AsyncWebServerRequest *request,
   // si fsPath no existe pero fsPath+".gz" sí (caso normal en data_gz/web), la librería
   // abre el .gz y establece Content-Encoding: gzip, _sendContentLength=true, _chunked=false,
   // garantizando un Content-Length correcto y el header Content-Disposition sin extensión .gz.
-  if (!LittleFS.exists(fsPath) && !LittleFS.exists(fsPath + ".gz")) {
+  const bool hasPlain = LittleFS.exists(fsPath);
+  const bool hasGz    = !hasPlain && LittleFS.exists(fsPath + ".gz");
+  if (!hasPlain && !hasGz) {
     request->send(404, "text/plain", "Not found");
     return;
+  }
+
+  // ── ETag + 304: la web cargaba LENTA porque cada visita re-descargaba
+  // ~250KB (app.js 72KB, style.css 47KB...) desde LittleFS con no-cache pelado.
+  // ETag barato = tamaño del fichero en hex (cambia con cualquier edición real
+  // tras gzip; colisión tamaño-idéntico es rarísima y Ctrl+F5 la salva).
+  // Con If-None-Match coincidente devolvemos 304 vacío: la recarga pasa de
+  // ~250KB re-servidos por LittleFS a ~14 respuestas de cabecera.
+  File probe = LittleFS.open(hasGz ? fsPath + ".gz" : fsPath, "r");
+  String etag;
+  if (probe) {
+    etag = "\"" + String(probe.size(), HEX) + "\"";
+    probe.close();
+    if (request->hasHeader("If-None-Match") &&
+        request->header("If-None-Match") == etag) {
+      AsyncWebServerResponse *notModified = request->beginResponse(304);
+      notModified->addHeader("ETag", etag);
+      notModified->addHeader("Cache-Control", cacheControl);
+      request->send(notModified);
+      return;
+    }
   }
 
   AsyncWebServerResponse *response = request->beginResponse(LittleFS, fsPath, contentType);
   response->addHeader("Cache-Control", cacheControl);
   response->addHeader("Vary", "Accept-Encoding");
+  if (etag.length()) response->addHeader("ETag", etag);
   request->send(response);
 }
 
@@ -3343,7 +3376,7 @@ void WebInterface::update() {
   int pendPad = _pendingLoadPad;
   if (pendPad >= 0 && !s_padXfer.active) {
     _pendingLoadPad = -1;  // clear flag first
-    esp_task_wdt_reset();
+    feedTaskWdtIfSubscribed();
 
     bool decoded = false;
     if (_uploadBuf && _uploadBufLen > 0) {
@@ -3352,7 +3385,7 @@ void WebInterface::update() {
     // Free the raw WAV now — only the decoded sample stays in PSRAM during the
     // (non-blocking) transfer, halving peak memory.
     if (_uploadBuf) { free(_uploadBuf); _uploadBuf = nullptr; _uploadBufLen = 0; }
-    esp_task_wdt_reset();
+    feedTaskWdtIfSubscribed();
 
     if (decoded) {
       s_padXfer = PadXferState{};
@@ -3382,14 +3415,14 @@ void WebInterface::update() {
     char path[28];
     snprintf(path, sizeof(path), "/samples/pad%d.wav", pad);
     if (LittleFS.exists(path)) {
-      esp_task_wdt_reset();
+      feedTaskWdtIfSubscribed();
       bool ok = sampleManager.loadSample(path, (int)pad);
       if (ok) {
         setTrackSynthEngine((int)pad, -1);
         spiMaster.dsqSetTrackEngine((uint8_t)pad, -1);
         spiMaster.dsqSetMute((uint8_t)pad, false);
       }
-      esp_task_wdt_reset();
+      feedTaskWdtIfSubscribed();
     }
   }
 
