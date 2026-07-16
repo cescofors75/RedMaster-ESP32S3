@@ -9124,6 +9124,19 @@ int main()
 
                             if(pendingResponse) {
                                 pendingResponse = false;
+                                /* FLUSH TXFIFO antes de precargar: si el master no
+                                 * llegó a leer una respuesta anterior (p.ej. pings
+                                 * durante el boot mientras cargábamos el blob QSPI),
+                                 * sus bytes quedan atascados en el FIFO y desplazan
+                                 * TODAS las respuestas futuras → el magic nunca cae
+                                 * en el byte 0 de la lectura del master, headerOk
+                                 * falla siempre y el link queda muerto (connected=0
+                                 * eterno) aunque los comandos one-way sigan entrando.
+                                 * SPE=0 vacía los FIFOs conservando CFG1/CFG2; el
+                                 * RXFIFO ya está drenado (acabamos de parsear el
+                                 * comando y el master está en su gap de respuesta). */
+                                SPI1->CR1 &= ~SPI_CR1_SPE;
+                                SPI1->CR1 |=  SPI_CR1_SPE;
                                 spiTxPending    = true;
                                 spiTxIdx        = 0;
                                 /* Limpiar EOT+TXTF para que TXP funcione */
