@@ -4400,6 +4400,7 @@ function _applyStepUpdate(step) {
         }
     }
 
+    const prevAppliedStep = lastCurrentStep;
     lastCurrentStep = step;
 
     // === SYNC LEDS: flash live pads in rhythm with sequencer ===
@@ -4408,11 +4409,26 @@ function _applyStepUpdate(step) {
             _cachedPadEls = new Array(16);
             for (let i = 0; i < 16; i++) _cachedPadEls[i] = document.querySelector(`.pad[data-pad="${i}"]`);
         }
+        // WS/rAF coalescing can skip steps under load (only the newest queued
+        // step is applied); flash the skipped ones too so a sounding hit never
+        // stays dark. Capped so a tab wake-up doesn't strobe every pad.
+        const stepsToFlash = [step];
+        if (prevAppliedStep !== null && currentStepCount > 0) {
+            const delta = (step - prevAppliedStep + currentStepCount) % currentStepCount;
+            if (delta > 1 && delta <= 4) {
+                for (let d = 1; d < delta; d++) stepsToFlash.push((prevAppliedStep + d) % currentStepCount);
+            }
+        }
         const flashedPads = [];
         for (let track = 0; track < 16; track++) {
-            if (circularSequencerData[track] && circularSequencerData[track][step]) {
-                const pad = _cachedPadEls[track];
-                if (pad) { pad.classList.add('sync-flash'); flashedPads.push(pad); }
+            const row = circularSequencerData[track];
+            if (!row) continue;
+            for (let si = 0; si < stepsToFlash.length; si++) {
+                if (row[stepsToFlash[si]]) {
+                    const pad = _cachedPadEls[track];
+                    if (pad) { pad.classList.add('sync-flash'); flashedPads.push(pad); }
+                    break;
+                }
             }
         }
         if (flashedPads.length) {
