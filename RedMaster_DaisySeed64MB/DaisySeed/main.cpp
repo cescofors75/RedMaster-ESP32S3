@@ -2657,6 +2657,8 @@ static inline float fast_powf(float base, float exponent){
 }
 
 static float ApplyDist(float s, float drive, uint8_t mode){
+    if(!isfinite(s)) return 0.0f;          // nunca propagar NaN/Inf al DSP
+    drive = clampF(drive, 0.f, 100.f);
     if(drive < 0.01f) return s;
     float d = 1.0f + drive * 15.0f;
     s *= d;
@@ -2664,14 +2666,19 @@ static float ApplyDist(float s, float drive, uint8_t mode){
         case DMODE_SOFT: s = MySoftClip(s); break;
         case DMODE_HARD: s = clampF(s,-1.f,1.f); break;
         case DMODE_TUBE: s = AsymClip(s); break;  // asimétrico tube (AudioNoise)
-        case DMODE_FUZZ:  // fold-back fuzz
-            while(s >  1.f || s < -1.f){
+        case DMODE_FUZZ: { // fold-back fuzz — acotado, nunca puede colgar el callback
+            s = clampF(s, -1.0e6f, 1.0e6f);
+            int guard = 64;
+            while((s >  1.f || s < -1.f) && guard-- > 0){
                 if(s >  1.f) s =  2.f - s;
                 if(s < -1.f) s = -2.f - s;
             }
+            s = clampF(s, -1.f, 1.f);
             break;
+        }
     }
-    return s / d * (1.f + drive * 0.5f);
+    float out = s / d * (1.f + drive * 0.5f);
+    return isfinite(out) ? out : 0.0f;
 }
 
 static float BitCrush(float s, uint8_t bits){
@@ -5749,13 +5756,19 @@ static void ProcessCommand()
         if(len >= 1) gFilterBitDepth = (p[0] < 4) ? 4 : (p[0] > 16 ? 16 : p[0]);
         break;
     case CMD_FILTER_DISTORTION:
-        if(len >= 4) memcpy(&gFilterDist, p, 4);
+        if(len >= 4){
+            memcpy(&gFilterDist, p, 4);
+            gFilterDist = clampF(gFilterDist, 0.f, 100.f);
+        }
         break;
     case CMD_FILTER_DIST_MODE:
         if(len >= 1) gFilterDistMode = p[0];
         break;
     case CMD_FILTER_SR_REDUCE:
-        if(len >= 4) memcpy(&gFilterSrReduce, p, 4);
+        if(len >= 4){
+            memcpy(&gFilterSrReduce, p, 4);
+            if(gFilterSrReduce > (uint32_t)SAMPLE_RATE) gFilterSrReduce = 0;
+        }
         break;
     case CMD_MASTER_FX_ROUTE:
         if(len >= 2){

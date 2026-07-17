@@ -1340,92 +1340,92 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
   
   server->on("/app.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/app.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/app.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   // Navegación común + indicador de conexión (cargado por todas las páginas)
   server->on("/nav.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/nav.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/nav.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/sample-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/sample-editor.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/sample-editor.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/sd-browser.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/sd-browser.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/sd-browser.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/midi-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/midi-ui.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/midi-ui.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
   
   server->on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/style.css", "text/css", "no-cache");
+    sendWebAsset(request, "/style.css", "text/css", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/daisy-controls.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/daisy-controls.css", "text/css", "no-cache");
+    sendWebAsset(request, "/daisy-controls.css", "text/css", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/responsive.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/responsive.css", "text/css", "no-cache");
+    sendWebAsset(request, "/responsive.css", "text/css", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/ui-2026.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/ui-2026.css", "text/css", "no-cache");
+    sendWebAsset(request, "/ui-2026.css", "text/css", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/workspace-2026.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/workspace-2026.css", "text/css", "no-cache");
+    sendWebAsset(request, "/workspace-2026.css", "text/css", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/studio-workspaces.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/studio-workspaces.css", "text/css", "no-cache");
+    sendWebAsset(request, "/studio-workspaces.css", "text/css", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/theme-sync.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/theme-sync.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/theme-sync.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/workspace-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/workspace-ui.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/workspace-ui.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/theme-vars.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/theme-vars.css", "text/css", "no-cache");
+    sendWebAsset(request, "/theme-vars.css", "text/css", "public, max-age=86400, must-revalidate");
   });
   
   server->on("/keyboard-controls.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/keyboard-controls.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/keyboard-controls.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
   
   server->on("/keyboard-styles.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/keyboard-styles.css", "text/css", "no-cache");
+    sendWebAsset(request, "/keyboard-styles.css", "text/css", "public, max-age=86400, must-revalidate");
   });
   
   server->on("/midi-import.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/midi-import.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/midi-import.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
   
   server->on("/chat-agent.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/chat-agent.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/chat-agent.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
   
   server->on("/waveform-visualizer.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/waveform-visualizer.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/waveform-visualizer.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/synth-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/synth-editor.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/synth-editor.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/export-pattern.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/export-pattern.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/export-pattern.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/melody-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/melody-editor.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/melody-editor.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
   
   // Patchbay page
@@ -1436,11 +1436,11 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
   
   server->on("/patchbay.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/patchbay.css", "text/css", "no-cache");
+    sendWebAsset(request, "/patchbay.css", "text/css", "public, max-age=86400, must-revalidate");
   });
   
   server->on("/patchbay.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/patchbay.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/patchbay.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   // Multiview page — redirect to .html served by serveStatic (avoids AsyncFileResponse 500 edge case)
@@ -1453,11 +1453,11 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
 
   server->on("/multiview.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/multiview.css", "text/css", "no-cache");
+    sendWebAsset(request, "/multiview.css", "text/css", "public, max-age=86400, must-revalidate");
   });
   
   server->on("/multiview.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/multiview.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/multiview.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   // Live gesture page
@@ -1478,43 +1478,43 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
 
   server->on("/gesture.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/gesture.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/gesture-styles.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture-styles.css", "text/css", "no-cache");
+    sendWebAsset(request, "/gesture-styles.css", "text/css", "public, max-age=86400, must-revalidate");
   });
 
   // Mobile page — los assets existían en el FS pero no había ruta que los
   // sirviera (solo era accesible vía bridge externo). Con esto /mobile
   // funciona directo desde el ESP32 y entra en la navegación común.
   server->on("/mobile", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
+    sendWebAsset(request, "/mobile.html", "text/html", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/mobile.html", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
+    sendWebAsset(request, "/mobile.html", "text/html", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/mobile.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.css", "text/css", "no-cache");
+    sendWebAsset(request, "/mobile.css", "text/css", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/mobile.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/mobile.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   // Admin page
   server->on("/adm", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/admin.html", "text/html", "no-cache");
+    sendWebAsset(request, "/admin.html", "text/html", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/admin.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/admin.css", "text/css", "no-cache");
+    sendWebAsset(request, "/admin.css", "text/css", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/admin.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/admin.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/admin.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
   server->on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -2028,7 +2028,7 @@ refresh();if(auto_)startAuto();
     if (LittleFS.exists("/buttons.json")) {
       AsyncWebServerResponse *resp = request->beginResponse(
           LittleFS, "/buttons.json", "application/json");
-      resp->addHeader("Cache-Control", "no-cache");
+      resp->addHeader("Cache-Control", "public, max-age=86400, must-revalidate");
       request->send(resp);
     } else {
       // Devolver config por defecto si no hay archivo guardado
