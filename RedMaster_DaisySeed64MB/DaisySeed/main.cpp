@@ -5660,13 +5660,25 @@ static void ProcessCommand()
      * ════════════════════════════════════════════ */
     case CMD_FILTER_SET:
         if(len >= 20){
+            /* Layout = GlobalFilterPayload de protocol.h (master):
+             *   [0] filterType  [1] distMode  [2] bitDepth  [3] reserved
+             *   [4..7] cutoff   [8..11] resonance  [12..15] distortion
+             *   [16..19] sampleRateReduce
+             * Los offsets antiguos (cutoff en +2, Q en +6, bitDepth en +10)
+             * NO coincidían con el struct del master: el cutoff aterrizaba
+             * como float basura y bitDepth=0 pasaba sin clamp → BitCrush a
+             * 0 bits = silencio total. Era el "se cuelga con filtros OUT". */
             gFilterType = p[0];
-            memcpy(&gFilterCutoff, p + 2, 4);
-            memcpy(&gFilterQ,      p + 6, 4);
-            gFilterBitDepth = p[10];
-            gFilterDistMode = p[11];
-            memcpy(&gFilterDist,    p + 12, 4);
-            memcpy(&gFilterSrReduce,p + 16, 4);
+            gFilterDistMode = p[1];
+            gFilterBitDepth = p[2];
+            memcpy(&gFilterCutoff,   p + 4,  4);
+            memcpy(&gFilterQ,        p + 8,  4);
+            memcpy(&gFilterDist,     p + 12, 4);
+            memcpy(&gFilterSrReduce, p + 16, 4);
+            /* Clamps defensivos: ningún payload puede matar el audio. */
+            if(gFilterBitDepth < 4 || gFilterBitDepth > 16) gFilterBitDepth = 16;
+            gFilterDist = clampF(gFilterDist, 0.f, 100.f);
+            if(gFilterSrReduce > (uint32_t)SAMPLE_RATE) gFilterSrReduce = 0;
             gFilterCutoff = clampF(gFilterCutoff, 20.f, 20000.f);
             gFilterQ      = (gFilterType == FTYPE_RESONANT) ? clampF(gFilterQ, 0.3f, 40.f) : clampF(gFilterQ, 0.3f, 28.f);
             if(gFilterType == FTYPE_LADDER){

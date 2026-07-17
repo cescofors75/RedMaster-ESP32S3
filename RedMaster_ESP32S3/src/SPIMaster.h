@@ -461,6 +461,18 @@ public:
 private:
     uint16_t seqNumber;          // solo se muta bajo spiMutex
     uint32_t spiErrorCount;
+
+    // Estado cacheado del filtro/FX master. setFilterType() envía el payload
+    // COMPLETO (CMD_FILTER_SET, 20 bytes): mandarlo con ceros aplastaba
+    // cutoff→20Hz y bitDepth→0 en la Daisy (silencio total al elegir un
+    // filtro de OUT en el patchbay). Los setters individuales actualizan la
+    // caché para que el próximo setFilterType conserve el estado real.
+    float    cachedFilterCutoff   = 20000.0f;  // neutro: filtro abierto
+    float    cachedFilterQ        = 0.707f;
+    uint8_t  cachedBitDepth       = 16;        // 16 = bitcrush off
+    uint8_t  cachedDistMode       = 0;
+    float    cachedDistortion     = 0.0f;
+    uint32_t cachedSrReduce       = 0;
     // volatile: escrito desde Core1 (ping/requestPeaks en process) y leido
     // desde Core0 via isConnected().
     volatile bool stm32Connected;

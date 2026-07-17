@@ -3672,13 +3672,29 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
     (cmd == "setVolume") ||
     (cmd == "setLivePitch");
 
+  // Rate-limit SOLO repeticiones del MISMO comando (streams de knob). El
+  // limiter global anterior descartaba el 2º/3º comando DISTINTO de una
+  // ráfaga de configuración — el patchbay envía setFilter+cutoff+resonance
+  // seguidos y cutoff/resonance se perdían: los filtros de OUT quedaban a
+  // medio configurar, y lo mismo por pista (filtro+dist del mismo canal).
+  auto cmdHash = [](const String& s) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < s.length(); i++) { h ^= (uint8_t)s[i]; h *= 16777619u; }
+    return h;
+  };
   if (isMasterFxFast) {
-    if (nowCmdMs - lastMasterFxCmdMs < kFastMasterCmdMinMs) return;
+    static uint32_t lastMasterFxHash = 0;
+    const uint32_t h = cmdHash(cmd);
+    if (h == lastMasterFxHash && nowCmdMs - lastMasterFxCmdMs < kFastMasterCmdMinMs) return;
+    lastMasterFxHash = h;
     lastMasterFxCmdMs = nowCmdMs;
   } else if (isTrackFxFast) {
     int tIdx = doc.containsKey("track") ? (int)doc["track"] : -1;
     if (tIdx >= 0 && tIdx < 24) {
-      if (nowCmdMs - lastTrackFxCmdMs[tIdx] < kFastTrackCmdMinMs) return;
+      static uint32_t lastTrackFxHash[24] = {0};
+      const uint32_t h = cmdHash(cmd);
+      if (h == lastTrackFxHash[tIdx] && nowCmdMs - lastTrackFxCmdMs[tIdx] < kFastTrackCmdMinMs) return;
+      lastTrackFxHash[tIdx] = h;
       lastTrackFxCmdMs[tIdx] = nowCmdMs;
     }
   } else if (isPadFxFast) {

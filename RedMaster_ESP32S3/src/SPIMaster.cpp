@@ -558,36 +558,50 @@ float SPIMaster::getLivePitchShift() {
 // ═══════════════════════════════════════════════════════
 
 void SPIMaster::setFilterType(FilterType type) {
+    // Payload COMPLETO desde la caché: enviarlo a ceros aplastaba el estado
+    // en la Daisy (cutoff→20Hz, bitDepth→0 = silencio al elegir filtro).
     GlobalFilterPayload p = {};
-    p.filterType = (uint8_t)type;
+    p.filterType       = (uint8_t)type;
+    p.distMode         = cachedDistMode;
+    p.bitDepth         = cachedBitDepth;
+    p.cutoff           = cachedFilterCutoff;
+    p.resonance        = cachedFilterQ;
+    p.distortion       = cachedDistortion;
+    p.sampleRateReduce = cachedSrReduce;
     sendCommand(CMD_FILTER_SET, &p, sizeof(p));
 }
 
 void SPIMaster::setFilterCutoff(float cutoff) {
+    cachedFilterCutoff = cutoff;
     FloatPayload p = {cutoff};
     sendCommand(CMD_FILTER_CUTOFF, &p, sizeof(p));
 }
 
 void SPIMaster::setFilterResonance(float resonance) {
+    cachedFilterQ = resonance;
     FloatPayload p = {resonance};
     sendCommand(CMD_FILTER_RESONANCE, &p, sizeof(p));
 }
 
 void SPIMaster::setBitDepth(uint8_t bits) {
+    cachedBitDepth = bits;
     sendCommand(CMD_FILTER_BITDEPTH, &bits, 1);
 }
 
 void SPIMaster::setDistortion(float amount) {
+    cachedDistortion = amount;
     FloatPayload p = {amount};
     sendCommand(CMD_FILTER_DISTORTION, &p, sizeof(p));
 }
 
 void SPIMaster::setDistortionMode(DistortionMode mode) {
+    cachedDistMode = (uint8_t)mode;
     uint8_t m = (uint8_t)mode;
     sendCommand(CMD_FILTER_DIST_MODE, &m, 1);
 }
 
 void SPIMaster::setSampleRateReduction(uint32_t rate) {
+    cachedSrReduce = rate;
     Uint32Payload p = {rate};
     sendCommand(CMD_FILTER_SR_REDUCE, &p, sizeof(p));
 }
