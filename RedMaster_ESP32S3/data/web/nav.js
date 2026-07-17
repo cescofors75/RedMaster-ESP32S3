@@ -13,6 +13,20 @@
 (function () {
   'use strict';
 
+  /* Service Workers requieren HTTPS o localhost. El AP directo usa HTTP en
+   * una IP privada, así que allí esta rama queda desactivada sin generar un
+   * error; sí se habilita automáticamente detrás de un bridge HTTPS/local. */
+  if (window.isSecureContext && 'serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js', {
+        scope: '/',
+        updateViaCache: 'none'
+      }).catch(function (error) {
+        console.warn('[RED808] Service Worker no disponible:', error);
+      });
+    });
+  }
+
   // Apply the saved shared theme before page paint. The main UI and Mobile
   // use the same key; old mobile theme ids are migrated transparently.
   var THEME_KEY = 'r808_web_theme';

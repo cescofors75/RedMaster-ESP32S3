@@ -349,7 +349,9 @@ function _loadScript(src) {
     });
 }
 
-async function loadDeferredModules() {
+let deferredModulesPromise = null;
+function loadDeferredModules() {
+    if (deferredModulesPromise) return deferredModulesPromise;
     const modules = [
         'keyboard-controls.js',
         'waveform-visualizer.js',
@@ -358,17 +360,33 @@ async function loadDeferredModules() {
         'export-pattern.js',
         'melody-editor.js'
     ];
-    // ESP32 AP maneja ~2 transferencias simultaneas: cargar en parejas
-    // recorta la cadena de modulos a ~la mitad frente al 1-a-1.
-    for (let i = 0; i < modules.length; i += 2) {
-        await Promise.all(modules.slice(i, i + 2).map(_loadScript));
-    }
-    // Initialize modules that need explicit init
-    if (window.initKeyboardControls) window.initKeyboardControls();
-    if (typeof initSynthEditor === 'function') initSynthEditor();
-    if (window.initMelodyEditor) window.initMelodyEditor();
-    console.log('[Loader] All deferred modules loaded');
+    deferredModulesPromise = (async () => {
+        // ESP32 AP maneja ~2 transferencias simultaneas: cargar en parejas.
+        for (let i = 0; i < modules.length; i += 2) {
+            await Promise.all(modules.slice(i, i + 2).map(_loadScript));
+        }
+        if (window.initKeyboardControls) window.initKeyboardControls();
+        if (typeof initSynthEditor === 'function') initSynthEditor();
+        if (window.initMelodyEditor) window.initMelodyEditor();
+        console.log('[Loader] Deferred modules ready');
+    })();
+    return deferredModulesPromise;
 }
+
+function installDeferredFunctionProxy(name) {
+    const proxy = function(...args) {
+        return loadDeferredModules().then(() => {
+            const implementation = window[name];
+            if (typeof implementation === 'function' && implementation !== proxy) {
+                return implementation(...args);
+            }
+        });
+    };
+    window[name] = proxy;
+}
+
+['showMidiImportDialog', 'showExportDialog', 'showKeyboardHelp']
+    .forEach(installDeferredFunctionProxy);
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -387,8 +405,18 @@ document.addEventListener('DOMContentLoaded', () => {
     initInstrumentTabs();
     initTabSystem();
     initSyncLeds();
-    // Load feature modules sequentially after core UI is ready
-    setTimeout(loadDeferredModules, 200);
+    // Los editores secundarios no compiten con la primera pintura ni con el
+    // arranque del WebSocket. Se anticipan al primer uso y, como respaldo,
+    // se cargan cuando el navegador queda ocioso.
+    document.addEventListener('pointerdown', loadDeferredModules, { once: true, passive: true });
+    window.addEventListener('red808:tabchange', (event) => {
+        if (event.detail?.tabId === 'melody') loadDeferredModules();
+    });
+    if ('requestIdleCallback' in window) {
+        requestIdleCallback(loadDeferredModules, { timeout: 5000 });
+    } else {
+        setTimeout(loadDeferredModules, 3000);
+    }
 });
 
 // WebSocket Connection

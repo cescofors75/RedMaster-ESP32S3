@@ -1,0 +1,12 @@
+{
+  "name": "redmaster-esp32s3-web-build",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/run-tests.mjs",
+    "minify:web": "node tools/minify_web.mjs data_gz/web"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.6",
+    "html-minifier-terser": "7.2.0"
+  }
+}

@@ -878,27 +878,43 @@ static void sendWebAsset(AsyncWebServerRequest *request,
 
   // ── ETag + 304: la web cargaba LENTA porque cada visita re-descargaba
   // ~250KB (app.js 72KB, style.css 47KB...) desde LittleFS con no-cache pelado.
-  // ETag barato = tamaño del fichero en hex (cambia con cualquier edición real
-  // tras gzip; colisión tamaño-idéntico es rarísima y Ctrl+F5 la salva).
-  // Con If-None-Match coincidente devolvemos 304 vacío: la recarga pasa de
-  // ~250KB re-servidos por LittleFS a ~14 respuestas de cabecera.
+  // ETag barato = build.id de contenido + tamaño gzip. Evita leer y hashear el
+  // asset entero en cada request y no confunde builds de igual longitud.
+  // Con If-None-Match coincidente devolvemos 304 vacío.
   File probe = LittleFS.open(hasGz ? fsPath + ".gz" : fsPath, "r");
   String etag;
   if (probe) {
-    etag = "\"" + String(probe.size(), HEX) + "\"";
+    // build.id lo genera el pipeline a partir del contenido final. Combinarlo
+    // con el tamaño evita el antiguo ETag basado sólo en bytes, que podía
+    // validar por error dos revisiones distintas con idéntica longitud.
+    static String webBuildId;
+    if (!webBuildId.length()) {
+      File buildIdFile = LittleFS.open("/web/build.id", "r");
+      if (buildIdFile) {
+        webBuildId = buildIdFile.readStringUntil('\n');
+        webBuildId.trim();
+        buildIdFile.close();
+      }
+      if (!webBuildId.length()) webBuildId = "legacy";
+    }
+    etag = "\"" + webBuildId + "-" + String(probe.size(), HEX) + "\"";
     probe.close();
     if (request->hasHeader("If-None-Match") &&
         request->header("If-None-Match") == etag) {
       AsyncWebServerResponse *notModified = request->beginResponse(304);
       notModified->addHeader("ETag", etag);
-      notModified->addHeader("Cache-Control", cacheControl);
+      const char* effectiveCache = strcmp(cacheControl, "public, max-age=86400, must-revalidate") == 0
+          ? "public, max-age=31536000, immutable" : cacheControl;
+      notModified->addHeader("Cache-Control", effectiveCache);
       request->send(notModified);
       return;
     }
   }
 
   AsyncWebServerResponse *response = request->beginResponse(LittleFS, fsPath, contentType);
-  response->addHeader("Cache-Control", cacheControl);
+  const char* effectiveCache = strcmp(cacheControl, "public, max-age=86400, must-revalidate") == 0
+      ? "public, max-age=31536000, immutable" : cacheControl;
+  response->addHeader("Cache-Control", effectiveCache);
   response->addHeader("Vary", "Accept-Encoding");
   if (etag.length()) response->addHeader("ETag", etag);
   request->send(response);
@@ -1480,6 +1496,14 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     sendWebAsset(request, "/gesture-pro.html", "text/html", "no-cache");
   });
 
+  server->on("/gesture-pro.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/gesture-pro.css", "text/css", "public, max-age=86400, must-revalidate");
+  });
+
+  server->on("/gesture-pro.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/gesture-pro.js", "application/javascript", "public, max-age=86400, must-revalidate");
+  });
+
   server->on("/gesture.js", HTTP_GET, [](AsyncWebServerRequest *request){
     sendWebAsset(request, "/gesture.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
@@ -1492,11 +1516,11 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   // sirviera (solo era accesible vía bridge externo). Con esto /mobile
   // funciona directo desde el ESP32 y entra en la navegación común.
   server->on("/mobile", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.html", "text/html", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
   });
 
   server->on("/mobile.html", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.html", "text/html", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
   });
 
   server->on("/mobile.css", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1509,7 +1533,7 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
   // Admin page
   server->on("/adm", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/admin.html", "text/html", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/admin.html", "text/html", "no-cache");
   });
 
   server->on("/admin.css", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1520,8 +1544,15 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     sendWebAsset(request, "/admin.js", "application/javascript", "public, max-age=86400, must-revalidate");
   });
 
+  // El navegador debe revalidar siempre el worker para detectar una nueva
+  // versión de la app shell. Sólo puede registrarse desde HTTPS/localhost;
+  // el AP HTTP directo seguirá usando ETag + caché HTTP normal.
+  server->on("/sw.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/sw.js", "application/javascript", "no-cache");
+  });
+
   server->on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/favicon.ico", "image/svg+xml", "max-age=86400, immutable");
+    sendWebAsset(request, "/favicon.ico", "image/svg+xml", "public, max-age=31536000, immutable");
   });
 
   // 404 para rutas desconocidas: evita que el navegador quede bloqueado esperando respuesta

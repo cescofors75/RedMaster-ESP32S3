@@ -216,10 +216,10 @@ test('professional bank exposes 16 named resident patterns with performance meta
   const bank = read('src/PatternBank.cpp');
   const header = read('src/PatternBank.h');
   const expected = [
-    'Pulse Bloom', 'Night Transit', 'Glass Garage', 'Warm Pressure',
-    'Carbon Breaks', 'Neon Motorik', 'Elastic Electro', 'Low Gravity',
-    'Acid Trace', 'Sub Signal', 'Pocket Chrome', 'Organ Dust',
-    'Night Bus', 'Afterglow', 'Peak Relay', 'Machine Ritual',
+    'Pulse Bloom', 'Transit', 'Glass', 'Pressure',
+    'Carbon', 'Motorik', 'Elastic', 'Gravity',
+    'Piano Rise', 'Piano Bloom', 'Voltage', 'Organ Dust',
+    'Rupture', 'Afterglow', 'Peak Relay', 'Ritual',
   ];
   assert.match(header, /BUILTIN_PATTERN_COUNT\s*=\s*16/);
   expected.forEach((name) => assert.match(bank, new RegExp(name.replace(/[\/]/g, '\\/'))));
@@ -319,7 +319,7 @@ test('workspace UI keeps core workflows and exposes PATH while secondary tools s
   assert.match(css, /\.pad\.triggered[\s\S]*opacity:\s*1\s*!important/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /body\.embed-mode \.workspace-overview\s*\{\s*display:\s*none\s*!important/);
-  assert.match(html, /href="studio-workspaces\.css"/);
+  assert.match(html, /href="studio-workspaces\.css(?:\?v=[^"]+)?"/);
   assert.match(html, /id="pathBtn"[\s\S]*href="\/patchbay"/);
   assert.match(html, /id="sequencerRuler"/);
   assert.match(read('data/web/app.js'), /function renderSequencerRuler\(stepCount\)/);
@@ -391,4 +391,38 @@ test('live pads reserve control zones and expose synth engines through one popov
   assert.match(workspace, /\.pad-engine-options \.synth-btn,[\s\S]*height: 42px !important/);
   assert.match(workspace, /\.pad\.synth-mode-active \.pad-key-hint[\s\S]*display: none !important/);
   assert.match(workspace, /\.pad-action-bar \.synth-params-btn,[\s\S]*position: static !important/);
+});
+
+test('web production pipeline bundles, versions and caches without touching device APIs', () => {
+  const prepare = read('tools/prepare_data_gz.py');
+  const optimizer = read('tools/minify_web.mjs');
+  const worker = read('data/web/sw.js');
+  const nav = read('data/web/nav.js');
+  const firmware = read('src/WebInterface.cpp');
+
+  assert.match(prepare, /_minify_web\(project_dir, web_dir\)[\s\S]*_render_service_worker\(project_dir, web_dir\)/);
+  assert.match(prepare, /mtime=0/);
+  assert.match(optimizer, /pagePlans/);
+  assert.match(optimizer, /'index\.html':[\s\S]*css: 'style\.css'[\s\S]*js: 'app\.js'/);
+  assert.match(optimizer, /minify:\s*true/);
+  assert.match(optimizer, /minifyHtml/);
+  assert.match(optimizer, /build\.id/);
+  assert.match(worker, /__RED808_CACHE_VERSION__/);
+  assert.match(worker, /__RED808_PRECACHE_MANIFEST__/);
+  assert.match(worker, /__RED808_STATIC_MANIFEST__/);
+  assert.match(worker, /request\.mode === 'navigate'/);
+  assert.match(worker, /request\.method !== 'GET'/);
+  assert.match(nav, /window\.isSecureContext/);
+  assert.match(nav, /register\('\/sw\.js'/);
+  assert.match(firmware, /server->on\("\/sw\.js"/);
+  assert.match(firmware, /public, max-age=31536000, immutable/);
+  assert.match(firmware, /webBuildId/);
+});
+
+test('secondary editors wait for interaction or browser idle time', () => {
+  const app = read('data/web/app.js');
+  assert.match(app, /deferredModulesPromise/);
+  assert.match(app, /installDeferredFunctionProxy/);
+  assert.match(app, /requestIdleCallback\(loadDeferredModules, \{ timeout: 5000 \}\)/);
+  assert.doesNotMatch(app, /setTimeout\(loadDeferredModules, 200\)/);
 });
