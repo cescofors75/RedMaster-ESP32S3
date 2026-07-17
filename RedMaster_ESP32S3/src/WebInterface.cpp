@@ -1331,12 +1331,15 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   server->on("/", HTTP_GET, [this](AsyncWebServerRequest *request){
     // Pause periodic broadcasts during page transition to free TCP/Core0
     pageTransitionMs = millis();
-    sendWebAsset(request, "/index.html", "text/html", "no-cache, no-store, must-revalidate");
+    // no-cache (NOT no-store): el navegador revalida siempre con If-None-Match
+    // y el HTML entra por 304 vacío en vez de re-bajar ~15KB gz cada visita.
+    // Los assets versionados (?v=) del index se refrescan solos al cambiar.
+    sendWebAsset(request, "/index.html", "text/html", "no-cache");
   });
 
   
   server->on("/index.html", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/index.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/index.html", "text/html", "no-cache");
   });
   
   server->on("/app.js", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1462,19 +1465,19 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
   // Live gesture page
   server->on("/gesture", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/gesture.html", "text/html", "no-cache");
   });
 
   server->on("/gesture.html", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/gesture.html", "text/html", "no-cache");
   });
 
   server->on("/gesture-pro", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture-pro.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/gesture-pro.html", "text/html", "no-cache");
   });
 
   server->on("/gesture-pro.html", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture-pro.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/gesture-pro.html", "text/html", "no-cache");
   });
 
   server->on("/gesture.js", HTTP_GET, [](AsyncWebServerRequest *request){

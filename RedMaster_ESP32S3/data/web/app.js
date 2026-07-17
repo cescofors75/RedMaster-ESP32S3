@@ -338,7 +338,7 @@ function showNotification(message) {}
 // ESP32 WiFi AP can only handle ~2 concurrent HTTP transfers reliably.
 // Loading all scripts at once (8 files, ~178KB gzipped) causes TCP congestion.
 // Instead, we load feature modules sequentially AFTER the page renders.
-const DEFERRED_ASSET_VERSION = '20260712c';
+const DEFERRED_ASSET_VERSION = '20260717a';
 function _loadScript(src) {
     return new Promise(resolve => {
         const s = document.createElement('script');
@@ -358,8 +358,10 @@ async function loadDeferredModules() {
         'export-pattern.js',
         'melody-editor.js'
     ];
-    for (const src of modules) {
-        await _loadScript(src);
+    // ESP32 AP maneja ~2 transferencias simultaneas: cargar en parejas
+    // recorta la cadena de modulos a ~la mitad frente al 1-a-1.
+    for (let i = 0; i < modules.length; i += 2) {
+        await Promise.all(modules.slice(i, i + 2).map(_loadScript));
     }
     // Initialize modules that need explicit init
     if (window.initKeyboardControls) window.initKeyboardControls();
@@ -405,9 +407,9 @@ function initWebSocket() {
         updateStatus(true);
         syncLedMonoMode();
         
-        setTimeout(() => { sendWebSocket({ cmd: 'init' }); }, 100);
-        setTimeout(() => { sendWebSocket({ cmd: 'getPattern' }); }, 300);
-        setTimeout(() => { requestSampleCounts(); }, 1000);
+        setTimeout(() => { sendWebSocket({ cmd: 'init' }); }, 50);
+        setTimeout(() => { sendWebSocket({ cmd: 'getPattern' }); }, 150);
+        setTimeout(() => { requestSampleCounts(); }, 500);
     };
     
     ws.onclose = () => {
