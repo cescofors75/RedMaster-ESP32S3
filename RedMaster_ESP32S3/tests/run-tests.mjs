@@ -319,7 +319,7 @@ test('workspace UI keeps core workflows and exposes PATH while secondary tools s
   assert.match(css, /\.pad\.triggered[\s\S]*opacity:\s*1\s*!important/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /body\.embed-mode \.workspace-overview\s*\{\s*display:\s*none\s*!important/);
-  assert.match(html, /href="studio-workspaces\.css(?:\?v=[^"]+)?"/);
+  assert.match(html, /href="studio-workspaces\.css"/);
   assert.match(html, /id="pathBtn"[\s\S]*href="\/patchbay"/);
   assert.match(html, /id="sequencerRuler"/);
   assert.match(read('data/web/app.js'), /function renderSequencerRuler\(stepCount\)/);
@@ -377,7 +377,7 @@ test('live pads reserve control zones and expose synth engines through one popov
   assert.match(app, /pad\.querySelector\('\.pad-topbar'\)\?\.appendChild\(synthStrip\)/);
   assert.match(app, /function closePadEngineMenus\(exceptStrip = null\)/);
   assert.match(app, /if \(event\.key === 'Escape'\) closePadEngineMenus\(\)/);
-  assert.match(app, /s\.src = `\$\{src\}\?v=\$\{DEFERRED_ASSET_VERSION\}`/);
+  assert.match(app, /s\.src = src/);
   assert.doesNotMatch(app, /pad-synth-column/);
   assert.match(synthEditor, /paramsBtn\.textContent = 'SYN'/);
   assert.match(synthEditor, /pad\.querySelector\('\.pad-action-bar'\)/);
@@ -393,30 +393,57 @@ test('live pads reserve control zones and expose synth engines through one popov
   assert.match(workspace, /\.pad-action-bar \.synth-params-btn,[\s\S]*position: static !important/);
 });
 
-test('web production pipeline bundles, versions and caches without touching device APIs', () => {
+test('web production pipeline serves a sequential HTTP shell without caches', () => {
   const prepare = read('tools/prepare_data_gz.py');
   const optimizer = read('tools/minify_web.mjs');
-  const worker = read('data/web/sw.js');
   const nav = read('data/web/nav.js');
+  const i18n = read('data/web/i18n.js');
   const firmware = read('src/WebInterface.cpp');
+  const runtimeWeb = [
+    nav,
+    read('data/web/mobile.js'),
+    read('data/web/gesture.js'),
+    read('data/web/gesture-pro.html'),
+    read('src/WebSecurity.h'),
+  ].join('\n');
 
-  assert.match(prepare, /_minify_web\(project_dir, web_dir\)[\s\S]*_render_service_worker\(project_dir, web_dir\)/);
+  assert.match(prepare, /_minify_web\(project_dir, web_dir\)/);
+  assert.doesNotMatch(prepare, /_render_service_worker|_write_build_id|build\.id/);
   assert.match(prepare, /mtime=0/);
   assert.match(optimizer, /pagePlans/);
-  assert.match(optimizer, /'index\.html':[\s\S]*css: 'style\.css'[\s\S]*js: 'app\.js'/);
+  assert.match(optimizer, /'index\.html':\s*\{[\s\S]*?css: 'style\.css',[\s\S]*?js: 'app\.js',[\s\S]*?sequentialCss:\s*true/);
+  assert.doesNotMatch(optimizer, /'index\.html':\s*\{[^}]*deferredCss/);
   assert.match(optimizer, /minify:\s*true/);
   assert.match(optimizer, /minifyHtml/);
-  assert.match(optimizer, /build\.id/);
-  assert.match(worker, /__RED808_CACHE_VERSION__/);
-  assert.match(worker, /__RED808_PRECACHE_MANIFEST__/);
-  assert.match(worker, /__RED808_STATIC_MANIFEST__/);
-  assert.match(worker, /request\.mode === 'navigate'/);
-  assert.match(worker, /request\.method !== 'GET'/);
-  assert.match(nav, /window\.isSecureContext/);
-  assert.match(nav, /register\('\/sw\.js'/);
-  assert.match(firmware, /server->on\("\/sw\.js"/);
-  assert.match(firmware, /public, max-age=31536000, immutable/);
-  assert.match(firmware, /webBuildId/);
+  assert.doesNotMatch(optimizer, /crypto|build\.id|versionedAssets|\?v=/);
+  assert.match(optimizer, /if \(plan\.sequentialCss\)[\s\S]*cssAssets\.push/);
+  assert.match(optimizer, /for\(const href of css\)await loadCss\(href\);await loadJs\(app\)/);
+  assert.match(optimizer, /attempt<3[\s\S]*250\*\(attempt\+1\)/);
+  assert.match(optimizer, /for \(const match of matches\) replacements\.push\(await replacer/);
+  assert.doesNotMatch(optimizer, /styleReady|setTimeout\(start,1200\)/);
+  assert.doesNotMatch(optimizer, /name === 'nav\.js' \|\| name === 'i18n\.js'/);
+  assert.match(optimizer, /html\.replace\('<\/body>', `  <script src="\/\$\{plan\.js\}" defer>/);
+  assert.match(optimizer, /'mobile\.html':\s*\{[^}]*inline:\s*true/);
+  assert.match(optimizer, /outputs = new Set\(\)/);
+  assert.match(optimizer, /i18n\.js/);
+  assert.match(nav, /red808-locale/);
+  assert.match(nav, /r808-locale-visible/);
+  assert.match(i18n, /Català/);
+  assert.match(i18n, /Euskara/);
+  assert.match(i18n, /Português/);
+  assert.match(firmware, /server->on\("\/i18n\.js"/);
+  assert.match(read('data/web/app.js'), /document\.readyState === 'loading'[\s\S]*Promise\.resolve\(\)\.then\(initializeRed808App\)/);
+  assert.doesNotMatch(read('data/web/index.html'), /\?v=/);
+  assert.match(firmware, /server->on\("\/"[\s\S]*sendWebAsset\(request, "\/index\.html"/);
+  assert.match(firmware, /server->on\("\/studio"[\s\S]*sendWebAsset\(request, "\/index\.html"/);
+  assert.match(firmware, /server->on\("\/demo"[\s\S]*sendWebAsset\(request, "\/mobile\.html"/);
+  assert.equal(fs.existsSync(path.join(root, 'data/web/sw.js')), false);
+  assert.doesNotMatch(nav, /serviceWorker|isSecureContext/);
+  assert.doesNotMatch(firmware, /server->on\("\/sw\.js"|immutable|versionedAsset|webBuildId/);
+  assert.match(firmware, /removeHeader\("ETag"\)[\s\S]*no-store, no-cache, must-revalidate, max-age=0/);
+  assert.doesNotMatch(runtimeWeb, /https:\/\/|wss:|serviceWorker|isSecureContext|:8443/);
+  assert.match(firmware, /kPageTransitionQuietMs = 6000/);
+  assert.match(firmware, /if \(!pageLoading && ws->count\(\) > 0 && \(now - lastStepBroadcast/);
 });
 
 test('secondary editors wait for interaction or browser idle time', () => {
@@ -425,4 +452,15 @@ test('secondary editors wait for interaction or browser idle time', () => {
   assert.match(app, /installDeferredFunctionProxy/);
   assert.match(app, /requestIdleCallback\(loadDeferredModules, \{ timeout: 5000 \}\)/);
   assert.doesNotMatch(app, /setTimeout\(loadDeferredModules, 200\)/);
+});
+
+test('initial device sync waits until the web shell has loaded', () => {
+  const app = read('data/web/app.js');
+  assert.match(app, /function scheduleInitialDeviceSync\(socket\)/);
+  assert.match(app, /document\.readyState === 'complete'[\s\S]*window\.addEventListener\('load'/);
+  assert.match(app, /requestIdleCallback\(requestCounts, \{ timeout: 3500 \}\)/);
+  assert.doesNotMatch(app, /cmd: 'init' \}\); \}, 50/);
+  assert.doesNotMatch(app, /cmd: 'getPattern' \}\); \}, 150/);
+  assert.match(app, /wsStableTimer = setTimeout\(\(\) => \{ wsRetryCount = 0; \}, 10000\)/);
+  assert.match(app, /initialSampleCountsRequested/);
 });

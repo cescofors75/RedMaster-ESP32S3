@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>RED808 · GESTURE</title>
     <link rel="icon" href="/favicon.ico" type="image/svg+xml">
-    <script src="nav.js"></script>
+    <script src="i18n.js" defer></script>
+    <script src="nav.js" defer></script>
     <link rel="stylesheet" href="theme-vars.css">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -167,7 +168,7 @@ const particles=[];
 const trailR=[],trailL=[],TRAIL=24;
 
 // ── WebSocket ─────────────────────────────────────────────────────
-function wsUrl(){return`${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws`}
+function wsUrl(){return`ws://${location.host}/ws`}
 function setWsDot(on){document.getElementById('wsDot').classList.toggle('on',on)}
 function schedWs(){if(wsTimer)return;wsTimer=setTimeout(()=>{wsTimer=null;initWs()},1400)}
 function initWs(){
@@ -645,66 +646,12 @@ function loop(ts){
 
 // ── Camera ────────────────────────────────────────────────────────
 async function startCamera(){
-  const ov=document.getElementById('startOverlay');ov.classList.add('gone');
+  const ov=document.getElementById('startOverlay');
   const hint=document.getElementById('gestureHint');
-  try{
-    hint.textContent='INICIANDO CAMARA';hint.classList.remove('hide');
-    const getUM=navigator.mediaDevices?.getUserMedia
-      ?c=>navigator.mediaDevices.getUserMedia(c)
-      :c=>{const l=navigator.getUserMedia||navigator.webkitGetUserMedia||navigator.mozGetUserMedia;if(!l)throw new Error('getUserMedia not supported');return new Promise((r,j)=>l.call(navigator,c,r,j))};
-    camStream=await getUM({video:{facingMode:'user',width:640,height:480}});
-    const v=document.getElementById('videoEl');v.srcObject=camStream;v.classList.add('on');
-    await new Promise(r=>{const d=()=>{v.removeEventListener('loadedmetadata',d);v.removeEventListener('canplay',d);r()};v.addEventListener('loadedmetadata',d,{once:true});v.addEventListener('canplay',d,{once:true})});
-    await v.play().catch(()=>{});
-    hint.textContent='CARGANDO MEDIAPIPE (necesitas internet)';hint.classList.remove('hide');
-    const CDN='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
-    const MODEL='https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-    const withTimeout=(p,ms,msg)=>Promise.race([p,new Promise((_,r)=>setTimeout(()=>r(new Error(msg)),ms))]);
-    const {FilesetResolver,HandLandmarker}=await withTimeout(
-      import(CDN+'/vision_bundle.mjs'),
-      30000,'Timeout: CDN no responde. Necesitas WiFi con internet.');
-    hint.textContent='CARGANDO WASM…';hint.classList.remove('hide');
-    const vision=await withTimeout(
-      FilesetResolver.forVisionTasks(CDN+'/wasm'),
-      20000,'Timeout cargando WASM.');
-    hint.textContent='CARGANDO MODELO (~5s)…';hint.classList.remove('hide');
-    const opts={runningMode:'VIDEO',numHands:2,minHandDetectionConfidence:.45,minHandPresenceConfidence:.45,minTrackingConfidence:.4};
-    try{
-      mpHands=await withTimeout(
-        HandLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:MODEL,delegate:'GPU'},...opts}),
-        25000,'Timeout modelo GPU.');
-    }catch(gpuErr){
-      hint.textContent='GPU FAIL, PROBANDO CPU…';hint.classList.remove('hide');
-      mpHands=await withTimeout(
-        HandLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:MODEL,delegate:'CPU'},...opts}),
-        30000,'Timeout modelo CPU. Comprueba internet.');
-    }
-    hint.textContent='MODELO OK';
-    clearTimeout(hintTmr);hintTmr=setTimeout(()=>hint.classList.add('hide'),1400);
-    useCamera=true;
-    handSendErrShown=false;
-    const tick=()=>{
-      if(useCamera&&mpHands&&v&&v.readyState>=2&&v.videoWidth>0){
-        try{
-          onHandResults(mpHands.detectForVideo(v,performance.now()));
-        }catch(e){
-          if(!handSendErrShown){
-            handSendErrShown=true;
-            hint.textContent='MEDIAPIPE ERROR';
-            hint.classList.remove('hide');
-            alert('MediaPipe no pudo procesar frames. Si estas en la WiFi del ESP sin internet, el modelo CDN no puede cargar.');
-            console.warn('[GESTURE PRO] detectForVideo failed',e);
-          }
-        }
-      }
-      if(useCamera)frameHandle=requestAnimationFrame(tick);
-    };
-    if(frameHandle)cancelAnimationFrame(frameHandle);
-    frameHandle=requestAnimationFrame(tick);
-  }catch(e){
-    ov.classList.remove('gone');
-    alert('Cámara: '+(e?.message||'error'));
-  }
+  ov.classList.remove('gone');
+  hint.textContent='CAMARA DESACTIVADA · HTTP LOCAL';
+  hint.classList.remove('hide');
+  alert('La cámara está desactivada: RED808 funciona sólo por HTTP local y sin dependencias externas.');
 }
 document.getElementById('startOverlay').addEventListener('click',startCamera,{once:true});
 

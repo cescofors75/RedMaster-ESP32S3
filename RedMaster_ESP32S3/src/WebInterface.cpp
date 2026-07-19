@@ -861,7 +861,7 @@ static bool readWavInfo(File& file, uint32_t& rate, uint16_t& channels, uint16_t
 static void sendWebAsset(AsyncWebServerRequest *request,
                          const char* routePath,
                          const char* contentType,
-                         const char* cacheControl = "no-cache") {
+                         const char* = nullptr) {
   String fsPath = "/web";
   fsPath += routePath;
 
@@ -876,47 +876,14 @@ static void sendWebAsset(AsyncWebServerRequest *request,
     return;
   }
 
-  // ── ETag + 304: la web cargaba LENTA porque cada visita re-descargaba
-  // ~250KB (app.js 72KB, style.css 47KB...) desde LittleFS con no-cache pelado.
-  // ETag barato = build.id de contenido + tamaño gzip. Evita leer y hashear el
-  // asset entero en cada request y no confunde builds de igual longitud.
-  // Con If-None-Match coincidente devolvemos 304 vacío.
-  File probe = LittleFS.open(hasGz ? fsPath + ".gz" : fsPath, "r");
-  String etag;
-  if (probe) {
-    // build.id lo genera el pipeline a partir del contenido final. Combinarlo
-    // con el tamaño evita el antiguo ETag basado sólo en bytes, que podía
-    // validar por error dos revisiones distintas con idéntica longitud.
-    static String webBuildId;
-    if (!webBuildId.length()) {
-      File buildIdFile = LittleFS.open("/web/build.id", "r");
-      if (buildIdFile) {
-        webBuildId = buildIdFile.readStringUntil('\n');
-        webBuildId.trim();
-        buildIdFile.close();
-      }
-      if (!webBuildId.length()) webBuildId = "legacy";
-    }
-    etag = "\"" + webBuildId + "-" + String(probe.size(), HEX) + "\"";
-    probe.close();
-    if (request->hasHeader("If-None-Match") &&
-        request->header("If-None-Match") == etag) {
-      AsyncWebServerResponse *notModified = request->beginResponse(304);
-      notModified->addHeader("ETag", etag);
-      const char* effectiveCache = strcmp(cacheControl, "public, max-age=86400, must-revalidate") == 0
-          ? "public, max-age=31536000, immutable" : cacheControl;
-      notModified->addHeader("Cache-Control", effectiveCache);
-      request->send(notModified);
-      return;
-    }
-  }
-
   AsyncWebServerResponse *response = request->beginResponse(LittleFS, fsPath, contentType);
-  const char* effectiveCache = strcmp(cacheControl, "public, max-age=86400, must-revalidate") == 0
-      ? "public, max-age=31536000, immutable" : cacheControl;
-  response->addHeader("Cache-Control", effectiveCache);
-  response->addHeader("Vary", "Accept-Encoding");
-  if (etag.length()) response->addHeader("ETag", etag);
+  // AsyncFileResponse añade ETag/no-cache automáticamente para gzip. Los
+  // retiramos: la interfaz del instrumento siempre sale fresca de LittleFS.
+  response->removeHeader("ETag");
+  response->removeHeader("Cache-Control");
+  response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  response->addHeader("Pragma", "no-cache");
+  response->addHeader("Expires", "0");
   request->send(response);
 }
 
@@ -1343,14 +1310,24 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   
   server->addHandler(ws);
   
-  // Servir archivos grandes con gzip explícito para máximo rendimiento
+  // La raíz siempre es el estudio completo. Su CSS/JS se entrega de forma
+  // serializada por el build para no saturar LittleFS/AsyncTCP.
   server->on("/", HTTP_GET, [this](AsyncWebServerRequest *request){
-    // Pause periodic broadcasts during page transition to free TCP/Core0
+    // La primera carga abre LittleFS, AsyncTCP y el WebSocket en pocos
+    // segundos. Mantener las emisiones periódicas apagadas durante toda esa
+    // ventana evita que compitan por el mismo core/TCP con la portada.
     pageTransitionMs = millis();
-    // no-cache (NOT no-store): el navegador revalida siempre con If-None-Match
-    // y el HTML entra por 304 vacío en vez de re-bajar ~15KB gz cada visita.
-    // Los assets versionados (?v=) del index se refrescan solos al cambiar.
     sendWebAsset(request, "/index.html", "text/html", "no-cache");
+  });
+
+  server->on("/studio", HTTP_GET, [](AsyncWebServerRequest *request){
+    pageTransitionMs = millis();
+    sendWebAsset(request, "/index.html", "text/html", "no-cache");
+  });
+
+  // Acceso opcional de emergencia para la demo: una sola respuesta gzip.
+  server->on("/demo", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
   });
 
   
@@ -1359,92 +1336,96 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
   
   server->on("/app.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/app.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/app.js", "application/javascript");
   });
 
   // Navegación común + indicador de conexión (cargado por todas las páginas)
   server->on("/nav.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/nav.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/nav.js", "application/javascript");
+  });
+
+  server->on("/i18n.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/i18n.js", "application/javascript");
   });
 
   server->on("/sample-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/sample-editor.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/sample-editor.js", "application/javascript");
   });
 
   server->on("/sd-browser.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/sd-browser.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/sd-browser.js", "application/javascript");
   });
 
   server->on("/midi-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/midi-ui.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/midi-ui.js", "application/javascript");
   });
   
   server->on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/style.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/style.css", "text/css");
   });
 
   server->on("/daisy-controls.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/daisy-controls.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/daisy-controls.css", "text/css");
   });
 
   server->on("/responsive.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/responsive.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/responsive.css", "text/css");
   });
 
   server->on("/ui-2026.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/ui-2026.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/ui-2026.css", "text/css");
   });
 
   server->on("/workspace-2026.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/workspace-2026.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/workspace-2026.css", "text/css");
   });
 
   server->on("/studio-workspaces.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/studio-workspaces.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/studio-workspaces.css", "text/css");
   });
 
   server->on("/theme-sync.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/theme-sync.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/theme-sync.js", "application/javascript");
   });
 
   server->on("/workspace-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/workspace-ui.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/workspace-ui.js", "application/javascript");
   });
 
   server->on("/theme-vars.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/theme-vars.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/theme-vars.css", "text/css");
   });
   
   server->on("/keyboard-controls.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/keyboard-controls.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/keyboard-controls.js", "application/javascript");
   });
   
   server->on("/keyboard-styles.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/keyboard-styles.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/keyboard-styles.css", "text/css");
   });
   
   server->on("/midi-import.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/midi-import.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/midi-import.js", "application/javascript");
   });
   
   server->on("/chat-agent.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/chat-agent.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/chat-agent.js", "application/javascript");
   });
   
   server->on("/waveform-visualizer.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/waveform-visualizer.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/waveform-visualizer.js", "application/javascript");
   });
 
   server->on("/synth-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/synth-editor.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/synth-editor.js", "application/javascript");
   });
 
   server->on("/export-pattern.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/export-pattern.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/export-pattern.js", "application/javascript");
   });
 
   server->on("/melody-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/melody-editor.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/melody-editor.js", "application/javascript");
   });
   
   // Patchbay page
@@ -1455,11 +1436,11 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
   
   server->on("/patchbay.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/patchbay.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/patchbay.css", "text/css");
   });
   
   server->on("/patchbay.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/patchbay.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/patchbay.js", "application/javascript");
   });
 
   // Multiview page — redirect to .html served by serveStatic (avoids AsyncFileResponse 500 edge case)
@@ -1472,11 +1453,11 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
 
   server->on("/multiview.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/multiview.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/multiview.css", "text/css");
   });
   
   server->on("/multiview.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/multiview.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/multiview.js", "application/javascript");
   });
 
   // Live gesture page
@@ -1497,19 +1478,19 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
 
   server->on("/gesture-pro.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture-pro.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/gesture-pro.css", "text/css");
   });
 
   server->on("/gesture-pro.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture-pro.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/gesture-pro.js", "application/javascript");
   });
 
   server->on("/gesture.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/gesture.js", "application/javascript");
   });
 
   server->on("/gesture-styles.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture-styles.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/gesture-styles.css", "text/css");
   });
 
   // Mobile page — los assets existían en el FS pero no había ruta que los
@@ -1524,11 +1505,11 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
 
   server->on("/mobile.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/mobile.css", "text/css");
   });
 
   server->on("/mobile.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/mobile.js", "application/javascript");
   });
 
   // Admin page
@@ -1537,22 +1518,15 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
 
   server->on("/admin.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/admin.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/admin.css", "text/css");
   });
 
   server->on("/admin.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/admin.js", "application/javascript", "public, max-age=86400, must-revalidate");
-  });
-
-  // El navegador debe revalidar siempre el worker para detectar una nueva
-  // versión de la app shell. Sólo puede registrarse desde HTTPS/localhost;
-  // el AP HTTP directo seguirá usando ETag + caché HTTP normal.
-  server->on("/sw.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/sw.js", "application/javascript", "no-cache");
+    sendWebAsset(request, "/admin.js", "application/javascript");
   });
 
   server->on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/favicon.ico", "image/svg+xml", "public, max-age=31536000, immutable");
+    sendWebAsset(request, "/favicon.ico", "image/svg+xml");
   });
 
   // 404 para rutas desconocidas: evita que el navegador quede bloqueado esperando respuesta
@@ -2062,7 +2036,9 @@ refresh();if(auto_)startAuto();
     if (LittleFS.exists("/buttons.json")) {
       AsyncWebServerResponse *resp = request->beginResponse(
           LittleFS, "/buttons.json", "application/json");
-      resp->addHeader("Cache-Control", "public, max-age=86400, must-revalidate");
+      resp->removeHeader("ETag");
+      resp->removeHeader("Cache-Control");
+      resp->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
       request->send(resp);
     } else {
       // Devolver config por defecto si no hay archivo guardado
@@ -2490,6 +2466,9 @@ void WebInterface::releaseWsReassemblySlot(WsReassemblySlot* slot) {
 void WebInterface::onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
                                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
   if (type == WS_EVT_CONNECT) {
+    // El navegador acaba de descargar la shell. No inundar AsyncTCP con los
+    // picos y el estado periódico mientras termina de pedir app.js.
+    pageTransitionMs = millis();
     // ⚠️ LÍMITE DE 3 CLIENTES para estabilidad
     if (ws->count() > 3) {
       client->close(1008, "Max clients reached");
@@ -3398,6 +3377,15 @@ void WebInterface::update() {
 
   unsigned long now = millis();
 
+  // Toda emisión WebSocket no esencial queda quieta durante el primer render.
+  // Antes este flag se calculaba DESPUÉS de enviar steps/songPattern, de modo
+  // que un patrón en PLAY podía llenar la cola mientras aún salían CSS/JS.
+  constexpr unsigned long kPageTransitionQuietMs = 6000;
+  bool pageLoading = (pageTransitionMs != 0 && (now - pageTransitionMs) < kPageTransitionQuietMs);
+  if (pageTransitionMs != 0 && (now - pageTransitionMs) >= kPageTransitionQuietMs) {
+    pageTransitionMs = 0;
+  }
+
   pumpDaisyUpload();
   pumpCleanTrackStream();
   pumpPadTransfer();
@@ -3462,10 +3450,10 @@ void WebInterface::update() {
 
   // ── Consume deferred broadcasts from Core1 (thread-safe: only ws access from Core0) ──
   int step = _pendingBroadcastStep;
-  if (step >= 0 && ws->count() > 0) {
+  if (step >= 0) {
     _pendingBroadcastStep = -1;
     static unsigned long lastStepBroadcast = 0;
-    if (now - lastStepBroadcast >= 80 || step == 0) {
+    if (!pageLoading && ws->count() > 0 && (now - lastStepBroadcast >= 80 || step == 0)) {
       lastStepBroadcast = now;
       char buf[32];
       int len = snprintf(buf, sizeof(buf), "{\"type\":\"step\",\"step\":%d}", step);
@@ -3473,26 +3461,19 @@ void WebInterface::update() {
     }
   }
   int songPat = _pendingSongPattern;
-  if (songPat >= 0 && ws->count() > 0) {
+  if (songPat >= 0) {
     _pendingSongPattern = -1;
     int songLen = _pendingSongLength;
-    char buf[80];
-    int len = snprintf(buf, sizeof(buf),
-      "{\"type\":\"songPattern\",\"pattern\":%d,\"songLength\":%d}",
-      songPat, songLen);
-    ws->textAll(buf, len);
+    if (!pageLoading && ws->count() > 0) {
+      char buf[80];
+      int len = snprintf(buf, sizeof(buf),
+        "{\"type\":\"songPattern\",\"pattern\":%d,\"songLength\":%d}",
+        songPat, songLen);
+      ws->textAll(buf, len);
+    }
     broadcastUdpSongPattern(songPat, songLen);
-  } else if (songPat >= 0) {
-    _pendingSongPattern = -1;
-    broadcastUdpSongPattern(songPat, _pendingSongLength);
   }
 
-  // Skip periodic broadcasts during page transitions (2s window)
-  bool pageLoading = (pageTransitionMs != 0 && (now - pageTransitionMs) < 2000);
-  if (pageTransitionMs != 0 && (now - pageTransitionMs) >= 2000) {
-    pageTransitionMs = 0;  // clear flag
-  }
-  
   // Broadcast audio levels for all WS clients (main UI + /adm)
   static unsigned long lastAudioLevels = 0;
   if (!pageLoading && now - lastAudioLevels >= 150 && ws->count() > 0) {

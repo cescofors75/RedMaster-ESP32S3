@@ -150,7 +150,7 @@ function sdLog(message) {
   while (el.children.length > 20) el.lastChild.remove();
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+function initializeSdBrowser() {
   const grid = document.getElementById('sdPadGrid');
   const names = ['BD','SD','CH','OH','CY','CP','RS','CB','LT','MT','HT','MA','CL','HC','MC','LC'];
   if (grid && !grid.children.length) names.forEach((name, index) => {
@@ -165,4 +165,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.tab-btn[data-tab]').forEach((button) => button.addEventListener('click', () => {
     if (button.dataset.tab === 'daisy-sd') sdRefreshStatus();
   }));
-});
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeSdBrowser, { once: true });
+} else {
+  initializeSdBrowser();
+}

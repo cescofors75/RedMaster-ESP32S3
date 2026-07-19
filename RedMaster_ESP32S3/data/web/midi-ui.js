@@ -650,8 +650,8 @@ async function resetMIDIMapping() {
     }
 }
 
-// Cargar mapeo al abrir la tab MIDI
-document.addEventListener('DOMContentLoaded', () => {
+// Cargar mapeo al abrir la tab MIDI, también cuando el bundle llega tarde.
+function initializeMidiUi() {
     const midiTab = document.querySelector('[data-tab="midi"]');
     if (midiTab) {
         midiTab.addEventListener('click', () => {
@@ -661,4 +661,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (window.location.hash === '#midi' || document.getElementById('tab-midi')?.classList.contains('active')) {
         setTimeout(loadMIDIMapping, 500);
     }
-});
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeMidiUi, { once: true });
+} else {
+    initializeMidiUi();
+}

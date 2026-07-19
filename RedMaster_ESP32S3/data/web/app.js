@@ -5,6 +5,8 @@ let ws = null;
 let isConnected = false;
 let wsRetryTimer = null;
 let wsRetryCount = 0;
+let wsStableTimer = null;
+let initialSampleCountsRequested = false;
 const WS_RETRY_BASE_MS = 1500;
 const WS_RETRY_MAX_MS = 15000;
 let currentStep = 0;
@@ -338,11 +340,10 @@ function showNotification(message) {}
 // ESP32 WiFi AP can only handle ~2 concurrent HTTP transfers reliably.
 // Loading all scripts at once (8 files, ~178KB gzipped) causes TCP congestion.
 // Instead, we load feature modules sequentially AFTER the page renders.
-const DEFERRED_ASSET_VERSION = '20260717a';
 function _loadScript(src) {
     return new Promise(resolve => {
         const s = document.createElement('script');
-        s.src = `${src}?v=${DEFERRED_ASSET_VERSION}`;
+        s.src = src;
         s.onload = resolve;
         s.onerror = () => { console.warn('[Loader] Failed:', src); resolve(); };
         document.body.appendChild(s);
@@ -361,10 +362,9 @@ function loadDeferredModules() {
         'melody-editor.js'
     ];
     deferredModulesPromise = (async () => {
-        // ESP32 AP maneja ~2 transferencias simultaneas: cargar en parejas.
-        for (let i = 0; i < modules.length; i += 2) {
-            await Promise.all(modules.slice(i, i + 2).map(_loadScript));
-        }
+        // Una única lectura LittleFS cada vez: los editores son diferidos y no
+        // deben competir entre sí ni con el WebSocket.
+        for (const module of modules) await _loadScript(module);
         if (window.initKeyboardControls) window.initKeyboardControls();
         if (typeof initSynthEditor === 'function') initSynthEditor();
         if (window.initMelodyEditor) window.initMelodyEditor();
@@ -388,8 +388,12 @@ function installDeferredFunctionProxy(name) {
 ['showMidiImportDialog', 'showExportDialog', 'showKeyboardHelp']
     .forEach(installDeferredFunctionProxy);
 
-// Initialize
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize. El bundle de producción puede llegar después de DOMContentLoaded
+// cuando LittleFS serializa CSS y JS; en ese caso hay que arrancar de inmediato.
+let red808AppInitialized = false;
+function initializeRed808App() {
+    if (red808AppInitialized) return;
+    red808AppInitialized = true;
     initWebSocket();
     createPads();
     createSequencer();
@@ -417,7 +421,38 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
         setTimeout(loadDeferredModules, 3000);
     }
-});
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeRed808App, { once: true });
+} else {
+    // El optimizador concatena varios módulos. Esperar al final del job actual
+    // evita ejecutar antes de que los `let` situados más abajo estén creados.
+    Promise.resolve().then(initializeRed808App);
+}
+
+// Sincronizar el estado pesado sólo cuando la shell está completamente pintada.
+// Antes se pedían init/getPattern/counts a 50/150/500 ms y sus respuestas
+// competían en Core 0 con los últimos CSS/JS del primer render.
+function scheduleInitialDeviceSync(socket) {
+    const beginSync = () => {
+        if (socket !== ws || socket.readyState !== WebSocket.OPEN) return;
+        setTimeout(() => { sendWebSocket({ cmd: 'init' }); }, 100);
+        setTimeout(() => { sendWebSocket({ cmd: 'getPattern' }); }, 900);
+        if (initialSampleCountsRequested) return;
+        initialSampleCountsRequested = true;
+        const requestCounts = () => {
+            if (socket === ws && socket.readyState === WebSocket.OPEN) requestSampleCounts();
+        };
+        if ('requestIdleCallback' in window) {
+            requestIdleCallback(requestCounts, { timeout: 3500 });
+        } else {
+            setTimeout(requestCounts, 2500);
+        }
+    };
+
+    if (document.readyState === 'complete') beginSync();
+    else window.addEventListener('load', beginSync, { once: true });
+}
 
 // WebSocket Connection
 function initWebSocket() {
@@ -431,17 +466,19 @@ function initWebSocket() {
     ws.onopen = () => {
         console.log('[WS] Connected', wsUrl);
         isConnected = true;
-        wsRetryCount = 0;
+        clearTimeout(wsStableTimer);
+        // No declarar estable una conexión que abre y cae bajo presión. Así el
+        // backoff sigue creciendo y no repite init/getPattern en bucle rápido.
+        wsStableTimer = setTimeout(() => { wsRetryCount = 0; }, 10000);
         updateStatus(true);
         syncLedMonoMode();
         
-        setTimeout(() => { sendWebSocket({ cmd: 'init' }); }, 50);
-        setTimeout(() => { sendWebSocket({ cmd: 'getPattern' }); }, 150);
-        setTimeout(() => { requestSampleCounts(); }, 500);
+        scheduleInitialDeviceSync(ws);
     };
     
     ws.onclose = () => {
         console.warn('[WS] Closed', wsUrl);
+        clearTimeout(wsStableTimer);
         isConnected = false;
         updateStatus(false);
         scheduleWebSocketReconnect();

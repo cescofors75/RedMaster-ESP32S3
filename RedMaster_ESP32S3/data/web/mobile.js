@@ -100,7 +100,7 @@
   // =====================================================================
   function connect() {
     clearTimeout(retryTimer);
-    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+    const scheme = 'ws';
     ws = new WebSocket(`${scheme}://${location.host}/ws`);
     ws.binaryType = 'arraybuffer';
 
@@ -766,39 +766,9 @@
     await startJamCam();
   }
   async function startJamCam() {
-    jamCamLoading = true;
-    $('jamCamBtn').classList.add('active');
-    jamVideo = $('jamVideo');
-    try {
-      jamTip('📷 Iniciando cámara…', true);
-      // Cámara FRONTAL: el niño se ve y mueve sus propios dedos.
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
-      jamVideo.srcObject = stream;
-      jamVideo.classList.add('on');
-      await jamVideo.play().catch(() => {});
-      jamTip('⬇️ Cargando MediaPipe (necesita internet)…', true);
-      const CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
-      // GestureRecognizer: da landmarks (21 puntos) Y gestos reconocidos
-      // (Closed_Fist, Open_Palm, Victory, Pointing_Up, Thumb_Up/Down, ILoveYou).
-      const MODEL = 'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task';
-      const withTimeout = (p, ms, msg) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(msg)), ms))]);
-      const { FilesetResolver, GestureRecognizer } = await withTimeout(import(CDN + '/vision_bundle.mjs'), 30000, 'CDN sin respuesta (¿WiFi sin internet?)');
-      const vision = await withTimeout(FilesetResolver.forVisionTasks(CDN + '/wasm'), 20000, 'Timeout WASM');
-      const opts = { runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: .45, minHandPresenceConfidence: .45, minTrackingConfidence: .4 };
-      try {
-        jamHands = await withTimeout(GestureRecognizer.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'GPU' }, ...opts }), 25000, 'Timeout GPU');
-      } catch (_) {
-        jamHands = await withTimeout(GestureRecognizer.createFromOptions(vision, { baseOptions: { modelAssetPath: MODEL, delegate: 'CPU' }, ...opts }), 30000, 'Timeout CPU (revisa internet)');
-      }
-      jamCamOn = true;
-      jamCanvas.style.background = 'transparent';
-      jamTip(jamMode === 'synth' ? '🎻 Theremin: mueve la mano = melodía' : '✋ ¡Mueve los dedos = ritmo!', true);
-      setTimeout(() => { if (jamCamOn) jamTip(null, false); }, 2200);
-    } catch (e) {
-      stopJamCam();
-      jamTip('❌ ' + ((e && e.message) || 'cámara/red'), true);
-      setTimeout(() => jamTip(null, false), 3500);
-    } finally { jamCamLoading = false; }
+    jamCamLoading = false;
+    jamTip('Cámara desactivada en el modo HTTP local', true);
+    setTimeout(() => jamTip(null, false), 3500);
   }
   function stopJamCam() {
     jamCamOn = false;
@@ -1412,39 +1382,6 @@
   }
 
   // =====================================================================
-  // Link al proxy HTTPS (para cámara). Si servimos por HTTP (ESP en
-  // 192.168.4.1), busca el PC con Caddy en .2/.3/.4 probando su favicon por
-  // HTTPS y muestra un botón "📷 Cámara (HTTPS)".
-  // =====================================================================
-  function initProxyLink() {
-    if (location.protocol === 'https:') return;       // ya estamos en el proxy
-    const net = location.hostname.replace(/\.\d+$/, '');
-    if (!/^\d+\.\d+\.\d+$/.test(net)) return;          // no es IPv4 → nada que hacer
-    let saved = null; try { saved = localStorage.getItem('r808_proxy_ip'); } catch (_) {}
-    const cands = [2, 3, 4].map((n) => `${net}.${n}`);
-    const order = saved ? [saved, ...cands.filter((c) => c !== saved)] : cands;
-    let done = false;
-    order.forEach((ip) => {
-      const img = new Image();
-      img.onload = () => { if (!done) { done = true; showProxyBtn(ip); } };
-      img.src = `https://${ip}:8443/favicon.ico?_=${Date.now()}`;
-    });
-  }
-  function showProxyBtn(ip) {
-    if ($('proxyBtn')) return;
-    try { localStorage.setItem('r808_proxy_ip', ip); } catch (_) {}
-    const b = document.createElement('button');
-    b.id = 'proxyBtn'; b.className = 'm-proxy-btn';
-    b.textContent = '📷 Cámara';
-    b.title = `Abrir con cámara (HTTPS) — ${ip}`;
-    b.onclick = () => { location.href = `https://${ip}:8443/mobile`; };
-    const row1 = document.querySelector('.m-top-row1');
-    const themeBtn = $('themeBtn');
-    if (row1 && themeBtn) row1.insertBefore(b, themeBtn);
-    else if (row1) row1.appendChild(b);
-  }
-
-  // =====================================================================
   // Init
   // =====================================================================
   function init() {
@@ -1457,7 +1394,6 @@
     initJam();
     initSeq();
     initFx();
-    initProxyLink();
     connect();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

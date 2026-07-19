@@ -13,20 +13,6 @@
 (function () {
   'use strict';
 
-  /* Service Workers requieren HTTPS o localhost. El AP directo usa HTTP en
-   * una IP privada, así que allí esta rama queda desactivada sin generar un
-   * error; sí se habilita automáticamente detrás de un bridge HTTPS/local. */
-  if (window.isSecureContext && 'serviceWorker' in navigator) {
-    window.addEventListener('load', function () {
-      navigator.serviceWorker.register('/sw.js', {
-        scope: '/',
-        updateViaCache: 'none'
-      }).catch(function (error) {
-        console.warn('[RED808] Service Worker no disponible:', error);
-      });
-    });
-  }
-
   // Apply the saved shared theme before page paint. The main UI and Mobile
   // use the same key; old mobile theme ids are migrated transparently.
   var THEME_KEY = 'r808_web_theme';
@@ -45,14 +31,17 @@
   var navState = 'idle';            // idle | connecting | open | closed
   var statusDot = null;
   var pendingServerError = '';
+  function tr(key, fallback) {
+    return window.RED808I18N ? window.RED808I18N.t(key) : (fallback || key);
+  }
 
   function showServerError(message) {
     var toast = document.getElementById('r808nav-error');
     if (!toast) {
-      pendingServerError = message || 'Error del dispositivo';
+      pendingServerError = message || tr('status.deviceError', 'Error del dispositivo');
       return;
     }
-    toast.textContent = pendingServerError = message || 'Error del dispositivo';
+    toast.textContent = pendingServerError = message || tr('status.deviceError', 'Error del dispositivo');
     toast.classList.add('show');
     clearTimeout(toast._hideTimer);
     toast._hideTimer = setTimeout(function () { toast.classList.remove('show'); }, 4500);
@@ -62,8 +51,8 @@
     navState = s;
     if (!statusDot) return;
     statusDot.className = 'r808nav-dot r808nav-dot--' + s;
-    statusDot.title = { open: 'Conectado', connecting: 'Conectando…',
-                        closed: 'Desconectado', idle: 'Sin WebSocket' }[s] || s;
+    statusDot.title = { open: tr('status.connected', 'Conectado'), connecting: tr('status.connecting', 'Conectando…'),
+                        closed: tr('status.disconnected', 'Desconectado'), idle: tr('status.noWebSocket', 'Sin WebSocket') }[s] || s;
   }
 
   var NativeWS = window.WebSocket;
@@ -81,7 +70,7 @@
           try {
             var payload = JSON.parse(event.data);
             if (payload && payload.type === 'error') {
-              showServerError(payload.msg || payload.code || 'Error del dispositivo');
+              showServerError(payload.msg || payload.code || tr('status.deviceError', 'Error del dispositivo'));
             }
           } catch (_) { /* the page owns non-JSON frames */ }
         });
@@ -98,12 +87,13 @@
 
   /* ── 2. Páginas del dispositivo ──────────────────────────────────────── */
   var PAGES = [
-    { href: '/',            label: 'Sequencer', match: ['/', '/index.html'] },
-    { href: '/patchbay',    label: 'PATH',      match: ['/patchbay', '/patchbay.html'] },
-    { href: '/multiview',   label: 'Multiview', match: ['/multiview', '/multiview.html'] },
-    { href: '/gesture-pro', label: 'Gesture',   match: ['/gesture-pro', '/gesture-pro.html', '/gesture', '/gesture.html'] },
-    { href: '/mobile',      label: 'Mobile',    match: ['/mobile', '/mobile.html'] },
-    { href: '/adm',         label: 'Admin',     match: ['/adm', '/admin.html'] }
+    { href: '/',            key: 'nav.sequencer', fallback: 'Sequencer', match: ['/', '/studio', '/index.html'] },
+    { href: '/demo',        key: 'nav.demo', fallback: 'Demo rápida', match: ['/demo'] },
+    { href: '/patchbay',    key: 'nav.path', fallback: 'PATH', match: ['/patchbay', '/patchbay.html'] },
+    { href: '/multiview',   key: 'nav.multiview', fallback: 'Multiview', match: ['/multiview', '/multiview.html'] },
+    { href: '/gesture-pro', key: 'nav.gesture', fallback: 'Gesture', match: ['/gesture-pro', '/gesture-pro.html', '/gesture', '/gesture.html'] },
+    { href: '/mobile',      key: 'nav.mobile', fallback: 'Mobile', match: ['/mobile', '/mobile.html'] },
+    { href: '/adm',         key: 'nav.admin', fallback: 'Admin', match: ['/adm', '/admin.html'] }
   ];
 
   /* ── 3. UI ───────────────────────────────────────────────────────────── */
@@ -134,6 +124,11 @@
       'text-decoration:none;font-size:13px;line-height:1;white-space:nowrap}',
       '.r808nav-link:hover{background:var(--r808-bg-elevated,#1a1a20);color:var(--r808-red-glow,#ff4d4d)}',
       '.r808nav-link.current{color:var(--r808-red-glow,#ff4d4d);font-weight:700;pointer-events:none}',
+      '.r808nav-locale{display:flex;align-items:center;gap:8px;padding:8px 10px 4px;color:var(--r808-text-dim,#8b98ad);font-size:11px}',
+      '.r808nav-locale select{min-width:112px;padding:4px 6px;border-radius:6px;background:var(--r808-bg-elevated,#1a1a20);color:var(--r808-text,#dde4f0);border:1px solid var(--r808-border,rgba(255,255,255,.16))}',
+      '.r808-locale-visible{position:fixed;top:12px;right:12px;z-index:99991;display:flex;align-items:center;gap:7px;padding:6px 8px;border:1px solid var(--r808-border,rgba(255,255,255,.16));border-radius:9px;background:var(--r808-bg-surface,rgba(16,20,29,.94));color:var(--r808-text-dim,#8b98ad);font:600 11px system-ui,-apple-system,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35)}',
+      '.r808-locale-visible select{min-width:112px;padding:4px 6px;border-radius:6px;background:var(--r808-bg-elevated,#1a1a20);color:var(--r808-text,#dde4f0);border:1px solid var(--r808-border,rgba(255,255,255,.16));font:inherit}',
+      '.r808nav.r808nav--touch + .r808-locale-visible{top:10px;right:10px}',
       '.r808nav-error{position:fixed;left:50%;bottom:18px;z-index:99999;max-width:min(90vw,520px);',
       'transform:translate(-50%,20px);opacity:0;pointer-events:none;padding:10px 14px;border-radius:9px;',
       'background:#3b0b10;color:#fff;border:1px solid #ff4d5a;font-size:13px;font-weight:700;',
@@ -157,7 +152,8 @@
 
     var root = document.createElement('nav');
     root.className = 'r808nav';
-    if (window.location.pathname.indexOf('/mobile') === 0 ||
+    if (window.location.pathname === '/demo' ||
+        window.location.pathname.indexOf('/mobile') === 0 ||
         window.location.pathname.indexOf('/gesture') === 0) {
       root.classList.add('r808nav--touch');
     }
@@ -169,10 +165,31 @@
     PAGES.forEach(function (p) {
       var a = document.createElement('a');
       a.className = 'r808nav-link' + (p.match.indexOf(path) !== -1 ? ' current' : '');
+      a.dataset.i18nKey = p.key;
       a.href = p.href;
-      a.textContent = p.label;
+      a.textContent = tr(p.key, p.fallback);
       menu.appendChild(a);
     });
+
+    var localeRow = document.createElement('label');
+    localeRow.className = 'r808nav-locale';
+    localeRow.textContent = tr('nav.language', 'Idioma');
+    var localeSelect = document.createElement('select');
+    localeSelect.id = 'red808-locale';
+    localeSelect.setAttribute('aria-label', tr('nav.language', 'Idioma'));
+    var i18n = window.RED808I18N;
+    if (i18n) i18n.order.forEach(function (code) {
+      var option = document.createElement('option');
+      option.value = code;
+      option.textContent = i18n.locales[code];
+      localeSelect.appendChild(option);
+    });
+    if (i18n) localeSelect.value = i18n.getLocale();
+    localeSelect.addEventListener('change', function () {
+      if (window.RED808I18N) window.RED808I18N.setLocale(localeSelect.value);
+    });
+    localeRow.appendChild(localeSelect);
+    menu.appendChild(localeRow);
 
     var fab = document.createElement('button');
     fab.className = 'r808nav-fab';
@@ -197,6 +214,18 @@
     root.appendChild(menu);
     root.appendChild(fab);
     document.body.appendChild(root);
+
+    // El idioma no debe quedar escondido dentro del menú 808: es una acción
+    // global y debe poder descubrirse a simple vista en cualquier pantalla.
+    var visibleLocaleRow = localeRow.cloneNode(true);
+    visibleLocaleRow.className = 'r808-locale-visible';
+    var visibleLocaleSelect = visibleLocaleRow.querySelector('select');
+    visibleLocaleSelect.id = 'red808-locale-visible';
+    visibleLocaleSelect.setAttribute('aria-label', tr('nav.language', 'Idioma'));
+    visibleLocaleSelect.addEventListener('change', function () {
+      if (window.RED808I18N) window.RED808I18N.setLocale(visibleLocaleSelect.value);
+    });
+    document.body.appendChild(visibleLocaleRow);
     var errorToast = document.createElement('div');
     errorToast.id = 'r808nav-error';
     errorToast.className = 'r808nav-error';
@@ -204,6 +233,18 @@
     document.body.appendChild(errorToast);
     if (pendingServerError) showServerError(pendingServerError);
     setNavState(navState);  // pintar el estado acumulado antes del DOM ready
+    window.addEventListener('red808:localechange', function () {
+      PAGES.forEach(function (p) {
+        var link = menu.querySelector('[data-i18n-key="' + p.key + '"]');
+        if (link) link.textContent = tr(p.key, p.fallback);
+      });
+      localeRow.childNodes[0].nodeValue = tr('nav.language', 'Idioma');
+      localeSelect.setAttribute('aria-label', tr('nav.language', 'Idioma'));
+      visibleLocaleRow.childNodes[0].nodeValue = tr('nav.language', 'Idioma');
+      visibleLocaleSelect.value = window.RED808I18N ? window.RED808I18N.getLocale() : localeSelect.value;
+      visibleLocaleSelect.setAttribute('aria-label', tr('nav.language', 'Idioma'));
+      setNavState(navState);
+    });
   }
 
   if (document.readyState === 'loading') {
@@ -217,7 +258,7 @@
    * solicita al primer toque (los navegadores exigen gesto de usuario)
    * y se re-adquiere al volver de background. Sin soporte → no-op.     */
   var path = window.location.pathname;
-  var isTouchPerf = path.indexOf('/mobile') === 0 || path.indexOf('/gesture') === 0;
+  var isTouchPerf = path === '/demo' || path.indexOf('/mobile') === 0 || path.indexOf('/gesture') === 0;
   if (isTouchPerf && 'wakeLock' in navigator) {
     var wakeLock = null;
     var requestWakeLock = function () {

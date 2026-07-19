@@ -9,7 +9,7 @@ inline bool webRequestHasTrustedOrigin(AsyncWebServerRequest* request) {
   if (!request || !request->hasHeader("Origin")) return true;
   const String origin = request->header("Origin");
   const String host = request->host();
-  return origin == (String("http://") + host) || origin == (String("https://") + host);
+  return origin == (String("http://") + host);
 }
 
 inline bool webSocketClientReady(AsyncWebSocketClient* client) {

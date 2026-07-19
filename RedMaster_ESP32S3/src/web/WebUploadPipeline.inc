@@ -337,7 +337,7 @@ static void pumpCleanTrackStream() {
       if (s_cleanTrackStream.carryLen > 0) {
         memcpy(s_cleanTrackStream.carry, parseBuf + fullBytes, s_cleanTrackStream.carryLen);
       }
-      esp_task_wdt_reset();
+      feedTaskWdtIfSubscribed();
     }
   }
 
@@ -544,7 +544,7 @@ static void pumpDaisyUpload() {
         }
       }
     }
-    esp_task_wdt_reset();
+    feedTaskWdtIfSubscribed();
   }
 
   if (st.error || (st.begun && st.bytesRemaining == 0)) {
