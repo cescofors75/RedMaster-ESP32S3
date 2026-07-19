@@ -615,6 +615,7 @@ function handleWebSocketMessage(data) {
                 if (psEl) psEl.textContent = psName;
                 const psCirc = document.getElementById('circularPatternName');
                 if (psCirc) psCirc.textContent = psName;
+                updateHeaderPatternDisplay(data.pattern, psName);
             }
             break;
         case 'songPattern':
@@ -959,6 +960,11 @@ function handlePhysButton(data) {
                 if (nameEl) nameEl.textContent = PNAMES;
                 const circularEl = document.getElementById('circularPatternName');
                 if (circularEl) circularEl.textContent = PNAMES;
+                // Mantener el readout del header (numero + nombre) en el mismo
+                // paso — sin esto, un cambio de patron disparado desde el panel
+                // fisico o desde la P4 dejaba el nombre actualizado pero el
+                // "P01 ..." del header con el patron anterior.
+                updateHeaderPatternDisplay(idx, PNAMES);
                 // Toast con número de patrón
                 if (window.showToast) {
                     const dir = data.action === 'nextPattern' ? '▶ Siguiente' : '◀ Anterior';
@@ -5966,6 +5972,17 @@ function setupKeyboardControls() {
     const headerPatternNextBtn = document.getElementById('headerPatternNextBtn');
     if (headerPatternNextBtn) {
         headerPatternNextBtn.addEventListener('click', () => changePattern(1));
+    }
+
+    // Same prev/next controls, duplicated next to the pattern name in the
+    // sequencer view so users don't have to reach the header while editing.
+    const patternDisplayPrevBtn = document.getElementById('patternDisplayPrevBtn');
+    if (patternDisplayPrevBtn) {
+        patternDisplayPrevBtn.addEventListener('click', () => changePattern(-1));
+    }
+    const patternDisplayNextBtn = document.getElementById('patternDisplayNextBtn');
+    if (patternDisplayNextBtn) {
+        patternDisplayNextBtn.addEventListener('click', () => changePattern(1));
     }
 
     const headerPanicBtn = document.getElementById('headerPanicBtn');

@@ -1595,11 +1595,20 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
       request->send(400, "application/json", "{\"error\":\"bad_pattern\"}");
       return;
     }
-    DynamicJsonDocument doc(4096);
+    // NOTE: 4096 bytes is only enough for a handful of 16-step tracks. With
+    // 16 tracks the ArduinoJson v6 pool (fixed-size, no auto-grow) filled up
+    // partway through the loop below and silently dropped further add()
+    // calls -- the last track(s) serialized as empty arrays even though the
+    // sequencer had steps programmed there. The P4 (which polls this exact
+    // endpoint over HTTP for pattern sync) then rendered that track blank
+    // while the web UI, which gets patterns via the properly-sized WS
+    // "selectPattern" JSON, showed it correctly. Match that sizing here.
+    int stepCount = sequencer.getPatternLength();
+    DynamicJsonDocument doc(stepCount > 16 ? 32768 : 14336);
     
     for (int track = 0; track < 16; track++) {
       JsonArray trackSteps = doc.createNestedArray(String(track));
-      for (int step = 0; step < sequencer.getPatternLength(); step++) {
+      for (int step = 0; step < stepCount; step++) {
         trackSteps.add(sequencer.getStep(pattern, track, step));
       }
     }

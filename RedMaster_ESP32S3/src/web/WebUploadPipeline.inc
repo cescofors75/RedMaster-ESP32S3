@@ -167,10 +167,12 @@ void WebInterface::handleDaisyUpload(AsyncWebServerRequest *request, String file
       if (!s_daisyUploadFile) daisyUploadError("Failed to create temporary upload file");
     }
     if (s_daisyUpload.error) {
+      const int failedPad = s_daisyUpload.pad;
       const String msg = s_daisyUpload.errorMsg;
       if (s_daisyUploadFile) s_daisyUploadFile.close();
       LittleFS.remove(kDaisyUploadTempPath);
       s_daisyUpload = DaisyUploadStreamState{};
+      broadcastUploadComplete(failedPad, false, msg);
       request->send(400, "application/json", String("{\"success\":false,\"message\":\"") + msg + "\"}");
       return;
     }
@@ -196,11 +198,22 @@ void WebInterface::handleDaisyUpload(AsyncWebServerRequest *request, String file
     if (s_daisyUploadFile) s_daisyUploadFile.close();
     st.receiving = false;
     st.owner = nullptr;
-    if (!st.error && st.bytesWritten != st.totalSize) daisyUploadError("Truncated upload");
+    // NOTE: st.totalSize is the declared HTTP Content-Length of the whole
+    // multipart body (boundaries + headers + file bytes), while st.bytesWritten
+    // only counts the decoded file bytes handed to us by the multipart parser
+    // (data/len already have the boundary overhead stripped). They are NOT
+    // expected to be equal — comparing them here used to reject every single
+    // upload with a false "Truncated upload" 400 right at 100%, both from the
+    // web UI (/api/upload) and from the P4 SD uploader (/api/uploadDaisy).
+    // The only truncation signal we actually have is whether the parser ever
+    // called us with final=true and wrote at least one byte.
+    if (!st.error && st.bytesWritten == 0) daisyUploadError("Empty upload");
     if (st.error) {
+      const int failedPad = st.pad;
       const String msg = st.errorMsg;
       LittleFS.remove(kDaisyUploadTempPath);
       s_daisyUpload = DaisyUploadStreamState{};
+      broadcastUploadComplete(failedPad, false, msg);
       request->send(400, "application/json", String("{\"success\":false,\"message\":\"") + msg + "\"}");
       return;
     }
