@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="ui-2026.css">
     <link rel="stylesheet" href="workspace-2026.css">
     <link rel="stylesheet" href="studio-workspaces.css">
+    <link rel="stylesheet" href="raydrone.css">
     <link rel="stylesheet" href="keyboard-styles.css" media="print" onload="this.media='all'">
 </head>
 <body>
@@ -112,6 +113,7 @@
                 <button class="tab-btn" data-tab="melody" data-short-label="NOTE">MELODÍA</button>
                 <button type="button" class="tab-btn workspace-path-link" data-short-label="PATH" title="Abrir rutas de señal, filtros y efectos" onclick="window.location.href='/patchbay'">PATH</button>
             </div>
+            <button class="tab-btn workspace-raydrone-direct" data-tab="raydrone" data-short-label="RAY">RAYDRONE</button>
             <details class="workspace-more" id="workspaceMoreMenu">
                 <summary>MÁS <span aria-hidden="true">⌄</span></summary>
                 <div class="workspace-more-menu">
@@ -1103,6 +1105,70 @@
             </section>
         </div>
 
+        <!-- TAB: RayDrone -->
+        <div id="tab-raydrone" class="tab-content">
+            <section id="section-raydrone" class="raydrone-web-section" data-section="raydrone" data-title="RayDrone">
+                <div class="raydrone-web-head">
+                    <div>
+                        <div class="raydrone-kicker">LIVE INPUT / GRANULAR MASTER INSERT</div>
+                        <h2>RAYDRONE</h2>
+                        <p>Los mismos macros que WASM, Daisy y el panel P4.</p>
+                    </div>
+                    <label class="raydrone-power">
+                        <input type="checkbox" id="raydroneActive">
+                        <span class="raydrone-power-track"><span></span></span>
+                        <strong id="raydroneActiveLabel">OFF</strong>
+                    </label>
+                </div>
+
+                <div class="raydrone-web-grid">
+                    <div class="raydrone-web-card raydrone-material-card">
+                        <div class="raydrone-card-title">MATERIAL</div>
+                        <select id="raydroneMaterial" class="raydrone-select">
+                            <option value="0">VACIO</option>
+                            <option value="1">METAL</option>
+                            <option value="2">MADERA</option>
+                            <option value="3">CRISTAL</option>
+                            <option value="4">AGUA</option>
+                            <option value="5">PLASMA</option>
+                        </select>
+                        <div class="raydrone-flow">INPUT &gt; RAYDRONE<br>DRY / WET</div>
+                        <div class="raydrone-web-status" id="raydroneStatus">Esperando estado...</div>
+                    </div>
+                    <div class="raydrone-web-card">
+                        <label for="raydroneCharacter">CHARACTER <output id="raydroneCharacterValue">35%</output></label>
+                        <input type="range" id="raydroneCharacter" min="0" max="35" value="35">
+                        <small>Apertura / densidad (techo seguro Daisy)</small>
+                    </div>
+                    <div class="raydrone-web-card">
+                        <label for="raydroneMotion">MOTION <output id="raydroneMotionValue">0%</output></label>
+                        <input type="range" id="raydroneMotion" min="0" max="100" value="0">
+                        <small>Movimiento temporal</small>
+                    </div>
+                    <div class="raydrone-web-card">
+                        <label for="raydroneSpace">SPACE <output id="raydroneSpaceValue">15%</output></label>
+                        <input type="range" id="raydroneSpace" min="0" max="100" value="15">
+                        <small>Reflexiones / espacio</small>
+                    </div>
+                    <div class="raydrone-web-card">
+                        <label for="raydroneVolume">VOLUME <output id="raydroneVolumeValue">80%</output></label>
+                        <input type="range" id="raydroneVolume" min="0" max="100" value="80">
+                        <small>Ganancia del inserto</small>
+                    </div>
+                    <div class="raydrone-web-card">
+                        <label for="raydroneMix">MIX <output id="raydroneMixValue">70%</output></label>
+                        <input type="range" id="raydroneMix" min="0" max="100" value="70">
+                        <small>Dry / wet</small>
+                    </div>
+                    <div class="raydrone-web-card raydrone-evolution-card">
+                        <label for="raydroneEvolution">AUTOEVOLUCION (RECURSIVA) <output id="raydroneEvolutionValue">0%</output></label>
+                        <input type="range" id="raydroneEvolution" min="0" max="100" value="0">
+                        <small>La envolvente de salida vuelve a entrar y modifica foco, apertura y reflexiones.</small>
+                    </div>
+                </div>
+            </section>
+        </div>
+
         <!-- TAB: MIDI -->
         <div id="tab-midi" class="tab-content">
             <section id="section-midi" class="midi-section" data-section="midi" data-title="MIDI Control">
@@ -1665,6 +1731,7 @@
     <script src="sd-browser.js" defer></script>
     <script src="midi-ui.js" defer></script>
     <script src="app.js" defer></script>
+    <script src="raydrone-ui.js" defer></script>
     <script src="workspace-ui.js" defer></script>
 </body>
 </html>

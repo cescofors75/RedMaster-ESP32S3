@@ -29,6 +29,7 @@
 #define CMD_FILTER_DIST_MODE  0x25
 #define CMD_FILTER_SR_REDUCE  0x26
 #define CMD_MASTER_FX_ROUTE   0x27
+#define CMD_RAYDRONE_CONFIG   0x28
 
 #define CMD_DELAY_ACTIVE      0x30
 #define CMD_DELAY_TIME        0x31

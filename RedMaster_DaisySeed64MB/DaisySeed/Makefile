@@ -12,7 +12,7 @@ TARGET = DemoBells
 CPP_SOURCES = demo_bells.cpp syscalls.cpp
 else
 TARGET = DrumMachine
-CPP_SOURCES = main.cpp syscalls.cpp
+CPP_SOURCES = main.cpp raydrone_dsp.cpp syscalls.cpp
 endif
 
 # Include path for synth headers + DaisySP-LGPL
@@ -36,7 +36,9 @@ RED808_STARTUP_SHOWCASE_DEMO ?= 0
 RED808_STARTUP_TONE_SECONDS ?= 3
 RED808_STARTUP_STRESS_REPORT ?= 0
 RED808_STARTUP_STRESS_SECONDS ?= 18
-RED808_DSP_BLOCK_PROFILE ?= 1
+# DWT accounting wraps several sample-rate scopes; enable it only for a
+# diagnostic build (make RED808_DSP_BLOCK_PROFILE=1), never for production.
+RED808_DSP_BLOCK_PROFILE ?= 0
 RED808_MEM_AUDIT ?= 0
 C_DEFS += -DRED808_BOOT_DIAG_MINIMAL=$(RED808_BOOT_DIAG_MINIMAL)
 C_DEFS += -DRED808_AUDIO_DIAG_MINIMAL=$(RED808_AUDIO_DIAG_MINIMAL)

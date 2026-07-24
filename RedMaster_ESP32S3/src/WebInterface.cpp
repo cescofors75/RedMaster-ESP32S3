@@ -899,6 +899,24 @@ static void appendPatternMetadata(JsonDocument& doc, int pattern) {
   doc["humanizeVelocity"] = metadata.humanizeVelocity;
 }
 
+static void writeRaydroneConfig(JsonObject target,
+                                const RaydroneConfigPayload& config) {
+  target["version"] = config.version;
+  target["active"] = (config.flags & RAYDRONE_FLAG_ACTIVE) != 0;
+  target["material"] = config.material;
+  target["character"] = config.character;
+  target["motion"] = config.motion;
+  target["space"] = config.space;
+  target["volume"] = config.volume;
+  target["mix"] = config.mix;
+  target["evolution"] = config.evolution;
+}
+
+static void appendRaydroneState(JsonObject fx) {
+  JsonObject raydrone = fx.createNestedObject("raydrone");
+  writeRaydroneConfig(raydrone, spiMaster.getRaydroneConfig());
+}
+
 static void populateStateDocument(JsonDocument& doc) {
   SdStatusResponse sdStat = {};
   bool sdOk = spiMaster.getCachedSdStatus(sdStat);  // Non-blocking: reads cache updated by Core1
@@ -943,6 +961,9 @@ static void populateStateDocument(JsonDocument& doc) {
   doc["humanizeTimingMs"] = sequencer.getHumanizeTimingMs();
   doc["humanizeVelocity"] = sequencer.getHumanizeVelocityAmount();
   doc["heap"] = ESP.getFreeHeap();
+
+  JsonObject fx = doc.createNestedObject("fx");
+  appendRaydroneState(fx);
 
   JsonArray loopActive = doc.createNestedArray("loopActive");
   JsonArray loopPaused = doc.createNestedArray("loopPaused");
@@ -1339,6 +1360,10 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     sendWebAsset(request, "/app.js", "application/javascript");
   });
 
+  server->on("/raydrone-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/raydrone-ui.js", "application/javascript");
+  });
+
   // Navegación común + indicador de conexión (cargado por todas las páginas)
   server->on("/nav.js", HTTP_GET, [](AsyncWebServerRequest *request){
     sendWebAsset(request, "/nav.js", "application/javascript");
@@ -1390,6 +1415,10 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
 
   server->on("/workspace-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
     sendWebAsset(request, "/workspace-ui.js", "application/javascript");
+  });
+
+  server->on("/raydrone.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/raydrone.css", "text/css");
   });
 
   server->on("/theme-vars.css", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1655,6 +1684,14 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     request->send(200, "application/json", "{\"ok\":true}");
   });
 
+  server->on("/api/state", HTTP_GET, [](AsyncWebServerRequest *request){
+    PsramJsonDocument doc(8192);
+    populateStateDocument(doc);
+    String output;
+    serializeJson(doc, output);
+    request->send(200, "application/json", output);
+  });
+
   server->on("/api/p4State", HTTP_GET, [](AsyncWebServerRequest *request){
     StaticJsonDocument<4096> doc;
     SdStatusResponse sdStat = {};
@@ -1697,6 +1734,7 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     fx["reverbMix"] = gMasterReverbMix;
     fx["phaserActive"] = gMasterPhaserActive;
     fx["phaserDepth"] = gMasterPhaserDepth;
+    appendRaydroneState(fx);
 
     String output;
     serializeJson(doc, output);
@@ -3074,6 +3112,7 @@ void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
   fx["reverbActive"] = spiMaster.isReverbActive();
   fx["reverbMix"] = gMasterReverbMix;
   fx["chorusActive"] = spiMaster.isChorusActive();
+  appendRaydroneState(fx);
 
   JsonArray trackFilters = fx.createNestedArray("trackFilters");
   JsonArray trackReverbSend = fx.createNestedArray("trackReverbSend");
@@ -3159,6 +3198,25 @@ void WebInterface::broadcastUdpMasterFx(const char* param, float value) {
   doc["type"] = "masterFx";
   doc["param"] = param;
   doc["value"] = value;
+  for (auto& entry : udpClients) {
+    sendUdpJsonTo(entry.second.ip, entry.second.port, doc);
+    yield();
+  }
+}
+
+void WebInterface::broadcastUdpRaydrone(
+    const RaydroneConfigPayload& config,
+    uint8_t updateMask,
+    uint32_t requestId,
+    bool accepted) {
+  if (udpClients.empty()) return;
+  StaticJsonDocument<256> doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["type"] = "raydrone";
+  root["ok"] = accepted;
+  root["updateMask"] = updateMask;
+  if (requestId != 0) root["requestId"] = requestId;
+  writeRaydroneConfig(root, config);
   for (auto& entry : udpClients) {
     sendUdpJsonTo(entry.second.ip, entry.second.port, doc);
     yield();
@@ -3637,6 +3695,7 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
   // ── Heap guard: si queda poca memoria, descartamos el comando ──
   if (ESP.getFreeHeap() < 20000) {
     syslog("CMD", "DROPPED cmd heap=%u", ESP.getFreeHeap());
+    if (handled) *handled = false;
     // Avisar a la UI: comandos request/response (getPattern, etc.) quedaban
     // colgados sin respuesta y la web parecia congelada. String estatico,
     // sin allocs intermedios significativos.
@@ -4369,6 +4428,76 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
     if (ws) ws->textAll(out);
     broadcastUdpMasterFx("sampleRate", (float)rate);
     broadcastUdpStateSync();
+  }
+  else if (cmd == "setRaydrone") {
+    RaydroneConfigPayload patch = {};
+    patch.version = RAYDRONE_CONFIG_VERSION;
+    uint8_t updateMask = 0;
+    const uint32_t requestId =
+      doc.containsKey("requestId") ? doc["requestId"].as<uint32_t>() : 0u;
+    const bool versionSupported =
+      !doc.containsKey("version") ||
+      doc["version"].as<int>() == RAYDRONE_CONFIG_VERSION;
+
+    if (doc.containsKey("active")) {
+      if (doc["active"].as<bool>()) {
+        patch.flags = RAYDRONE_FLAG_ACTIVE;
+      }
+      updateMask |= RAYDRONE_UPDATE_ACTIVE;
+    }
+    if (doc.containsKey("material")) {
+      patch.material = (uint8_t)constrain(
+        doc["material"].as<int>(), 0, RAYDRONE_MATERIAL_COUNT - 1);
+      updateMask |= RAYDRONE_UPDATE_MATERIAL;
+    }
+    if (doc.containsKey("character")) {
+      patch.character =
+        (uint8_t)constrain(doc["character"].as<int>(), 0, RAYDRONE_CHARACTER_SAFE_MAX);
+      updateMask |= RAYDRONE_UPDATE_CHARACTER;
+    }
+    if (doc.containsKey("motion")) {
+      patch.motion = (uint8_t)constrain(doc["motion"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_MOTION;
+    }
+    if (doc.containsKey("space")) {
+      patch.space = (uint8_t)constrain(doc["space"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_SPACE;
+    }
+    if (doc.containsKey("volume")) {
+      patch.volume = (uint8_t)constrain(doc["volume"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_VOLUME;
+    }
+    if (doc.containsKey("mix")) {
+      patch.mix = (uint8_t)constrain(doc["mix"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_MIX;
+    }
+    if (doc.containsKey("evolution")) {
+      patch.evolution = (uint8_t)constrain(doc["evolution"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_EVOLUTION;
+    }
+
+    const bool accepted =
+      versionSupported &&
+      (updateMask == 0 ||
+       spiMaster.updateRaydroneConfig(patch, updateMask));
+    const RaydroneConfigPayload applied = spiMaster.getRaydroneConfig();
+
+    StaticJsonDocument<384> resp;
+    resp["type"] = "masterFx";
+    resp["param"] = "raydrone";
+    resp["ok"] = accepted;
+    resp["updateMask"] = updateMask;
+    if (requestId != 0) resp["requestId"] = requestId;
+    JsonObject raydrone = resp.createNestedObject("raydrone");
+    writeRaydroneConfig(raydrone, applied);
+    String out;
+    serializeJson(resp, out);
+    if (ws) ws->textAll(out);
+
+    if (accepted || requestId != 0) {
+      broadcastUdpRaydrone(applied, updateMask, requestId, accepted);
+    }
+    if (!accepted && handled) *handled = false;
   }
   // ============= NEW: Master Effects Commands =============
   else if (cmd == "setDelayActive") {
@@ -6249,7 +6378,12 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
   else if (cmd == "setMasterFxRoute") {
     uint8_t fxId = doc["fxId"] | 0;
     bool connected = doc["connected"] | false;
-    spiMaster.setMasterFxRoute(fxId, connected);
+    if (fxId == MASTER_FX_ROUTE_RAYDRONE) {
+      // Raydrone route stays connected; its atomic ACTIVE bit owns bypass.
+      if (handled) *handled = false;
+    } else {
+      spiMaster.setMasterFxRoute(fxId, connected);
+    }
   }
 
   // {"cmd":"setAutoWahActive","active":true}
@@ -6482,8 +6616,13 @@ void WebInterface::handleUdp() {
     s_udpReplyIp = IPAddress(0, 0, 0, 0);
     s_udpReplyPort = 0;
     udp.beginPacket(remoteIp, remotePort);
-    if (commandHandled) udp.print("{\"s\":\"ok\"}");
-    else udp.print("{\"s\":\"err\",\"m\":\"unknown_command\"}");
+    if (commandHandled) {
+      udp.print("{\"s\":\"ok\"}");
+    } else if (strcmp(cmd, "setRaydrone") == 0) {
+      udp.print("{\"s\":\"err\",\"m\":\"rejected\"}");
+    } else {
+      udp.print("{\"s\":\"err\",\"m\":\"unknown_command\"}");
+    }
     udp.endPacket();
     if (commandHandled && syncAfter) {
       sendUdpStateSync(remoteIp, remotePort);

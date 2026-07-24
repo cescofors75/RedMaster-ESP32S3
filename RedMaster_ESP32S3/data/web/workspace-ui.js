@@ -23,6 +23,11 @@
       title: 'Melodía',
       description: 'Programa voces, notas y articulaciones de los motores melódicos.'
     },
+    raydrone: {
+      kicker: 'LIVE INPUT',
+      title: 'RayDrone',
+      description: 'Granular master insert para caracter, movimiento y espacio.'
+    },
     'xtra-pads': {
       kicker: 'HERRAMIENTA',
       title: 'XTRA Pads',

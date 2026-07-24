@@ -16,6 +16,7 @@
 #include <map>
 #include <functional>
 #include "MIDIController.h"
+#include "../../shared/raydrone_protocol.h"
 
 #define UDP_PORT 8888  // Puerto para recibir comandos UDP
 
@@ -107,6 +108,10 @@ private:
   void broadcastUdpStateSync();
   void broadcastUdpMasterFx(const char* param, bool value);
   void broadcastUdpMasterFx(const char* param, float value);
+  void broadcastUdpRaydrone(const RaydroneConfigPayload& config,
+                            uint8_t updateMask,
+                            uint32_t requestId,
+                            bool accepted);
   void broadcastUdpTrackVolume(int track, int volume);
   bool shouldSendUdpStateSync(const char* cmd) const;
   /* v2.6 — Push pattern + selected index to all UDP slaves (P4/S3).
