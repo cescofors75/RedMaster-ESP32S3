@@ -21,26 +21,28 @@ struct MetaSeed {
   uint8_t velocity;
 };
 
-/* Original factory material: useful musical directions rather than song or
- * artist imitations. Every pattern is a two-bar performance with real negative
- * space, an A/B variation and a restrained melodic role. */
+/* One song, sixteen scenes. The factory bank now reads as a single live set
+ * — the NIGHT DRIVE suite in F minor, everything at 124 BPM so a set can run
+ * front to back without touching the tempo. The grooves the bank was loved
+ * for (I-III, XII) are untouched; the rest are variations of the same
+ * material, and scenes IX-X hand the spotlight to a piano lead (PHYS). */
 constexpr MetaSeed META[BUILTIN_PATTERN_COUNT] = {
-  {"Pulse Bloom",     "Broken Club",    "RED 808 KARZ + SH", 124, 10, 1, 5},
-  {"Night Transit",   "Deep Techno",    "Samples + 909",     130,  4, 0, 3},
-  {"Glass Garage",    "Future Garage",  "Samples + 505",     132, 26, 2, 6},
-  {"Warm Pressure",   "Deep House",     "Samples + 303",     122, 12, 1, 4},
-  {"Carbon Breaks",   "Broken Beat",    "Samples + 505",     138,  2, 1, 6},
-  {"Neon Motorik",    "Night Drive",    "Samples + SH/WT",   116,  4, 1, 4},
-  {"Elastic Electro", "Electro",        "Samples + 808",     120, 14, 1, 5},
-  {"Low Gravity",     "Half-Time",      "Samples + SH/WT",   100, 18, 2, 7},
-  {"Acid Trace",      "Minimal Acid",   "Samples + 909/303", 126,  8, 0, 3},
-  {"Sub Signal",      "Bass Club",      "Samples + 808/SH",  128,  6, 1, 5},
-  {"Pocket Chrome",   "Swing Beat",     "Samples + FM/SH",   106, 24, 2, 7},
-  {"Organ Dust",      "Raw House",      "Samples + 909/WT",  124, 14, 1, 4},
-  {"Night Bus",       "Two-Step",       "Samples + SH/FM",   134, 28, 2, 6},
-  {"Afterglow",       "Downtempo",      "Samples + FM/WT",    86, 20, 3, 8},
-  {"Peak Relay",      "Modern Breaks",  "Samples + 909/505", 140,  2, 1, 5},
-  {"Machine Ritual",  "Warehouse",      "Samples + 909/FM",  128,  4, 0, 3},
+  {"I. Pulse Bloom",  "Suite: intro",     "RED 808 KARZ + SH", 124, 10, 1, 5},
+  {"II. Transit",     "Suite: groove A",  "Samples + 909",     124,  4, 0, 3},
+  {"III. Glass",      "Suite: groove B",  "Samples + 505",     124, 26, 2, 6},
+  {"IV. Pressure",    "Suite: house",     "Samples + 303",     124, 12, 1, 4},
+  {"V. Carbon",       "Suite: breaks",    "Samples + 505",     124,  2, 1, 6},
+  {"VI. Motorik",     "Suite: drive",     "Samples + SH/WT",   124,  4, 1, 4},
+  {"VII. Elastic",    "Suite: electro",   "Samples + 808",     124, 14, 1, 5},
+  {"VIII. Gravity",   "Suite: breakdown", "Samples + SH/WT",   124, 18, 2, 7},
+  {"IX. Piano Rise",  "Suite: piano",     "Smp + PHYS/WT",     124,  8, 1, 4},
+  {"X. Piano Bloom",  "Suite: piano",     "Smp + PHYS/WT",     124,  8, 1, 4},
+  {"XI. Voltage",     "Suite: peak drive","Samples + SH",      124,  6, 1, 4},
+  {"XII. Organ Dust", "Suite: raw house", "Samples + 909/WT",  124, 14, 1, 4},
+  {"XIII. Rupture",   "Suite: hard breaks","Samples + 909/SH", 124,  4, 1, 5},
+  {"XIV. Afterglow",  "Suite: cooldown",  "Samples + FM/WT",   124, 20, 3, 8},
+  {"XV. Peak Relay",  "Suite: peak",      "Samples + 909/505", 124,  2, 1, 5},
+  {"XVI. Ritual",     "Suite: finale",    "Samples + 909/FM",  124,  4, 0, 3},
 };
 
 /* Sample-first contract. At least twelve tracks in every factory pattern use
@@ -54,11 +56,11 @@ constexpr int8_t ENGINE_PROFILE[BUILTIN_PATTERN_COUNT][MAX_TRACKS] = {
   {SMP,SMP,SMP,SMP,E505,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,ESH,EWT},
   {SMP,SMP,SMP,SMP,SMP,SMP,SMP,E808,SMP,SMP,SMP,SMP,SMP,SMP,EFM,ESH},
   {SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,ESH,EWT},
-  {SMP,SMP,SMP,E909,E909,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,E303},
-  {SMP,SMP,SMP,SMP,SMP,SMP,SMP,E808,SMP,SMP,SMP,SMP,SMP,SMP,ESH,EWT},
-  {SMP,SMP,SMP,SMP,E505,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,EFM,ESH},
+  {SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,EWT,EPHYS},
+  {SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,EWT,EPHYS},
+  {SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,ESH},
   {SMP,SMP,SMP,E909,E909,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,EWT},
-  {SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,ESH,EFM},
+  {SMP,SMP,SMP,SMP,E909,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,ESH},
   {SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,EFM,EWT},
   {SMP,SMP,SMP,E909,SMP,SMP,SMP,SMP,SMP,SMP,E505,SMP,SMP,SMP,ESH,ENOISE},
   {SMP,SMP,SMP,E909,E909,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,SMP,EFM,ESH},
@@ -70,9 +72,9 @@ constexpr uint8_t PRESET_PROFILE[BUILTIN_PATTERN_COUNT][BUILTIN_ENGINE_COUNT] = 
   {1,1,2,0,3,2,1,0,0}, {1,2,1,1,2,1,1,0,0},
   {1,1,2,0,1,2,1,0,1}, {1,1,1,0,3,2,1,0,0},
   {1,1,1,0,1,2,2,0,0}, {1,1,1,0,3,1,1,0,0},
-  {1,2,1,1,1,1,1,0,0}, {1,1,1,0,2,2,1,0,0},
-  {1,1,2,0,1,2,2,0,0}, {1,2,1,0,2,1,1,0,0},
-  {1,1,1,0,1,2,2,0,0}, {1,1,1,0,3,1,1,0,0},
+  {1,1,1,0,1,1,1,0,0}, {1,1,1,0,1,1,1,0,0},
+  {1,1,1,0,1,1,1,0,0}, {1,2,1,0,2,1,1,0,0},
+  {1,1,1,0,1,1,1,0,0}, {1,1,1,0,3,1,1,0,0},
   {1,2,2,0,1,2,1,0,2}, {1,2,1,0,1,2,3,0,0},
 };
 
@@ -196,8 +198,8 @@ void buildPattern(Sequencer& seq, int p) {
       hit(seq, CP, 12, 72); hit(seq, CP, 28, 78);
       const uint8_t sh[] = {3,7,11,15,19,23,27,31}; hits(seq, MA, sh, 45, -8);
       chordHit(seq, MC, 2, 53,56,60, 48); chordHit(seq, MC, 18, 49,53,56, 45);
-      melodicHit(seq, LC, 0, 29, 86, 1); melodicHit(seq, LC, 6, 36, 64);
-      melodicHit(seq, LC, 13, 32, 71, 2, 88); melodicHit(seq, LC, 16, 29, 88, 1);
+      melodicHit(seq, LC, 0, 29, 76, 1); melodicHit(seq, LC, 6, 36, 64);
+      melodicHit(seq, LC, 13, 32, 68, 2, 88); melodicHit(seq, LC, 16, 29, 78, 1);
       melodicHit(seq, LC, 27, 39, 68, 2, 82);
       break;
     }
@@ -232,8 +234,8 @@ void buildPattern(Sequencer& seq, int p) {
       hit(seq, CB, 11, 46, 76); hit(seq, CB, 27, 50, 82);
       hit(seq, SD, 31, 66, 78, 2);
       melodicHit(seq, MC, 6, 60, 52, 0, 76); melodicHit(seq, MC, 22, 63, 58, 0, 84);
-      melodicHit(seq, LC, 0, 29, 80); melodicHit(seq, LC, 7, 36, 65);
-      melodicHit(seq, LC, 16, 27, 82); melodicHit(seq, LC, 26, 32, 70);
+      melodicHit(seq, LC, 0, 29, 72); melodicHit(seq, LC, 7, 36, 65);
+      melodicHit(seq, LC, 16, 27, 74); melodicHit(seq, LC, 26, 32, 70);
       break;
     }
     case 7: { // Low Gravity — half-time weight, dusty ghosts and long harmonic space.
@@ -249,38 +251,55 @@ void buildPattern(Sequencer& seq, int p) {
       sampleMotion(seq, CH, 2800, 5200, 16);
       break;
     }
-    case 8: { // Acid Trace — most of the space belongs to samples, not the 303.
-      fourFloor(seq, 119); backbeat(seq, 106); softOffbeats(seq, 63);
-      hit(seq, OH, 14, 65); hit(seq, OH, 30, 72);
-      hit(seq, RS, 11, 46, 64); hit(seq, CY, 0, 44, 72);
-      const uint8_t st[] = {0,6,10,15,16,22,27,30};
-      const uint8_t no[] = {29,36,32,39,29,41,32,27};
-      for(size_t i = 0; i < sizeof(st); ++i)
-        melodicHit(seq, LC, st[i], no[i], (i % 4u == 0u) ? 91 : 65,
-                   (i == 3 || i == 7) ? 2 : 0, (i == 6) ? 82 : 100);
+    case 8: { // IX. Piano Rise — the floor thins out and a piano takes the lead.
+      const uint8_t k[] = {0,8,16,24};
+      hits(seq, BD, k, 102, -2); softOffbeats(seq, 46);
+      hit(seq, RS, 12, 40, 62); hit(seq, RS, 28, 44, 70);
+      hit(seq, OH, 31, 56, 74);
+      /* F minor pentatonic lead, legato phrasing (PHYS voice as the piano). */
+      melodicHit(seq, LC, 0, 65, 84, 0, 100, 1, 2);
+      melodicHit(seq, LC, 3, 68, 72, 0, 100, 1, 2);
+      melodicHit(seq, LC, 6, 72, 78, 0, 100, 1, 2);
+      melodicHit(seq, LC, 10, 70, 66, 0, 88, 1, 2);
+      melodicHit(seq, LC, 14, 68, 62, 0, 100, 1, 2);
+      melodicHit(seq, LC, 16, 65, 80, 0, 100, 1, 2);
+      melodicHit(seq, LC, 19, 63, 68, 0, 100, 1, 2);
+      melodicHit(seq, LC, 22, 68, 72, 0, 88, 1, 2);
+      melodicHit(seq, LC, 26, 70, 74, 0, 100, 1, 2);
+      melodicHit(seq, LC, 30, 63, 58, 0, 76, 1, 2);
+      chordHit(seq, MC, 0, 53,56,60, 36); chordHit(seq, MC, 16, 49,53,56, 34);
+      sampleMotion(seq, CH, 3200, 6400, 14);
       break;
     }
-    case 9: { // Sub Signal — modern bass rhythm with sample transients in front.
-      const uint8_t k[] = {0,3,7,10,14,16,22,26,30};
-      const uint8_t s[] = {4,12,20,28};
-      hits(seq, BD, k, 119); hits(seq, SD, s, 108); softOffbeats(seq, 60);
-      hit(seq, OH, 15, 64, 76); hit(seq, OH, 31, 70, 84);
-      hit(seq, CB, 11, 42, 72); hit(seq, CB, 27, 47, 80);
-      melodicHit(seq, MC, 0, 29, 82); melodicHit(seq, MC, 7, 29, 66);
-      melodicHit(seq, MC, 10, 32, 74); melodicHit(seq, MC, 16, 27, 84);
-      melodicHit(seq, MC, 26, 36, 70);
-      chordHit(seq, LC, 0, 53,56,60, 30); chordHit(seq, LC, 16, 51,55,58, 28);
+    case 9: { // X. Piano Bloom — same piano theme an octave up, full floor under it.
+      fourFloor(seq, 112); backbeat(seq, 100); softOffbeats(seq, 56);
+      hit(seq, CP, 12, 62); hit(seq, CP, 28, 68); hit(seq, OH, 15, 58, 76);
+      melodicHit(seq, LC, 0, 72, 86, 0, 100, 1, 2);
+      melodicHit(seq, LC, 3, 75, 74, 0, 100, 1, 2);
+      melodicHit(seq, LC, 7, 77, 80, 0, 100, 1, 2);
+      melodicHit(seq, LC, 10, 75, 68, 0, 88, 1, 2);
+      melodicHit(seq, LC, 13, 72, 70, 0, 100, 1, 2);
+      melodicHit(seq, LC, 16, 70, 78, 0, 100, 1, 2);
+      melodicHit(seq, LC, 20, 68, 66, 0, 100, 1, 2);
+      melodicHit(seq, LC, 23, 65, 72, 0, 88, 1, 2);
+      melodicHit(seq, LC, 26, 68, 70, 0, 100, 1, 2);
+      melodicHit(seq, LC, 30, 70, 64, 0, 76, 1, 2);
+      chordHit(seq, MC, 2, 53,56,60, 40); chordHit(seq, MC, 10, 51,55,58, 36, 88);
+      chordHit(seq, MC, 18, 49,53,56, 38); chordHit(seq, MC, 26, 48,51,55, 36, 90);
       break;
     }
-    case 10: { // Pocket Chrome — swung conversation, ghosts below the main snare.
-      const uint8_t k[] = {0,3,7,10,16,19,23,27,30};
-      const uint8_t h[] = {0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30};
-      hits(seq, BD, k, 109); backbeat(seq, 111); hits(seq, CH, h, 49, -11);
-      hit(seq, SD, 11, 36, 48); hit(seq, SD, 27, 42, 56);
-      hit(seq, CP, 28, 62); hit(seq, OH, 31, 66, 80);
-      melodicHit(seq, MC, 6, 60, 48, 0, 74); melodicHit(seq, MC, 22, 63, 54, 0, 82);
-      melodicHit(seq, LC, 0, 29, 74); melodicHit(seq, LC, 7, 36, 60);
-      melodicHit(seq, LC, 16, 27, 76); melodicHit(seq, LC, 26, 32, 64);
+    case 10: { // XI. Voltage — peak-hour slammer: all samples, one low SH pulse.
+      fourFloor(seq, 122); backbeat(seq, 114);
+      hit(seq, BD, 7, 98, 80); hit(seq, BD, 23, 102, 86);
+      hit(seq, CP, 4, 110); hit(seq, CP, 12, 110);
+      hit(seq, CP, 20, 112); hit(seq, CP, 28, 114);
+      const uint8_t oh[] = {2,6,10,14,18,22,26,30}; hits(seq, OH, oh, 74, -6);
+      const uint8_t h[] = {1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31};
+      hits(seq, CH, h, 52, -9);
+      hit(seq, RS, 11, 58, 76); hit(seq, RS, 27, 62, 82);
+      hit(seq, CY, 0, 96);
+      melodicHit(seq, LC, 0, 29, 58); melodicHit(seq, LC, 10, 29, 46, 0, 80);
+      melodicHit(seq, LC, 16, 29, 60); melodicHit(seq, LC, 26, 32, 50, 0, 76);
       break;
     }
     case 11: { // Organ Dust — raw sample house with quiet WT chord stabs.
@@ -292,15 +311,19 @@ void buildPattern(Sequencer& seq, int p) {
       hit(seq, LT, 29, 48, 58); hit(seq, MT, 30, 56, 66); hit(seq, HT, 31, 64, 76);
       break;
     }
-    case 12: { // Night Bus — skipping hats, two-step drums and a low SH response.
-      const uint8_t k[] = {0,7,10,16,22,26,31};
-      const uint8_t c[] = {4,12,20,28};
-      const uint8_t h[] = {1,3,6,9,11,14,17,19,22,25,27,30};
-      hits(seq, BD, k, 114); hits(seq, CP, c, 106); hits(seq, CH, h, 53, -10);
-      hit(seq, SD, 11, 38, 50); hit(seq, SD, 19, 42, 58); hit(seq, OH, 31, 68, 84);
-      melodicHit(seq, MC, 0, 29, 76); melodicHit(seq, MC, 7, 36, 62);
-      melodicHit(seq, MC, 16, 27, 78); melodicHit(seq, MC, 22, 39, 64, 0, 84);
-      melodicHit(seq, LC, 14, 67, 42, 0, 66); melodicHit(seq, LC, 30, 70, 48, 0, 76);
+    case 12: { // XIII. Rupture — hard sample breaks, 909 ride glue, quiet SH bass.
+      const uint8_t k[] = {0,3,10,16,19,26,29};
+      const uint8_t s[] = {4,12,20,28};
+      const uint8_t h[] = {0,2,5,7,8,10,13,16,18,21,23,24,26,29};
+      hits(seq, BD, k, 120); hits(seq, SD, s, 116); hits(seq, CH, h, 60, -10);
+      hit(seq, SD, 7, 44, 56); hit(seq, SD, 15, 48, 62); hit(seq, SD, 23, 44, 58);
+      hit(seq, SD, 30, 88, 100, 2);
+      hit(seq, OH, 15, 76); hit(seq, OH, 31, 80);
+      const uint8_t ride[] = {0,8,16,24}; hits(seq, CY, ride, 54, -6);
+      hit(seq, CL, 6, 48, 78); hit(seq, CL, 22, 52, 84);
+      hit(seq, LT, 30, 70); hit(seq, MT, 31, 80, 100, 2);
+      melodicHit(seq, LC, 0, 29, 62); melodicHit(seq, LC, 8, 32, 52, 0, 84);
+      melodicHit(seq, LC, 16, 29, 64); melodicHit(seq, LC, 24, 27, 54, 0, 84);
       break;
     }
     case 13: { // Afterglow — slow sample pocket and barely-there harmonic light.
@@ -334,8 +357,8 @@ void buildPattern(Sequencer& seq, int p) {
       hit(seq, CY, 0, 48); hit(seq, CY, 16, 42, 72);
       melodicHit(seq, MC, 6, 48, 52, 0, 74); melodicHit(seq, MC, 14, 55, 58, 0, 80);
       melodicHit(seq, MC, 22, 51, 54, 0, 76); melodicHit(seq, MC, 30, 58, 62, 0, 84);
-      melodicHit(seq, LC, 0, 29, 78); melodicHit(seq, LC, 10, 32, 64);
-      melodicHit(seq, LC, 16, 27, 80); melodicHit(seq, LC, 27, 36, 68);
+      melodicHit(seq, LC, 0, 29, 70); melodicHit(seq, LC, 10, 32, 64);
+      melodicHit(seq, LC, 16, 27, 72); melodicHit(seq, LC, 27, 36, 68);
       sampleMotion(seq, CH, 6200, 10800, 8);
       break;
     }

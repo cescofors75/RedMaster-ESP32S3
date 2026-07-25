@@ -465,6 +465,15 @@ void dsqUploadPattern(int masterPattern) {
 
 // CORE 1: Sequencer UI + SPI Master
 // El secuenciador corre en Daisy Seed; aquí solo actualizamos estado UI y LFO.
+// En Arduino/IDF algunas tareas (y loopTask en ciertas configuraciones) ya no
+// quedan suscritas al TWDT. reset() desde una tarea ajena no alimenta nada y
+// además escribe "task not found" por UART, lo que roba tiempo al Wi-Fi.
+static inline void feedTaskWdtIfSubscribed() {
+    if (esp_task_wdt_status(NULL) == ESP_OK) {
+        esp_task_wdt_reset();
+    }
+}
+
 void spiAudioTask(void *pvParameters) {
     esp_task_wdt_add(NULL);  // subscribe to TWDT
 
@@ -569,7 +578,7 @@ void spiAudioTask(void *pvParameters) {
         }
 #endif
 
-        esp_task_wdt_reset();
+        feedTaskWdtIfSubscribed();
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
@@ -610,7 +619,7 @@ void systemTask(void *pvParameters) {
         }
         
         vTaskDelay(pdMS_TO_TICKS(2)); // 500Hz system loop - mínima latencia WiFi
-        esp_task_wdt_reset();
+        feedTaskWdtIfSubscribed();
     }
 }
 
@@ -814,10 +823,10 @@ void setup() {
     sampleManager.begin();
     syslog("BOOT", "SampleManager OK, heap=%u", ESP.getFreeHeap());
 
-    // Daisy-first: cargar kit por defecto desde SD del Daisy.
-    // Reintenta hasta 3 veces para asegurar que la Daisy recibe el comando
-    // (acabamos de despertar, la cola SPI puede estar caliente).
-    {
+    // Preparar la carga del kit, pero ejecutarla DESPUES de levantar WiFi/web.
+    // En el peor caso esta verificacion espera 8 s; no debe ocultar el SSID ni
+    // bloquear la primera pantalla de una demo.
+    auto loadDefaultKitAfterNetwork = []() {
         const char* defaultKit = "RED 808 KARZ";
         bool sdOk = false;
         int loadedMainPads = -1;
@@ -919,7 +928,7 @@ void setup() {
                        missingCount, missingList);
             }
         }
-    }
+    };
 
     // 4. Sequencer Setup
     // Daisy es la única autoridad temporal: dispara samples y sintetizadores
@@ -948,14 +957,18 @@ void setup() {
     // 5. WiFi: STA (casa) + AP (RED808 fallback)
     
     showWiFiLED();
-    delay(500);
+    delay(50);
     
     if (webInterface.begin(AP_SSID, AP_PASSWORD,
                            HOME_WIFI_SSID, HOME_WIFI_PASS,
                            HOME_WIFI_TIMEOUT)) {
         showWebServerLED();
-        delay(500);
+        delay(50);
     }
+
+    // AsyncWebServer ya puede entregar la portada mientras la Daisy termina
+    // de verificar/cargar los samples del kit por defecto.
+    loadDefaultKitAfterNetwork();
 
     // Cargar el banco "20 Bangers 808" desde LittleFS encima del banco
     // integrado de 16. Si el archivo no existe (fs sin subir), se mantiene
@@ -1275,7 +1288,7 @@ void setup() {
 }
 
 void loop() {
-    esp_task_wdt_reset();   // feed TWDT every iteration
+    feedTaskWdtIfSubscribed();  // loopTask puede no estar suscrito por Arduino
     drainPadTriggerAutoOff(); // release expired pad-trigger voices
     vTaskDelay(pdMS_TO_TICKS(100)); // loop() no hace nada crítico
 }

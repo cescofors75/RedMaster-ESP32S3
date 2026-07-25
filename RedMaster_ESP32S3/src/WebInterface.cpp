@@ -861,7 +861,7 @@ static bool readWavInfo(File& file, uint32_t& rate, uint16_t& channels, uint16_t
 static void sendWebAsset(AsyncWebServerRequest *request,
                          const char* routePath,
                          const char* contentType,
-                         const char* cacheControl = "no-cache") {
+                         const char* = nullptr) {
   String fsPath = "/web";
   fsPath += routePath;
 
@@ -876,31 +876,14 @@ static void sendWebAsset(AsyncWebServerRequest *request,
     return;
   }
 
-  // ── ETag + 304: la web cargaba LENTA porque cada visita re-descargaba
-  // ~250KB (app.js 72KB, style.css 47KB...) desde LittleFS con no-cache pelado.
-  // ETag barato = tamaño del fichero en hex (cambia con cualquier edición real
-  // tras gzip; colisión tamaño-idéntico es rarísima y Ctrl+F5 la salva).
-  // Con If-None-Match coincidente devolvemos 304 vacío: la recarga pasa de
-  // ~250KB re-servidos por LittleFS a ~14 respuestas de cabecera.
-  File probe = LittleFS.open(hasGz ? fsPath + ".gz" : fsPath, "r");
-  String etag;
-  if (probe) {
-    etag = "\"" + String(probe.size(), HEX) + "\"";
-    probe.close();
-    if (request->hasHeader("If-None-Match") &&
-        request->header("If-None-Match") == etag) {
-      AsyncWebServerResponse *notModified = request->beginResponse(304);
-      notModified->addHeader("ETag", etag);
-      notModified->addHeader("Cache-Control", cacheControl);
-      request->send(notModified);
-      return;
-    }
-  }
-
   AsyncWebServerResponse *response = request->beginResponse(LittleFS, fsPath, contentType);
-  response->addHeader("Cache-Control", cacheControl);
-  response->addHeader("Vary", "Accept-Encoding");
-  if (etag.length()) response->addHeader("ETag", etag);
+  // AsyncFileResponse añade ETag/no-cache automáticamente para gzip. Los
+  // retiramos: la interfaz del instrumento siempre sale fresca de LittleFS.
+  response->removeHeader("ETag");
+  response->removeHeader("Cache-Control");
+  response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  response->addHeader("Pragma", "no-cache");
+  response->addHeader("Expires", "0");
   request->send(response);
 }
 
@@ -914,6 +897,24 @@ static void appendPatternMetadata(JsonDocument& doc, int pattern) {
   doc["swing"] = metadata.swing;
   doc["humanizeTimingMs"] = metadata.humanizeTimingMs;
   doc["humanizeVelocity"] = metadata.humanizeVelocity;
+}
+
+static void writeRaydroneConfig(JsonObject target,
+                                const RaydroneConfigPayload& config) {
+  target["version"] = config.version;
+  target["active"] = (config.flags & RAYDRONE_FLAG_ACTIVE) != 0;
+  target["material"] = config.material;
+  target["character"] = config.character;
+  target["motion"] = config.motion;
+  target["space"] = config.space;
+  target["volume"] = config.volume;
+  target["mix"] = config.mix;
+  target["evolution"] = config.evolution;
+}
+
+static void appendRaydroneState(JsonObject fx) {
+  JsonObject raydrone = fx.createNestedObject("raydrone");
+  writeRaydroneConfig(raydrone, spiMaster.getRaydroneConfig());
 }
 
 static void populateStateDocument(JsonDocument& doc) {
@@ -960,6 +961,9 @@ static void populateStateDocument(JsonDocument& doc) {
   doc["humanizeTimingMs"] = sequencer.getHumanizeTimingMs();
   doc["humanizeVelocity"] = sequencer.getHumanizeVelocityAmount();
   doc["heap"] = ESP.getFreeHeap();
+
+  JsonObject fx = doc.createNestedObject("fx");
+  appendRaydroneState(fx);
 
   JsonArray loopActive = doc.createNestedArray("loopActive");
   JsonArray loopPaused = doc.createNestedArray("loopPaused");
@@ -1327,105 +1331,130 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   
   server->addHandler(ws);
   
-  // Servir archivos grandes con gzip explícito para máximo rendimiento
+  // La raíz siempre es el estudio completo. Su CSS/JS se entrega de forma
+  // serializada por el build para no saturar LittleFS/AsyncTCP.
   server->on("/", HTTP_GET, [this](AsyncWebServerRequest *request){
-    // Pause periodic broadcasts during page transition to free TCP/Core0
+    // La primera carga abre LittleFS, AsyncTCP y el WebSocket en pocos
+    // segundos. Mantener las emisiones periódicas apagadas durante toda esa
+    // ventana evita que compitan por el mismo core/TCP con la portada.
     pageTransitionMs = millis();
-    sendWebAsset(request, "/index.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/index.html", "text/html", "no-cache");
+  });
+
+  server->on("/studio", HTTP_GET, [](AsyncWebServerRequest *request){
+    pageTransitionMs = millis();
+    sendWebAsset(request, "/index.html", "text/html", "no-cache");
+  });
+
+  // Acceso opcional de emergencia para la demo: una sola respuesta gzip.
+  server->on("/demo", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
   });
 
   
   server->on("/index.html", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/index.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/index.html", "text/html", "no-cache");
   });
   
   server->on("/app.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/app.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/app.js", "application/javascript");
+  });
+
+  server->on("/raydrone-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/raydrone-ui.js", "application/javascript");
   });
 
   // Navegación común + indicador de conexión (cargado por todas las páginas)
   server->on("/nav.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/nav.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/nav.js", "application/javascript");
+  });
+
+  server->on("/i18n.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/i18n.js", "application/javascript");
   });
 
   server->on("/sample-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/sample-editor.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/sample-editor.js", "application/javascript");
   });
 
   server->on("/sd-browser.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/sd-browser.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/sd-browser.js", "application/javascript");
   });
 
   server->on("/midi-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/midi-ui.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/midi-ui.js", "application/javascript");
   });
   
   server->on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/style.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/style.css", "text/css");
   });
 
   server->on("/daisy-controls.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/daisy-controls.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/daisy-controls.css", "text/css");
   });
 
   server->on("/responsive.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/responsive.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/responsive.css", "text/css");
   });
 
   server->on("/ui-2026.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/ui-2026.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/ui-2026.css", "text/css");
   });
 
   server->on("/workspace-2026.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/workspace-2026.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/workspace-2026.css", "text/css");
   });
 
   server->on("/studio-workspaces.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/studio-workspaces.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/studio-workspaces.css", "text/css");
   });
 
   server->on("/theme-sync.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/theme-sync.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/theme-sync.js", "application/javascript");
   });
 
   server->on("/workspace-ui.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/workspace-ui.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/workspace-ui.js", "application/javascript");
+  });
+
+  server->on("/raydrone.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/raydrone.css", "text/css");
   });
 
   server->on("/theme-vars.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/theme-vars.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/theme-vars.css", "text/css");
   });
   
   server->on("/keyboard-controls.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/keyboard-controls.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/keyboard-controls.js", "application/javascript");
   });
   
   server->on("/keyboard-styles.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/keyboard-styles.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/keyboard-styles.css", "text/css");
   });
   
   server->on("/midi-import.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/midi-import.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/midi-import.js", "application/javascript");
   });
   
   server->on("/chat-agent.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/chat-agent.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/chat-agent.js", "application/javascript");
   });
   
   server->on("/waveform-visualizer.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/waveform-visualizer.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/waveform-visualizer.js", "application/javascript");
   });
 
   server->on("/synth-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/synth-editor.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/synth-editor.js", "application/javascript");
   });
 
   server->on("/export-pattern.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/export-pattern.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/export-pattern.js", "application/javascript");
   });
 
   server->on("/melody-editor.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/melody-editor.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/melody-editor.js", "application/javascript");
   });
   
   // Patchbay page
@@ -1436,11 +1465,11 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
   
   server->on("/patchbay.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/patchbay.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/patchbay.css", "text/css");
   });
   
   server->on("/patchbay.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/patchbay.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/patchbay.js", "application/javascript");
   });
 
   // Multiview page — redirect to .html served by serveStatic (avoids AsyncFileResponse 500 edge case)
@@ -1453,72 +1482,80 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
   });
 
   server->on("/multiview.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/multiview.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/multiview.css", "text/css");
   });
   
   server->on("/multiview.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/multiview.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/multiview.js", "application/javascript");
   });
 
   // Live gesture page
   server->on("/gesture", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/gesture.html", "text/html", "no-cache");
   });
 
   server->on("/gesture.html", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/gesture.html", "text/html", "no-cache");
   });
 
   server->on("/gesture-pro", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture-pro.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/gesture-pro.html", "text/html", "no-cache");
   });
 
   server->on("/gesture-pro.html", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture-pro.html", "text/html", "no-cache, no-store, must-revalidate");
+    sendWebAsset(request, "/gesture-pro.html", "text/html", "no-cache");
+  });
+
+  server->on("/gesture-pro.css", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/gesture-pro.css", "text/css");
+  });
+
+  server->on("/gesture-pro.js", HTTP_GET, [](AsyncWebServerRequest *request){
+    sendWebAsset(request, "/gesture-pro.js", "application/javascript");
   });
 
   server->on("/gesture.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/gesture.js", "application/javascript");
   });
 
   server->on("/gesture-styles.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/gesture-styles.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/gesture-styles.css", "text/css");
   });
 
   // Mobile page — los assets existían en el FS pero no había ruta que los
   // sirviera (solo era accesible vía bridge externo). Con esto /mobile
   // funciona directo desde el ESP32 y entra en la navegación común.
   server->on("/mobile", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.html", "text/html", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
   });
 
   server->on("/mobile.html", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.html", "text/html", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/mobile.html", "text/html", "no-cache");
   });
 
   server->on("/mobile.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/mobile.css", "text/css");
   });
 
   server->on("/mobile.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/mobile.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/mobile.js", "application/javascript");
   });
 
   // Admin page
   server->on("/adm", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/admin.html", "text/html", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/admin.html", "text/html", "no-cache");
   });
 
   server->on("/admin.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/admin.css", "text/css", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/admin.css", "text/css");
   });
 
   server->on("/admin.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/admin.js", "application/javascript", "public, max-age=86400, must-revalidate");
+    sendWebAsset(request, "/admin.js", "application/javascript");
   });
 
   server->on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *request){
-    sendWebAsset(request, "/favicon.ico", "image/svg+xml", "max-age=86400, immutable");
+    sendWebAsset(request, "/favicon.ico", "image/svg+xml");
   });
 
   // 404 para rutas desconocidas: evita que el navegador quede bloqueado esperando respuesta
@@ -1587,11 +1624,20 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
       request->send(400, "application/json", "{\"error\":\"bad_pattern\"}");
       return;
     }
-    DynamicJsonDocument doc(4096);
+    // NOTE: 4096 bytes is only enough for a handful of 16-step tracks. With
+    // 16 tracks the ArduinoJson v6 pool (fixed-size, no auto-grow) filled up
+    // partway through the loop below and silently dropped further add()
+    // calls -- the last track(s) serialized as empty arrays even though the
+    // sequencer had steps programmed there. The P4 (which polls this exact
+    // endpoint over HTTP for pattern sync) then rendered that track blank
+    // while the web UI, which gets patterns via the properly-sized WS
+    // "selectPattern" JSON, showed it correctly. Match that sizing here.
+    int stepCount = sequencer.getPatternLength();
+    DynamicJsonDocument doc(stepCount > 16 ? 32768 : 14336);
     
     for (int track = 0; track < 16; track++) {
       JsonArray trackSteps = doc.createNestedArray(String(track));
-      for (int step = 0; step < sequencer.getPatternLength(); step++) {
+      for (int step = 0; step < stepCount; step++) {
         trackSteps.add(sequencer.getStep(pattern, track, step));
       }
     }
@@ -1638,6 +1684,14 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     request->send(200, "application/json", "{\"ok\":true}");
   });
 
+  server->on("/api/state", HTTP_GET, [](AsyncWebServerRequest *request){
+    PsramJsonDocument doc(8192);
+    populateStateDocument(doc);
+    String output;
+    serializeJson(doc, output);
+    request->send(200, "application/json", output);
+  });
+
   server->on("/api/p4State", HTTP_GET, [](AsyncWebServerRequest *request){
     StaticJsonDocument<4096> doc;
     SdStatusResponse sdStat = {};
@@ -1680,6 +1734,7 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     fx["reverbMix"] = gMasterReverbMix;
     fx["phaserActive"] = gMasterPhaserActive;
     fx["phaserDepth"] = gMasterPhaserDepth;
+    appendRaydroneState(fx);
 
     String output;
     serializeJson(doc, output);
@@ -2028,7 +2083,9 @@ refresh();if(auto_)startAuto();
     if (LittleFS.exists("/buttons.json")) {
       AsyncWebServerResponse *resp = request->beginResponse(
           LittleFS, "/buttons.json", "application/json");
-      resp->addHeader("Cache-Control", "public, max-age=86400, must-revalidate");
+      resp->removeHeader("ETag");
+      resp->removeHeader("Cache-Control");
+      resp->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
       request->send(resp);
     } else {
       // Devolver config por defecto si no hay archivo guardado
@@ -2456,6 +2513,9 @@ void WebInterface::releaseWsReassemblySlot(WsReassemblySlot* slot) {
 void WebInterface::onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
                                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
   if (type == WS_EVT_CONNECT) {
+    // El navegador acaba de descargar la shell. No inundar AsyncTCP con los
+    // picos y el estado periódico mientras termina de pedir app.js.
+    pageTransitionMs = millis();
     // ⚠️ LÍMITE DE 3 CLIENTES para estabilidad
     if (ws->count() > 3) {
       client->close(1008, "Max clients reached");
@@ -3052,6 +3112,7 @@ void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
   fx["reverbActive"] = spiMaster.isReverbActive();
   fx["reverbMix"] = gMasterReverbMix;
   fx["chorusActive"] = spiMaster.isChorusActive();
+  appendRaydroneState(fx);
 
   JsonArray trackFilters = fx.createNestedArray("trackFilters");
   JsonArray trackReverbSend = fx.createNestedArray("trackReverbSend");
@@ -3137,6 +3198,25 @@ void WebInterface::broadcastUdpMasterFx(const char* param, float value) {
   doc["type"] = "masterFx";
   doc["param"] = param;
   doc["value"] = value;
+  for (auto& entry : udpClients) {
+    sendUdpJsonTo(entry.second.ip, entry.second.port, doc);
+    yield();
+  }
+}
+
+void WebInterface::broadcastUdpRaydrone(
+    const RaydroneConfigPayload& config,
+    uint8_t updateMask,
+    uint32_t requestId,
+    bool accepted) {
+  if (udpClients.empty()) return;
+  StaticJsonDocument<256> doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["type"] = "raydrone";
+  root["ok"] = accepted;
+  root["updateMask"] = updateMask;
+  if (requestId != 0) root["requestId"] = requestId;
+  writeRaydroneConfig(root, config);
   for (auto& entry : udpClients) {
     sendUdpJsonTo(entry.second.ip, entry.second.port, doc);
     yield();
@@ -3364,6 +3444,15 @@ void WebInterface::update() {
 
   unsigned long now = millis();
 
+  // Toda emisión WebSocket no esencial queda quieta durante el primer render.
+  // Antes este flag se calculaba DESPUÉS de enviar steps/songPattern, de modo
+  // que un patrón en PLAY podía llenar la cola mientras aún salían CSS/JS.
+  constexpr unsigned long kPageTransitionQuietMs = 6000;
+  bool pageLoading = (pageTransitionMs != 0 && (now - pageTransitionMs) < kPageTransitionQuietMs);
+  if (pageTransitionMs != 0 && (now - pageTransitionMs) >= kPageTransitionQuietMs) {
+    pageTransitionMs = 0;
+  }
+
   pumpDaisyUpload();
   pumpCleanTrackStream();
   pumpPadTransfer();
@@ -3428,10 +3517,10 @@ void WebInterface::update() {
 
   // ── Consume deferred broadcasts from Core1 (thread-safe: only ws access from Core0) ──
   int step = _pendingBroadcastStep;
-  if (step >= 0 && ws->count() > 0) {
+  if (step >= 0) {
     _pendingBroadcastStep = -1;
     static unsigned long lastStepBroadcast = 0;
-    if (now - lastStepBroadcast >= 80 || step == 0) {
+    if (!pageLoading && ws->count() > 0 && (now - lastStepBroadcast >= 80 || step == 0)) {
       lastStepBroadcast = now;
       char buf[32];
       int len = snprintf(buf, sizeof(buf), "{\"type\":\"step\",\"step\":%d}", step);
@@ -3439,26 +3528,19 @@ void WebInterface::update() {
     }
   }
   int songPat = _pendingSongPattern;
-  if (songPat >= 0 && ws->count() > 0) {
+  if (songPat >= 0) {
     _pendingSongPattern = -1;
     int songLen = _pendingSongLength;
-    char buf[80];
-    int len = snprintf(buf, sizeof(buf),
-      "{\"type\":\"songPattern\",\"pattern\":%d,\"songLength\":%d}",
-      songPat, songLen);
-    ws->textAll(buf, len);
+    if (!pageLoading && ws->count() > 0) {
+      char buf[80];
+      int len = snprintf(buf, sizeof(buf),
+        "{\"type\":\"songPattern\",\"pattern\":%d,\"songLength\":%d}",
+        songPat, songLen);
+      ws->textAll(buf, len);
+    }
     broadcastUdpSongPattern(songPat, songLen);
-  } else if (songPat >= 0) {
-    _pendingSongPattern = -1;
-    broadcastUdpSongPattern(songPat, _pendingSongLength);
   }
 
-  // Skip periodic broadcasts during page transitions (2s window)
-  bool pageLoading = (pageTransitionMs != 0 && (now - pageTransitionMs) < 2000);
-  if (pageTransitionMs != 0 && (now - pageTransitionMs) >= 2000) {
-    pageTransitionMs = 0;  // clear flag
-  }
-  
   // Broadcast audio levels for all WS clients (main UI + /adm)
   static unsigned long lastAudioLevels = 0;
   if (!pageLoading && now - lastAudioLevels >= 150 && ws->count() > 0) {
@@ -3613,6 +3695,7 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
   // ── Heap guard: si queda poca memoria, descartamos el comando ──
   if (ESP.getFreeHeap() < 20000) {
     syslog("CMD", "DROPPED cmd heap=%u", ESP.getFreeHeap());
+    if (handled) *handled = false;
     // Avisar a la UI: comandos request/response (getPattern, etc.) quedaban
     // colgados sin respuesta y la web parecia congelada. String estatico,
     // sin allocs intermedios significativos.
@@ -4345,6 +4428,76 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
     if (ws) ws->textAll(out);
     broadcastUdpMasterFx("sampleRate", (float)rate);
     broadcastUdpStateSync();
+  }
+  else if (cmd == "setRaydrone") {
+    RaydroneConfigPayload patch = {};
+    patch.version = RAYDRONE_CONFIG_VERSION;
+    uint8_t updateMask = 0;
+    const uint32_t requestId =
+      doc.containsKey("requestId") ? doc["requestId"].as<uint32_t>() : 0u;
+    const bool versionSupported =
+      !doc.containsKey("version") ||
+      doc["version"].as<int>() == RAYDRONE_CONFIG_VERSION;
+
+    if (doc.containsKey("active")) {
+      if (doc["active"].as<bool>()) {
+        patch.flags = RAYDRONE_FLAG_ACTIVE;
+      }
+      updateMask |= RAYDRONE_UPDATE_ACTIVE;
+    }
+    if (doc.containsKey("material")) {
+      patch.material = (uint8_t)constrain(
+        doc["material"].as<int>(), 0, RAYDRONE_MATERIAL_COUNT - 1);
+      updateMask |= RAYDRONE_UPDATE_MATERIAL;
+    }
+    if (doc.containsKey("character")) {
+      patch.character =
+        (uint8_t)constrain(doc["character"].as<int>(), 0, RAYDRONE_CHARACTER_SAFE_MAX);
+      updateMask |= RAYDRONE_UPDATE_CHARACTER;
+    }
+    if (doc.containsKey("motion")) {
+      patch.motion = (uint8_t)constrain(doc["motion"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_MOTION;
+    }
+    if (doc.containsKey("space")) {
+      patch.space = (uint8_t)constrain(doc["space"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_SPACE;
+    }
+    if (doc.containsKey("volume")) {
+      patch.volume = (uint8_t)constrain(doc["volume"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_VOLUME;
+    }
+    if (doc.containsKey("mix")) {
+      patch.mix = (uint8_t)constrain(doc["mix"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_MIX;
+    }
+    if (doc.containsKey("evolution")) {
+      patch.evolution = (uint8_t)constrain(doc["evolution"].as<int>(), 0, 100);
+      updateMask |= RAYDRONE_UPDATE_EVOLUTION;
+    }
+
+    const bool accepted =
+      versionSupported &&
+      (updateMask == 0 ||
+       spiMaster.updateRaydroneConfig(patch, updateMask));
+    const RaydroneConfigPayload applied = spiMaster.getRaydroneConfig();
+
+    StaticJsonDocument<384> resp;
+    resp["type"] = "masterFx";
+    resp["param"] = "raydrone";
+    resp["ok"] = accepted;
+    resp["updateMask"] = updateMask;
+    if (requestId != 0) resp["requestId"] = requestId;
+    JsonObject raydrone = resp.createNestedObject("raydrone");
+    writeRaydroneConfig(raydrone, applied);
+    String out;
+    serializeJson(resp, out);
+    if (ws) ws->textAll(out);
+
+    if (accepted || requestId != 0) {
+      broadcastUdpRaydrone(applied, updateMask, requestId, accepted);
+    }
+    if (!accepted && handled) *handled = false;
   }
   // ============= NEW: Master Effects Commands =============
   else if (cmd == "setDelayActive") {
@@ -6225,7 +6378,12 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
   else if (cmd == "setMasterFxRoute") {
     uint8_t fxId = doc["fxId"] | 0;
     bool connected = doc["connected"] | false;
-    spiMaster.setMasterFxRoute(fxId, connected);
+    if (fxId == MASTER_FX_ROUTE_RAYDRONE) {
+      // Raydrone route stays connected; its atomic ACTIVE bit owns bypass.
+      if (handled) *handled = false;
+    } else {
+      spiMaster.setMasterFxRoute(fxId, connected);
+    }
   }
 
   // {"cmd":"setAutoWahActive","active":true}
@@ -6458,8 +6616,13 @@ void WebInterface::handleUdp() {
     s_udpReplyIp = IPAddress(0, 0, 0, 0);
     s_udpReplyPort = 0;
     udp.beginPacket(remoteIp, remotePort);
-    if (commandHandled) udp.print("{\"s\":\"ok\"}");
-    else udp.print("{\"s\":\"err\",\"m\":\"unknown_command\"}");
+    if (commandHandled) {
+      udp.print("{\"s\":\"ok\"}");
+    } else if (strcmp(cmd, "setRaydrone") == 0) {
+      udp.print("{\"s\":\"err\",\"m\":\"rejected\"}");
+    } else {
+      udp.print("{\"s\":\"err\",\"m\":\"unknown_command\"}");
+    }
     udp.endPacket();
     if (commandHandled && syncAfter) {
       sendUdpStateSync(remoteIp, remotePort);

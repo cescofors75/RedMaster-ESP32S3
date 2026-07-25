@@ -5,6 +5,8 @@ let ws = null;
 let isConnected = false;
 let wsRetryTimer = null;
 let wsRetryCount = 0;
+let wsStableTimer = null;
+let initialSampleCountsRequested = false;
 const WS_RETRY_BASE_MS = 1500;
 const WS_RETRY_MAX_MS = 15000;
 let currentStep = 0;
@@ -338,18 +340,19 @@ function showNotification(message) {}
 // ESP32 WiFi AP can only handle ~2 concurrent HTTP transfers reliably.
 // Loading all scripts at once (8 files, ~178KB gzipped) causes TCP congestion.
 // Instead, we load feature modules sequentially AFTER the page renders.
-const DEFERRED_ASSET_VERSION = '20260712c';
 function _loadScript(src) {
     return new Promise(resolve => {
         const s = document.createElement('script');
-        s.src = `${src}?v=${DEFERRED_ASSET_VERSION}`;
+        s.src = src;
         s.onload = resolve;
         s.onerror = () => { console.warn('[Loader] Failed:', src); resolve(); };
         document.body.appendChild(s);
     });
 }
 
-async function loadDeferredModules() {
+let deferredModulesPromise = null;
+function loadDeferredModules() {
+    if (deferredModulesPromise) return deferredModulesPromise;
     const modules = [
         'keyboard-controls.js',
         'waveform-visualizer.js',
@@ -358,18 +361,39 @@ async function loadDeferredModules() {
         'export-pattern.js',
         'melody-editor.js'
     ];
-    for (const src of modules) {
-        await _loadScript(src);
-    }
-    // Initialize modules that need explicit init
-    if (window.initKeyboardControls) window.initKeyboardControls();
-    if (typeof initSynthEditor === 'function') initSynthEditor();
-    if (window.initMelodyEditor) window.initMelodyEditor();
-    console.log('[Loader] All deferred modules loaded');
+    deferredModulesPromise = (async () => {
+        // Una única lectura LittleFS cada vez: los editores son diferidos y no
+        // deben competir entre sí ni con el WebSocket.
+        for (const module of modules) await _loadScript(module);
+        if (window.initKeyboardControls) window.initKeyboardControls();
+        if (typeof initSynthEditor === 'function') initSynthEditor();
+        if (window.initMelodyEditor) window.initMelodyEditor();
+        console.log('[Loader] Deferred modules ready');
+    })();
+    return deferredModulesPromise;
 }
 
-// Initialize
-document.addEventListener('DOMContentLoaded', () => {
+function installDeferredFunctionProxy(name) {
+    const proxy = function(...args) {
+        return loadDeferredModules().then(() => {
+            const implementation = window[name];
+            if (typeof implementation === 'function' && implementation !== proxy) {
+                return implementation(...args);
+            }
+        });
+    };
+    window[name] = proxy;
+}
+
+['showMidiImportDialog', 'showExportDialog', 'showKeyboardHelp']
+    .forEach(installDeferredFunctionProxy);
+
+// Initialize. El bundle de producción puede llegar después de DOMContentLoaded
+// cuando LittleFS serializa CSS y JS; en ese caso hay que arrancar de inmediato.
+let red808AppInitialized = false;
+function initializeRed808App() {
+    if (red808AppInitialized) return;
+    red808AppInitialized = true;
     initWebSocket();
     createPads();
     createSequencer();
@@ -385,9 +409,50 @@ document.addEventListener('DOMContentLoaded', () => {
     initInstrumentTabs();
     initTabSystem();
     initSyncLeds();
-    // Load feature modules sequentially after core UI is ready
-    setTimeout(loadDeferredModules, 200);
-});
+    // Los editores secundarios no compiten con la primera pintura ni con el
+    // arranque del WebSocket. Se anticipan al primer uso y, como respaldo,
+    // se cargan cuando el navegador queda ocioso.
+    document.addEventListener('pointerdown', loadDeferredModules, { once: true, passive: true });
+    window.addEventListener('red808:tabchange', (event) => {
+        if (event.detail?.tabId === 'melody') loadDeferredModules();
+    });
+    if ('requestIdleCallback' in window) {
+        requestIdleCallback(loadDeferredModules, { timeout: 5000 });
+    } else {
+        setTimeout(loadDeferredModules, 3000);
+    }
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeRed808App, { once: true });
+} else {
+    // El optimizador concatena varios módulos. Esperar al final del job actual
+    // evita ejecutar antes de que los `let` situados más abajo estén creados.
+    Promise.resolve().then(initializeRed808App);
+}
+
+// Sincronizar el estado pesado sólo cuando la shell está completamente pintada.
+// Antes se pedían init/getPattern/counts a 50/150/500 ms y sus respuestas
+// competían en Core 0 con los últimos CSS/JS del primer render.
+function scheduleInitialDeviceSync(socket) {
+    const beginSync = () => {
+        if (socket !== ws || socket.readyState !== WebSocket.OPEN) return;
+        setTimeout(() => { sendWebSocket({ cmd: 'init' }); }, 100);
+        setTimeout(() => { sendWebSocket({ cmd: 'getPattern' }); }, 900);
+        if (initialSampleCountsRequested) return;
+        initialSampleCountsRequested = true;
+        const requestCounts = () => {
+            if (socket === ws && socket.readyState === WebSocket.OPEN) requestSampleCounts();
+        };
+        if ('requestIdleCallback' in window) {
+            requestIdleCallback(requestCounts, { timeout: 3500 });
+        } else {
+            setTimeout(requestCounts, 2500);
+        }
+    };
+
+    if (document.readyState === 'complete') beginSync();
+    else window.addEventListener('load', beginSync, { once: true });
+}
 
 // WebSocket Connection
 function initWebSocket() {
@@ -401,17 +466,19 @@ function initWebSocket() {
     ws.onopen = () => {
         console.log('[WS] Connected', wsUrl);
         isConnected = true;
-        wsRetryCount = 0;
+        clearTimeout(wsStableTimer);
+        // No declarar estable una conexión que abre y cae bajo presión. Así el
+        // backoff sigue creciendo y no repite init/getPattern en bucle rápido.
+        wsStableTimer = setTimeout(() => { wsRetryCount = 0; }, 10000);
         updateStatus(true);
         syncLedMonoMode();
         
-        setTimeout(() => { sendWebSocket({ cmd: 'init' }); }, 100);
-        setTimeout(() => { sendWebSocket({ cmd: 'getPattern' }); }, 300);
-        setTimeout(() => { requestSampleCounts(); }, 1000);
+        scheduleInitialDeviceSync(ws);
     };
     
     ws.onclose = () => {
         console.warn('[WS] Closed', wsUrl);
+        clearTimeout(wsStableTimer);
         isConnected = false;
         updateStatus(false);
         scheduleWebSocketReconnect();
@@ -488,6 +555,9 @@ function handleWebSocketMessage(data) {
         case 'state':
             updateSequencerState(data);
             updateDeviceStats(data);
+            if (data.fx && data.fx.raydrone && typeof window.updateRaydroneUI === 'function') {
+                window.updateRaydroneUI(data.fx.raydrone);
+            }
             if (Array.isArray(data.samples)) {
                 applySampleMetadataFromState(data.samples);
             }
@@ -541,13 +611,9 @@ function handleWebSocketMessage(data) {
             // Fallback minimo del servidor cuando no puede mandar el patron
             // completo (heap bajo): sincronizar al menos indice y nombre.
             if (data.pattern !== undefined) {
-                currentPatternIndex = data.pattern;
                 const psName = data.pattern < PATTERN_NAMES.length
                     ? PATTERN_NAMES[data.pattern] : `PATTERN ${data.pattern + 1}`;
-                const psEl = document.getElementById('currentPatternName');
-                if (psEl) psEl.textContent = psName;
-                const psCirc = document.getElementById('circularPatternName');
-                if (psCirc) psCirc.textContent = psName;
+                applyPatternUiState(data.pattern, psName);
             }
             break;
         case 'songPattern':
@@ -568,15 +634,10 @@ function handleWebSocketMessage(data) {
             (window.loadPatternData || loadPatternData)(data);
             // Actualizar patrón actual si viene el índice
             if (data.index !== undefined) {
-                currentPatternIndex = data.index;
                 const patternName = data.name || (data.index < PATTERN_NAMES.length
                     ? PATTERN_NAMES[data.index]
                     : `PATTERN ${data.index + 1}`);
-                const nameEl = document.getElementById('currentPatternName');
-                if (nameEl) nameEl.textContent = patternName;
-                const circularPatternName = document.getElementById('circularPatternName');
-                if (circularPatternName) circularPatternName.textContent = patternName;
-                updateHeaderPatternDisplay(data.index, patternName);
+                applyPatternUiState(data.index, patternName);
             }
             break;
         case 'sampleCounts':
@@ -760,6 +821,10 @@ function handleWebSocketMessage(data) {
             handleMasterFxUpdate(data);
             break;
 
+        case 'raydrone':
+            if (typeof window.updateRaydroneUI === 'function') window.updateRaydroneUI(data);
+            break;
+
         case 'trackFxUpdate':
             handleTrackFxUpdate(data);
             break;
@@ -885,13 +950,9 @@ function handlePhysButton(data) {
             // Actualizar índice de patrón en la UI sin pedir todo el estado
             const idx = data.pattern;
             if (idx !== undefined) {
-                currentPatternIndex = idx;
                 const PNAMES = (typeof PATTERN_NAMES !== 'undefined' && PATTERN_NAMES.length > idx)
                     ? PATTERN_NAMES[idx] : `PATTERN ${idx + 1}`;
-                const nameEl = document.getElementById('currentPatternName');
-                if (nameEl) nameEl.textContent = PNAMES;
-                const circularEl = document.getElementById('circularPatternName');
-                if (circularEl) circularEl.textContent = PNAMES;
+                applyPatternUiState(idx, PNAMES);
                 // Toast con número de patrón
                 if (window.showToast) {
                     const dir = data.action === 'nextPattern' ? '▶ Siguiente' : '◀ Anterior';
@@ -1151,6 +1212,9 @@ function handleMasterFxUpdate(data) {
     // --- Live Pitch ---
     else if (p === 'livePitch') {
         const sl = byId('livePitchSlider'); if (sl) { sl.value = v; const vd = byId('livePitchValue'); if (vd) vd.textContent = parseFloat(v).toFixed(2); }
+    }
+    if (p === 'raydrone' && data.raydrone && typeof window.updateRaydroneUI === 'function') {
+        window.updateRaydroneUI(data.raydrone);
     }
 }
 
@@ -4400,6 +4464,7 @@ function _applyStepUpdate(step) {
         }
     }
 
+    const prevAppliedStep = lastCurrentStep;
     lastCurrentStep = step;
 
     // === SYNC LEDS: flash live pads in rhythm with sequencer ===
@@ -4408,11 +4473,26 @@ function _applyStepUpdate(step) {
             _cachedPadEls = new Array(16);
             for (let i = 0; i < 16; i++) _cachedPadEls[i] = document.querySelector(`.pad[data-pad="${i}"]`);
         }
+        // WS/rAF coalescing can skip steps under load (only the newest queued
+        // step is applied); flash the skipped ones too so a sounding hit never
+        // stays dark. Capped so a tab wake-up doesn't strobe every pad.
+        const stepsToFlash = [step];
+        if (prevAppliedStep !== null && currentStepCount > 0) {
+            const delta = (step - prevAppliedStep + currentStepCount) % currentStepCount;
+            if (delta > 1 && delta <= 4) {
+                for (let d = 1; d < delta; d++) stepsToFlash.push((prevAppliedStep + d) % currentStepCount);
+            }
+        }
         const flashedPads = [];
         for (let track = 0; track < 16; track++) {
-            if (circularSequencerData[track] && circularSequencerData[track][step]) {
-                const pad = _cachedPadEls[track];
-                if (pad) { pad.classList.add('sync-flash'); flashedPads.push(pad); }
+            const row = circularSequencerData[track];
+            if (!row) continue;
+            for (let si = 0; si < stepsToFlash.length; si++) {
+                if (row[stepsToFlash[si]]) {
+                    const pad = _cachedPadEls[track];
+                    if (pad) { pad.classList.add('sync-flash'); flashedPads.push(pad); }
+                    break;
+                }
             }
         }
         if (flashedPads.length) {
@@ -4908,17 +4988,7 @@ function setupControls() {
             const pattern = parseInt(btn.dataset.pattern);
             const patternName = btn.textContent.trim();
             _lastUserPatternSelectTime = Date.now();
-            currentPatternIndex = pattern;
-
-            // Actualizar display del patrón
-            document.getElementById('currentPatternName').textContent = patternName;
-            updateHeaderPatternDisplay(pattern, patternName);
-
-            // Update circular pattern name
-            const circularPatternName = document.getElementById('circularPatternName');
-            if (circularPatternName) {
-                circularPatternName.textContent = patternName;
-            }
+            applyPatternUiState(pattern, patternName);
 
             // Cambiar pattern directamente por WebSocket
             // El backend envía automáticamente los datos del patrón
@@ -5461,6 +5531,21 @@ function updateHeaderPatternDisplay(index, name) {
     readout.textContent = `P${String(index + 1).padStart(2, '0')} ${patternName}`;
 }
 
+// One renderer for every pattern label. Header, sequencer and circular view
+// must never derive their own names from different packets/fallback tables.
+function applyPatternUiState(index, name) {
+    if (index === undefined || index === null) return;
+    const safeIndex = Math.max(0, Number(index) | 0);
+    const resolved = name || (safeIndex < PATTERN_NAMES.length
+        ? PATTERN_NAMES[safeIndex] : `PATTERN ${safeIndex + 1}`);
+    currentPatternIndex = safeIndex;
+    ['currentPatternName', 'circularPatternName'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = resolved;
+    });
+    updateHeaderPatternDisplay(safeIndex, resolved);
+}
+
 function syncLedMonoMode() {
     const isMono = document.documentElement.dataset.theme === 'greyscale' ||
         document.body.classList.contains('mono-mode');
@@ -5632,16 +5717,11 @@ function updateSequencerState(data) {
         // manda sobre un broadcast que la contradiga durante ese margen.
         const recentLocalSelect = (Date.now() - _lastUserPatternSelectTime) < 600;
         if (currentPatternIndex !== data.pattern && !recentLocalSelect) {
-            currentPatternIndex = data.pattern;
             // Pattern changed, update name and request new data
             const patternName = data.patternMeta?.name || (data.pattern < PATTERN_NAMES.length
                 ? PATTERN_NAMES[data.pattern]
                 : `PATTERN ${data.pattern + 1}`);
-            const nameEl = document.getElementById('currentPatternName');
-            if (nameEl) nameEl.textContent = patternName;
-            const circEl = document.getElementById('circularPatternName');
-            if (circEl) circEl.textContent = patternName;
-            updateHeaderPatternDisplay(data.pattern, patternName);
+            applyPatternUiState(data.pattern, patternName);
             setTimeout(() => {
                 sendWebSocket({ cmd: 'getPattern' });
             }, 100);
@@ -5692,7 +5772,7 @@ function updateSongModeUI(enabled, length, currentPattern) {
             btn.title = `Bar ${i + 1}`;
             btn.addEventListener('click', () => {
                 _lastUserPatternSelectTime = Date.now();
-                currentPatternIndex = i;
+                applyPatternUiState(i, `BAR ${i + 1}`);
                 sendWebSocket({ cmd: 'selectPattern', index: i });
                 // Update local state immediately
                 updateSongBarHighlight(i);
@@ -5720,7 +5800,6 @@ function handleSongPatternChange(pattern, songLen) {
     // Called when ESP32 auto-advances pattern in song mode
     songModeActive = true;
     songLength = songLen;
-    currentPatternIndex = pattern;
     updateSongBarHighlight(pattern);
     
     // Request new pattern data for display
@@ -5728,11 +5807,7 @@ function handleSongPatternChange(pattern, songLen) {
     
     // Update pattern name display
     const patternName = `BAR ${pattern + 1}`;
-    const patternNameEl = document.getElementById('currentPatternName');
-    if (patternNameEl) patternNameEl.textContent = patternName;
-    const circularPatternName = document.getElementById('circularPatternName');
-    if (circularPatternName) circularPatternName.textContent = patternName;
-    updateHeaderPatternDisplay(pattern, patternName);
+    applyPatternUiState(pattern, patternName);
 }
 
 function exitSongMode() {
@@ -5885,6 +5960,17 @@ function setupKeyboardControls() {
         headerPatternNextBtn.addEventListener('click', () => changePattern(1));
     }
 
+    // Same prev/next controls, duplicated next to the pattern name in the
+    // sequencer view so users don't have to reach the header while editing.
+    const patternDisplayPrevBtn = document.getElementById('patternDisplayPrevBtn');
+    if (patternDisplayPrevBtn) {
+        patternDisplayPrevBtn.addEventListener('click', () => changePattern(-1));
+    }
+    const patternDisplayNextBtn = document.getElementById('patternDisplayNextBtn');
+    if (patternDisplayNextBtn) {
+        patternDisplayNextBtn.addEventListener('click', () => changePattern(1));
+    }
+
     const headerPanicBtn = document.getElementById('headerPanicBtn');
     if (headerPanicBtn) {
         headerPanicBtn.addEventListener('click', panicAllNotes);
@@ -5922,7 +6008,6 @@ function changePattern(delta) {
 
 function selectPattern(index) {
     if (index < 0 || index >= 128) return;
-    currentPatternIndex = index;
     _lastUserPatternSelectTime = Date.now();
 
     // Send pattern change to ESP32
@@ -5930,11 +6015,7 @@ function selectPattern(index) {
 
     // Update UI display
     const name = index < PATTERN_NAMES.length ? PATTERN_NAMES[index] : `PATTERN ${index + 1}`;
-    const el = document.getElementById('currentPatternName');
-    if (el) el.textContent = name;
-    const circEl = document.getElementById('circularPatternName');
-    if (circEl) circEl.textContent = name;
-    updateHeaderPatternDisplay(index, name);
+    applyPatternUiState(index, name);
 
     // Los pasos del patrón anterior siguen pintados hasta que llegue la
     // respuesta de getPattern (round-trip WS): atenuar el grid evita que

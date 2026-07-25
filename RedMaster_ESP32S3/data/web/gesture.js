@@ -26,7 +26,7 @@ function apiBaseUrl() {
 }
 
 function wsUrl() {
-  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const proto = 'ws:';
   return `${proto}//${window.location.host}/ws`;
 }
 
@@ -379,71 +379,8 @@ async function toggleCamera() {
     return;
   }
 
-  if (!window.isSecureContext) {
-    setCameraStatus('CAM BLOCKED: insecure origin (use HTTPS or localhost)');
-    alert('Camara bloqueada por el navegador: esta pagina debe abrirse en contexto seguro (HTTPS o localhost).');
-    return;
-  }
-
-  const btnText2 = document.getElementById('camBtnText');
-  if (btnText2) btnText2.textContent = 'Cargando…'; else btn.textContent = 'CARGANDO...';
-  btn.disabled = true;
-
-  try {
-    camStream = await getUserMediaCompat({
-      video: { facingMode: 'user', width: 1280, height: 720 }
-    });
-
-    const video = document.getElementById('videoEl');
-    video.srcObject = camStream;
-    video.classList.add('visible');
-    video.setAttribute('playsinline', 'true');
-    video.muted = true;
-    await waitForVideoReady(video);
-    await video.play().catch(() => {});
-
-    // Cargar MediaPipe desde CDN
-    await loadScripts([
-      'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js'
-    ]);
-
-    mpHands = new window.Hands({
-      locateFile: f =>
-        `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}`
-    });
-
-    mpHands.setOptions({
-      maxNumHands: 2,
-      modelComplexity: 1,
-      minDetectionConfidence: 0.45,
-      minTrackingConfidence: 0.4
-    });
-
-    mpHands.onResults(onHandResults);
-    useCamera = true;
-    document.getElementById('app')?.classList.add('cam-active');
-    startHandFrameLoop(video);
-    const btnText3 = document.getElementById('camBtnText');
-    if (btnText3) btnText3.textContent = 'Detener'; else btn.textContent = '■ DESACTIVAR';
-    btn.classList.add('active');
-    setCameraStatus('CAM READY');
-  } catch (e) {
-    console.warn('Camera error:', e);
-    if (e && (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError')) {
-      setCameraStatus('CAM DENIED: permission rejected');
-      alert('Permiso de camara denegado. Habilitalo en el navegador y vuelve a intentar.');
-    } else if (e && (e.name === 'NotFoundError' || e.name === 'DevicesNotFoundError')) {
-      setCameraStatus('CAM ERROR: no camera device');
-      alert('No se detecto ninguna camara en este dispositivo.');
-    } else {
-      setCameraStatus('CAM ERROR: API unavailable');
-      alert('La camara no esta disponible en este navegador/contexto.');
-    }
-    const btnText4 = document.getElementById('camBtnText');
-    if (btnText4) btnText4.textContent = 'Cámara'; else btn.textContent = '▶ ACTIVAR CÁMARA';
-  }
-
-  btn.disabled = false;
+  setCameraStatus('CAM DISABLED: HTTP LOCAL');
+  alert('La cámara está desactivada: RED808 funciona sólo por HTTP local y sin dependencias externas.');
 }
 
 function onHandResults(res) {

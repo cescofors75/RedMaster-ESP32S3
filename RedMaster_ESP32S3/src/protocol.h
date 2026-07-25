@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include "../../shared/red808_protocol_codes.h"
+#include "../../shared/raydrone_protocol.h"
 
 // ═══════════════════════════════════════════════════════
 // SPI PACKET STRUCTURE

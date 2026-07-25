@@ -260,6 +260,14 @@ public:
     void setLimiterActive(bool active);       // Brick-wall 0dBFS limiter
     bool isLimiterActive() const { return cachedLimiterActive; }
 
+    // MASTER FX — RAYDRONE
+    // The complete 9-byte payload is sent atomically so Daisy never observes
+    // a partially-updated parameter set.
+    bool setRaydroneConfig(const RaydroneConfigPayload& config);
+    bool updateRaydroneConfig(const RaydroneConfigPayload& patch,
+                              uint8_t updateMask);
+    RaydroneConfigPayload getRaydroneConfig() const;
+
     // ══════════════════════════════════════════════════
     // MASTER FX ROUTING
     // ══════════════════════════════════════════════════
@@ -502,6 +510,7 @@ private:
     float cachedTremoloDepth;
     float cachedWaveFolderGain;
     bool  cachedLimiterActive;
+    RaydroneConfigPayload cachedRaydroneConfig;
 
     // New FX cached state
     bool    cachedAutoWahActive;
@@ -558,6 +567,8 @@ private:
     
     // SPI mutex for thread safety (Core0 triggers vs Core1 process)
     SemaphoreHandle_t spiMutex;
+    // Serializes Raydrone read/merge/write across AsyncTCP, UDP and Core1.
+    mutable SemaphoreHandle_t raydroneConfigMutex;
     // Core0 → Core1 fire-and-forget command queue (avoids blocking WS handler)
     QueueHandle_t     spiCmdQueue;
 
@@ -567,6 +578,7 @@ private:
     // SPI low-level
     bool sendCommand(uint8_t cmd, const void* payload, uint16_t payloadLen);
     bool sendCommandDirect(uint8_t cmd, const void* payload, uint16_t payloadLen);
+    bool replayRaydroneConfigDirect();
     void drainCmdQueue();   // Called from Core1 process() loop
     bool sendAndReceive(uint8_t cmd, const void* payload, uint16_t payloadLen,
                         void* response, uint16_t responseLen);

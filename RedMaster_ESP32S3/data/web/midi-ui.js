@@ -341,8 +341,23 @@ function uploadSample(padIndex, file) {
         method: 'POST',
         body: formData
     })
-    .then(response => response.json())
-    .then(data => {
+    .then(response => response.json().then(data => ({ ok: response.ok, data })))
+    .then(({ ok, data }) => {
+        // Server replies 202 ("staged, streaming to Daisy...") on success —
+        // the sample keeps streaming after this response, final confirmation
+        // arrives later via the WS 'uploadComplete' broadcast (handleUploadComplete).
+        // Any non-2xx (400/409/...) means the upload was rejected outright and
+        // no 'uploadComplete' will ever arrive, so we must recover the button here.
+        if (!ok || data.success === false) {
+            if (window.showToast) {
+                window.showToast(`❌ Error al subir archivo: ${data.message || 'unknown error'}`, window.TOAST_TYPES.ERROR, 4000);
+            }
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = '📤';
+            }
+            currentUploadPad = -1;
+        }
     })
     .catch(error => {
         console.error('[Upload] Error:', error);
@@ -650,8 +665,8 @@ async function resetMIDIMapping() {
     }
 }
 
-// Cargar mapeo al abrir la tab MIDI
-document.addEventListener('DOMContentLoaded', () => {
+// Cargar mapeo al abrir la tab MIDI, también cuando el bundle llega tarde.
+function initializeMidiUi() {
     const midiTab = document.querySelector('[data-tab="midi"]');
     if (midiTab) {
         midiTab.addEventListener('click', () => {
@@ -661,4 +676,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (window.location.hash === '#midi' || document.getElementById('tab-midi')?.classList.contains('active')) {
         setTimeout(loadMIDIMapping, 500);
     }
-});
+}
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeMidiUi, { once: true });
+} else {
+    initializeMidiUi();
+}

@@ -23,6 +23,11 @@
       title: 'Melodía',
       description: 'Programa voces, notas y articulaciones de los motores melódicos.'
     },
+    raydrone: {
+      kicker: 'LIVE INPUT',
+      title: 'RayDrone',
+      description: 'Granular master insert para caracter, movimiento y espacio.'
+    },
     'xtra-pads': {
       kicker: 'HERRAMIENTA',
       title: 'XTRA Pads',
@@ -148,7 +153,7 @@
     }
   }
 
-  document.addEventListener('DOMContentLoaded', function () {
+  function initializeWorkspaceUi() {
     const tabButtons = Array.from(document.querySelectorAll('.tab-btn[data-tab]'));
     const primaryTabs = Array.from(document.querySelectorAll('.workspace-primary-tabs .tab-btn[data-tab]'));
     const panels = Array.from(document.querySelectorAll('.tab-content'));
@@ -214,5 +219,10 @@
     document.body.classList.remove('advanced-ui');
     const active = document.querySelector('.tab-btn[data-tab].active');
     setWorkspace(active ? active.dataset.tab : 'performance');
-  });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeWorkspaceUi, { once: true });
+  } else {
+    initializeWorkspaceUi();
+  }
 })();

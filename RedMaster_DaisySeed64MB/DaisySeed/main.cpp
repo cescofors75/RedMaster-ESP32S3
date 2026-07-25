@@ -26,6 +26,8 @@
 #include "daisysp.h"
 #include "ff_gen_drv.h"
 #include "../../shared/red808_protocol_codes.h"
+#include "../../shared/raydrone_protocol.h"
+#include "raydrone_dsp.h"
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
@@ -105,6 +107,7 @@ enum DspProfBlock : uint8_t {
     DSP_PROF_SYNTH_PHYS,
     DSP_PROF_SYNTH_NOISE,
     DSP_PROF_SYNTH_ROUTING,
+    DSP_PROF_RAYDRONE,
     DSP_PROF_MASTER_FX,
     DSP_PROF_OUTPUT,
     DSP_PROF_COUNT
@@ -186,6 +189,7 @@ static const char* DspProfName(uint8_t block)
         case DSP_PROF_SYNTH_PHYS: return "phys";
         case DSP_PROF_SYNTH_NOISE: return "noise";
         case DSP_PROF_SYNTH_ROUTING: return "synth_routing";
+        case DSP_PROF_RAYDRONE: return "raydrone";
         case DSP_PROF_MASTER_FX: return "master_fx";
         case DSP_PROF_OUTPUT: return "output";
         default: return "unknown";
@@ -389,10 +393,10 @@ enum MasterFxRouteId : uint8_t {
     MASTER_FX_ROUTE_LIMITER,
     MASTER_FX_ROUTE_AUTOWAH,
     MASTER_FX_ROUTE_EARLY_REF,
+    MASTER_FX_ROUTE_RAYDRONE_LOCAL = MASTER_FX_ROUTE_RAYDRONE,
 };
 
 /* New Master FX (mega upgrade) */
-#define CMD_PITCHSHIFT_ACTIVE  0x27  /* reuse: [1=pitchshift] overloaded with subId */
 #define CMD_AUTOWAH_ACTIVE     0xA5
 #define CMD_AUTOWAH_LEVEL      0xA6
 #define CMD_AUTOWAH_MIX        0xA7
@@ -1021,6 +1025,15 @@ DSY_SDRAM_BSS static Phaser     masterPhaser;
 DSY_SDRAM_BSS static Flanger    masterFlangerL;
 DSY_SDRAM_BSS static Flanger    masterFlangerR;
 
+/* Raydrone live-input master insert. Large buffers live in external SDRAM. */
+DSY_SDRAM_BSS static float raydroneTape[RaydroneDsp::kTapeSamples];
+DSY_SDRAM_BSS static float raydroneReflectionL[RaydroneDsp::kReflectionBufferSamples];
+DSY_SDRAM_BSS static float raydroneReflectionR[RaydroneDsp::kReflectionBufferSamples];
+DSY_SDRAM_BSS static float raydroneChorusL[RaydroneDsp::kChorusBufferSamples];
+DSY_SDRAM_BSS static float raydroneChorusR[RaydroneDsp::kChorusBufferSamples];
+static RaydroneDsp raydrone;
+static bool raydroneRouted = true;
+
 /* Delay */
 static bool  delayActive   = false;
 static bool  delayRouted   = true;
@@ -1173,6 +1186,7 @@ static bool* GetMasterFxRouteFlag(uint8_t fxId)
         case MASTER_FX_ROUTE_LIMITER:    return &limiterRouted;
         case MASTER_FX_ROUTE_AUTOWAH:    return &autowahRouted;
         case MASTER_FX_ROUTE_EARLY_REF:  return &erRouted;
+        case MASTER_FX_ROUTE_RAYDRONE:   return &raydroneRouted;
         default:                         return nullptr;
     }
 }
@@ -2089,6 +2103,7 @@ static void ResetMasterProcessingState()
     limiterRouted = true;
     autowahRouted = true;
     erRouted = true;
+    raydroneRouted = true;
 
     gFilterRouted = true;
     gFilterType = FTYPE_NONE;
@@ -4577,11 +4592,18 @@ void AudioCallback(AudioHandle::InputBuffer  /*in*/,
     float mixPeak = 0.0f;
 
     float blockCpuAvg = AudioCpuAvgPercent();
-    if(blockCpuAvg > 86.0f)
+    /*
+     * RayDrone is an optional insert on top of a deliberately busy drum
+     * engine. Waiting until 86% let one dense block miss its deadline before
+     * the governor could shed voices. Enter the cheap RayDrone path earlier,
+     * with hysteresis so normal FX do not flap around the boundary.
+     */
+    if(blockCpuAvg > 72.0f)
         audioFxShed = true;
-    else if(blockCpuAvg < 68.0f)
+    else if(blockCpuAvg < 58.0f)
         audioFxShed = false;
     const bool fxShed = audioFxShed;
+    raydrone.BeginBlock(raydroneRouted, fxShed, size);
 
     /* ═ Pre-calcular: primer track que usa cada motor de síntesis ═ */
     int8_t engTrk[SYNTH_ENGINE_COUNT];
@@ -5207,6 +5229,11 @@ void AudioCallback(AudioHandle::InputBuffer  /*in*/,
             }
         }
 
+        /* ── Raydrone: four-second live tape granular insert ── */
+        DSP_PROF_SCOPE(RAYDRONE);
+        raydrone.Process(L, R, L, R);
+        DSP_PROF_END(RAYDRONE);
+
         /* ── Autowah ── */
         if(!fxShed && IsAutowahEngaged()){
             float awL = sanitizeF(masterAutowah.Process(L));
@@ -5768,6 +5795,13 @@ static void ProcessCommand()
         if(len >= 4){
             memcpy(&gFilterSrReduce, p, 4);
             if(gFilterSrReduce > (uint32_t)SAMPLE_RATE) gFilterSrReduce = 0;
+        }
+        break;
+    case CMD_RAYDRONE_CONFIG:
+        if(len == sizeof(RaydroneConfigPayload)){
+            RaydroneConfigPayload config;
+            memcpy(&config, p, sizeof(config));
+            raydrone.StageConfig(config);
         }
         break;
     case CMD_MASTER_FX_ROUTE:
@@ -7006,6 +7040,7 @@ static void ProcessCommand()
         }
         masterGain = 1.0f; seqVolume = 1.0f; liveVolume = 1.0f; livePitch = 1.0f;
         ResetMasterProcessingState();
+        raydrone.StageDefaults();
         scActive = false; scEnv = 0;
         anySolo = false;
         masterPeak = 0;
@@ -8613,6 +8648,18 @@ static void InitFX()
 
     masterDelay.Init();
     masterDelay.SetDelay(sr * 0.25f);
+
+    RaydroneDsp::Storage raydroneStorage = {
+        raydroneTape,
+        RaydroneDsp::kTapeSamples,
+        raydroneReflectionL,
+        raydroneReflectionR,
+        RaydroneDsp::kReflectionBufferSamples,
+        raydroneChorusL,
+        raydroneChorusR,
+        RaydroneDsp::kChorusBufferSamples,
+    };
+    raydrone.Init(sr, raydroneStorage);
 
     masterReverb.Init(sr);
     masterReverb.SetFeedback(0.6f);

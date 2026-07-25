@@ -31,7 +31,14 @@ El firmware ya no usa el antiguo `AudioEngine` I2S, PCM5102A, ST7789 ni
 
 ## Compilación
 
-Requiere PlatformIO:
+Requiere PlatformIO y Node.js. La primera vez, instala el minificador fijado
+por `package-lock.json`:
+
+```powershell
+npm install
+```
+
+El firmware se compila con:
 
 ```powershell
 pio run
@@ -64,8 +71,16 @@ de subir. El filesystem de producción es `data_gz`.
 | `/ws` | WebSocket de control/estado |
 
 `data/web` es la fuente legible. `data_gz/web` contiene lo que se flashea. Antes
-de `buildfs`/`uploadfs`, `tools/prepare_data_gz.py` sincroniza y comprime los
-assets.
+de `buildfs`/`uploadfs`, `tools/prepare_data_gz.py` crea bundles por pantalla,
+extrae CSS/JS inline, minifica JS/CSS/HTML, añade hashes a las URLs, genera un
+`build.id` para ETag y comprime los assets con gzip nivel 9. El proceso se
+detiene con un error claro si falta `npm install`.
+
+La app shell incluye Service Worker con precache selectivo y caché progresiva
+cuando se abre desde HTTPS o desde un bridge en localhost. Los navegadores no
+permiten registrarlo desde el AP directo `http://192.168.4.1` porque una IP
+privada HTTP no es un contexto seguro; en ese modo siguen aplicándose ETag y
+caché HTTP del firmware.
 
 ### Red y seguridad
 
