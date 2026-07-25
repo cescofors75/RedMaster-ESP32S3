@@ -61,7 +61,7 @@ typedef struct RAYDRONE_PACKED RaydroneConfigPayload {
     uint8_t space;      /* 0..100 */
     uint8_t volume;     /* 0..100, Raydrone wet-engine output */
     uint8_t mix;        /* 0..100, dry/wet insert blend */
-    uint8_t evolution;  /* 0..100, recursive output -> focus/aperture */
+    uint8_t evolution;  /* 0..100, recursive focus branches + harmonic rays */
 } RaydroneConfigPayload;
 
 #if !defined(__GNUC__)

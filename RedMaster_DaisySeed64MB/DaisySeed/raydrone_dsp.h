@@ -64,6 +64,7 @@ class RaydroneDsp
     static constexpr uint16_t kComb110Storage = 512u;
     static constexpr uint16_t kComb165Storage = 384u;
     static constexpr uint16_t kComb220Storage = 256u;
+    static constexpr uint8_t  kMaxFoci         = 16u;
 
     struct Voice
     {
@@ -76,6 +77,19 @@ class RaydroneDsp
         float   panR;
         float   tone;
         uint8_t material;
+        uint8_t depth;
+    };
+
+    struct Focus
+    {
+        float   position;
+        float   velocity;
+        float   weight;
+        float   targetWeight;
+        float   age;
+        float   ttl;
+        uint8_t depth;
+        bool    active;
     };
 
     static float Clamp(float value, float low, float high);
@@ -86,6 +100,11 @@ class RaydroneDsp
 
     void ClearRuntime();
     void ClearVoices();
+    void ClearFoci();
+    void InitFoci();
+    void UpdateFoci(float deltaSeconds);
+    void BirthFocus();
+    int8_t PickFocus(float& positionSeconds, float& apertureScale);
     void LatchPendingConfig(bool routed);
     void ApplyControlTargets(const RaydroneConfigPayload& config, bool routed);
     void SmoothControls(float coefficient);
@@ -112,6 +131,21 @@ class RaydroneDsp
                        float width,
                        uint8_t material,
                        uint8_t voiceLimit);
+    void    PlaceVoice(float position,
+                       float grainSeconds,
+                       float gain,
+                       float width,
+                       uint8_t material,
+                       uint8_t voiceLimit,
+                       uint8_t depth);
+    void    SpawnBounce(float endPosition,
+                        uint8_t remainingDepth,
+                        float grainSeconds,
+                        float gain,
+                        float width,
+                        uint8_t material,
+                        uint8_t voiceLimit);
+    float   NextHarmonicRatio();
     float   ApplyMaterial(Voice& voice, float sample);
     void    ProcessReflections(float inputL,
                                float inputR,
@@ -155,8 +189,19 @@ class RaydroneDsp
     float blockWetVolume_;
     float blockEvolution_;
     float blockRecursiveGain_;
+    float blockFocusMinSeconds_;
+    float blockFocusMaxSeconds_;
+    float blockFocusSpread_;
+    float blockFocusDrift_;
+    float blockFocusBirthRate_;
+    float blockHarmonicBlend_;
+    float blockShimmerChance_;
+    float blockBounceChance_;
+    uint8_t blockFocusDepth_;
+    uint8_t blockBounceDepth_;
 
     float hann_[kHannSize];
+    Focus foci_[kMaxFoci];
 
     float    comb110_[kComb110Storage];
     float    comb165_[kComb165Storage];
@@ -171,7 +216,10 @@ class RaydroneDsp
     float qmcPhase_;
     float motionPhase_;
     float chorusPhase_;
+    float focusBirthAccumulator_;
     bool  chorusWet_;
+    bool  fociInitialized_;
+    uint8_t harmonicIndex_;
     uint32_t rngState_;
 
     float smoothingCoefficient_;
@@ -194,6 +242,7 @@ class RaydroneDsp
     bool    configActive_;
     float   recursiveEnvelope_;
     float   recursiveFocus_;
+    float   recursiveDirection_;
 
     volatile uint32_t pendingRevision_;
     volatile uint32_t pendingWord0_;

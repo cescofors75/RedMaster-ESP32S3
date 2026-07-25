@@ -66,13 +66,26 @@ RaydroneDsp::RaydroneDsp()
   blockWetVolume_(RAYDRONE_DEFAULT_VOLUME * 0.01f),
   blockEvolution_(RAYDRONE_DEFAULT_EVOLUTION * 0.01f),
   blockRecursiveGain_(0.0f),
+  blockFocusMinSeconds_(0.20f),
+  blockFocusMaxSeconds_(1.80f),
+  blockFocusSpread_(0.22f),
+  blockFocusDrift_(0.28f),
+  blockFocusBirthRate_(0.35f),
+  blockHarmonicBlend_(0.0f),
+  blockShimmerChance_(0.0f),
+  blockBounceChance_(0.0f),
+  blockFocusDepth_(0u),
+  blockBounceDepth_(0u),
   reflectionToneL_(0.0f),
   reflectionToneR_(0.0f),
   spawnAccumulator_(0.0f),
   qmcPhase_(0.17320508f),
   motionPhase_(0.0f),
   chorusPhase_(0.0f),
+  focusBirthAccumulator_(0.0f),
   chorusWet_(false),
+  fociInitialized_(false),
+  harmonicIndex_(0u),
   rngState_(0x6D2B79F5u),
   smoothingCoefficient_(0.001f),
   activeSmoothed_(0.0f),
@@ -92,7 +105,8 @@ RaydroneDsp::RaydroneDsp()
   materialTarget_(RAYDRONE_DEFAULT_MATERIAL),
   configActive_(false),
   recursiveEnvelope_(0.0f),
-  recursiveFocus_(0.0f),
+  recursiveFocus_(0.5f),
+  recursiveDirection_(1.0f),
   pendingRevision_(0u),
   pendingWord0_(0u),
   pendingWord1_(0u),
@@ -103,6 +117,7 @@ RaydroneDsp::RaydroneDsp()
     memset(active_, 0, sizeof(active_));
     memset(free_, 0, sizeof(free_));
     memset(hann_, 0, sizeof(hann_));
+    memset(foci_, 0, sizeof(foci_));
     memset(comb110_, 0, sizeof(comb110_));
     memset(comb165_, 0, sizeof(comb165_));
     memset(comb220_, 0, sizeof(comb220_));
@@ -236,7 +251,25 @@ void RaydroneDsp::ClearVoices()
         voices_[i].panR            = 0.70710678f;
         voices_[i].tone            = 0.0f;
         voices_[i].material        = 0u;
+        voices_[i].depth           = 0u;
     }
+}
+
+void RaydroneDsp::ClearFoci()
+{
+    for(uint8_t i = 0u; i < kMaxFoci; ++i)
+    {
+        foci_[i].position     = 0.0f;
+        foci_[i].velocity     = 0.0f;
+        foci_[i].weight       = 0.0f;
+        foci_[i].targetWeight = 0.0f;
+        foci_[i].age          = 0.0f;
+        foci_[i].ttl          = 0.0f;
+        foci_[i].depth        = 0u;
+        foci_[i].active       = false;
+    }
+    focusBirthAccumulator_ = 0.0f;
+    fociInitialized_       = false;
 }
 
 void RaydroneDsp::ClearRuntime()
@@ -252,6 +285,7 @@ void RaydroneDsp::ClearRuntime()
     motionPhase_      = 0.0f;
     chorusPhase_      = 0.0f;
     chorusWet_        = false;
+    harmonicIndex_    = 0u;
     rngState_         = 0x6D2B79F5u;
     qualityShed_      = false;
     blockFrames_      = 0u;
@@ -266,13 +300,25 @@ void RaydroneDsp::ClearRuntime()
     blockWetVolume_    = volumeSmoothed_;
     blockEvolution_    = evolutionSmoothed_;
     blockRecursiveGain_ = 0.0f;
+    blockFocusMinSeconds_ = 0.20f;
+    blockFocusMaxSeconds_ = 1.80f;
+    blockFocusSpread_     = 0.22f;
+    blockFocusDrift_      = 0.28f;
+    blockFocusBirthRate_  = 0.35f;
+    blockHarmonicBlend_   = 0.0f;
+    blockShimmerChance_   = 0.0f;
+    blockBounceChance_    = 0.0f;
+    blockFocusDepth_      = 0u;
+    blockBounceDepth_     = 0u;
     recursiveEnvelope_ = 0.0f;
-    recursiveFocus_    = 0.0f;
+    recursiveFocus_    = 0.5f;
+    recursiveDirection_ = 1.0f;
     memset(comb110_, 0, sizeof(comb110_));
     memset(comb165_, 0, sizeof(comb165_));
     memset(comb220_, 0, sizeof(comb220_));
     memset(combWrite_, 0, sizeof(combWrite_));
     ClearVoices();
+    ClearFoci();
 }
 
 bool RaydroneDsp::StageConfig(const RaydroneConfigPayload& source)
@@ -385,14 +431,41 @@ void RaydroneDsp::BeginBlock(bool routed,
         = Clamp(frames * smoothingCoefficient_, 0.0f, 1.0f);
     SmoothControls(blockCoefficient);
 
-    blockCharacter_ = Clamp01(characterSmoothed_);
+    /* P4 intentionally exposes CHARACTER as a safe 0..35 macro. Normalize
+     * that complete hardware range to the 0..1 curve used by the WASM
+     * engine; treating 35 as 0.35 was making Daisy permanently timid. */
+    blockCharacter_ = Clamp01(
+        characterSmoothed_ / (RAYDRONE_CHARACTER_SAFE_MAX * 0.01f));
     const float motionRaw = Clamp01(motionSmoothed_);
     blockMotion_ = motionRaw < 0.02f ? 0.0f : motionRaw;
     blockSpace_ = Clamp01(spaceSmoothed_);
     blockApertureSeconds_
-        = fminf(0.16f, 0.02f + blockCharacter_ * blockCharacter_ * 0.6f);
+        = fminf(0.32f, 0.02f + blockCharacter_ * blockCharacter_ * 0.6f);
     const float rawGrainSeconds = 0.08f + 0.12f * blockCharacter_;
-    blockGrainSeconds_ = fminf(0.18f, rawGrainSeconds);
+    blockGrainSeconds_ = fminf(0.20f, rawGrainSeconds);
+    blockEvolution_ = Clamp01(evolutionSmoothed_);
+    blockRecursiveGain_ = Clamp01(
+        blockEvolution_ * (0.34f + recursiveEnvelope_ * 0.66f));
+    /* P4 has one macro where the WASM page has separate POWER voicing,
+     * shimmer, bounce and ambient controls. Morph that macro into the same
+     * complete scene instead of reducing it to a barely audible LFO. */
+    blockHarmonicBlend_ = Clamp01(blockEvolution_ * 2.2f);
+    blockShimmerChance_ = 0.18f * blockHarmonicBlend_;
+    blockBounceChance_ = blockEvolution_ > 0.001f
+                             ? 0.35f + 0.45f * blockEvolution_
+                             : 0.0f;
+    blockBounceDepth_ = blockEvolution_ <= 0.001f
+                            ? 0u
+                            : (blockEvolution_ < 0.62f
+                                   ? 1u
+                                   : (blockEvolution_ < 0.90f ? 2u : 3u));
+    blockFocusDepth_ = blockEvolution_ <= 0.001f
+                           ? 0u
+                           : (blockEvolution_ < 0.82f ? 2u : 3u);
+    blockFocusSpread_ = 0.22f + 0.10f * blockEvolution_;
+    blockFocusDrift_ = 0.28f + 0.22f * blockEvolution_;
+    blockFocusBirthRate_ = 0.35f + 0.65f * blockEvolution_;
+
     blockBaseDensity_ = 140.0f + 260.0f * blockCharacter_;
     const float materialDuration = materialTarget_ == 3u ? 2.5f : 1.0f;
     const float concurrency
@@ -401,14 +474,55 @@ void RaydroneDsp::BeginBlock(bool routed,
     blockGrainGain_ = fminf(0.5f, 1.5f / sqrtf(concurrency));
     blockInsertMix_ = Clamp01(activeSmoothed_ * mixSmoothed_);
     blockWetVolume_ = Clamp01(volumeSmoothed_);
-    blockEvolution_ = Clamp01(evolutionSmoothed_);
-    /* WASM semantics: the output envelope controls how strongly the next
-     * generation re-enters the ray field. Keep this gain bounded so a single
-     * hot transient cannot turn the recursive room into an oscillator. */
-    blockRecursiveGain_ = Clamp01(blockEvolution_
-                                  * (0.12f + recursiveEnvelope_ * 0.88f));
     blockApertureSeconds_ = fminf(
-        0.16f, blockApertureSeconds_ * (1.0f + blockRecursiveGain_ * 0.8f));
+        0.40f, blockApertureSeconds_ * (1.0f + blockRecursiveGain_ * 0.8f));
+
+    const float historySeconds
+        = static_cast<float>(tapeLength_) / sampleRate_;
+    const float baseLookBehind = Clamp(
+        fmaxf(0.12f,
+              blockApertureSeconds_
+                  + blockGrainSeconds_ * materialDuration * 2.1f
+                  + 0.035f),
+        0.0f,
+        historySeconds * 0.45f);
+    if(blockEvolution_ <= 0.001f)
+    {
+        blockFocusMinSeconds_ = baseLookBehind;
+        blockFocusMaxSeconds_ = baseLookBehind;
+    }
+    else
+    {
+        blockFocusMinSeconds_ = fmaxf(
+            baseLookBehind,
+            blockApertureSeconds_
+                + blockGrainSeconds_ * materialDuration * 2.1f
+                + 0.05f);
+        blockFocusMaxSeconds_ = fminf(historySeconds * 0.45f, 1.80f);
+        if(blockFocusMaxSeconds_ < blockFocusMinSeconds_ + 0.05f)
+            blockFocusMaxSeconds_ = blockFocusMinSeconds_ + 0.05f;
+    }
+
+    if(blockEvolution_ > 0.0001f)
+    {
+        /* Match the WASM auto-evolution sweep: signal energy accelerates a
+         * bounded traversal instead of merely changing one tiny offset. */
+        const float evolutionStep = blockEvolution_
+                                    * (0.0004f
+                                       + recursiveEnvelope_ * 0.0018f);
+        recursiveFocus_ += recursiveDirection_ * evolutionStep;
+        if(recursiveFocus_ >= 1.0f)
+        {
+            recursiveFocus_ = 1.0f;
+            recursiveDirection_ = -1.0f;
+        }
+        else if(recursiveFocus_ <= 0.0f)
+        {
+            recursiveFocus_ = 0.0f;
+            recursiveDirection_ = 1.0f;
+        }
+    }
+    UpdateFoci(frames / sampleRate_);
 
     const uint8_t blockVoiceLimit
         = qualityShed_ || materialTarget_ == 3u ? kGlassVoiceLimit : kMaxVoices;
@@ -444,6 +558,202 @@ float RaydroneDsp::NextQmc()
     if(qmcPhase_ >= 1.0f)
         qmcPhase_ -= 1.0f;
     return qmcPhase_;
+}
+
+void RaydroneDsp::InitFoci()
+{
+    ClearFoci();
+    const float span = blockFocusMaxSeconds_ - blockFocusMinSeconds_;
+    if(span <= 0.001f)
+        return;
+
+    constexpr uint8_t kSeedCount = 3u;
+    for(uint8_t i = 0u; i < kSeedCount; ++i)
+    {
+        float u = 0.5f + static_cast<float>(i) * kGolden;
+        u -= floorf(u);
+        Focus& focus      = foci_[i];
+        focus.position    = blockFocusMinSeconds_ + u * span;
+        focus.velocity    = (Random01() - 0.5f) * 2.0f
+                            * blockFocusDrift_ * span * 0.02f;
+        focus.weight       = 1.0f;
+        focus.targetWeight = 1.0f;
+        focus.age          = 0.0f;
+        focus.ttl          = -1.0f;
+        focus.depth        = blockFocusDepth_;
+        focus.active       = true;
+    }
+    fociInitialized_ = true;
+}
+
+void RaydroneDsp::BirthFocus()
+{
+    int8_t slot = -1;
+    for(uint8_t i = 0u; i < kMaxFoci; ++i)
+    {
+        if(!foci_[i].active)
+        {
+            slot = static_cast<int8_t>(i);
+            break;
+        }
+    }
+    if(slot < 0)
+        return;
+
+    float parentWeight = 0.0f;
+    for(uint8_t i = 0u; i < kMaxFoci; ++i)
+    {
+        if(foci_[i].active && foci_[i].depth > 0u)
+            parentWeight += foci_[i].weight;
+    }
+    if(parentWeight <= 0.0001f)
+        return;
+
+    float selector = Random01() * parentWeight;
+    int8_t parent = -1;
+    for(uint8_t i = 0u; i < kMaxFoci; ++i)
+    {
+        if(!foci_[i].active || foci_[i].depth == 0u)
+            continue;
+        selector -= foci_[i].weight;
+        if(selector <= 0.0f)
+        {
+            parent = static_cast<int8_t>(i);
+            break;
+        }
+    }
+    if(parent < 0)
+        return;
+
+    const Focus& source = foci_[static_cast<uint8_t>(parent)];
+    const uint8_t level = static_cast<uint8_t>(
+        blockFocusDepth_ - source.depth + 1u);
+    float shrink = 1.0f;
+    for(uint8_t i = 0u; i < level; ++i)
+        shrink *= 0.55f;
+
+    const float span = blockFocusMaxSeconds_ - blockFocusMinSeconds_;
+    Focus& child = foci_[static_cast<uint8_t>(slot)];
+    const float offset = (Random01() - 0.5f) * 2.0f
+                         * blockFocusSpread_ * span * shrink;
+    child.position = Clamp(source.position + offset,
+                           blockFocusMinSeconds_,
+                           blockFocusMaxSeconds_);
+    child.velocity = (Random01() - 0.5f) * 2.0f
+                     * blockFocusDrift_ * span * 0.02f
+                     * (1.0f + shrink);
+    child.weight       = 0.0f;
+    child.targetWeight = source.weight * 0.72f;
+    child.age          = 0.0f;
+    child.ttl          = 12.0f * shrink;
+    child.depth        = static_cast<uint8_t>(source.depth - 1u);
+    child.active       = true;
+}
+
+void RaydroneDsp::UpdateFoci(float deltaSeconds)
+{
+    if(blockEvolution_ <= 0.001f
+       || blockFocusMaxSeconds_ <= blockFocusMinSeconds_)
+    {
+        if(fociInitialized_)
+            ClearFoci();
+        return;
+    }
+    if(!fociInitialized_)
+        InitFoci();
+    if(!fociInitialized_)
+        return;
+
+    const float dt = Clamp(deltaSeconds, 0.0f, 0.1f);
+    const float span = blockFocusMaxSeconds_ - blockFocusMinSeconds_;
+    const float maximumVelocity = blockFocusDrift_ * span * 0.03f;
+    const float fade = fminf(1.0f, dt / 1.5f);
+
+    for(uint8_t i = 0u; i < kMaxFoci; ++i)
+    {
+        Focus& focus = foci_[i];
+        if(!focus.active)
+            continue;
+        focus.age += dt;
+        if(focus.ttl < 0.0f)
+            focus.depth = blockFocusDepth_;
+        if(Random01() < dt / 3.0f)
+            focus.velocity = (Random01() - 0.5f) * 2.0f
+                             * maximumVelocity;
+
+        float position = focus.position + focus.velocity * dt;
+        if(position < blockFocusMinSeconds_)
+        {
+            position = blockFocusMinSeconds_
+                       + (blockFocusMinSeconds_ - position);
+            focus.velocity = -focus.velocity;
+        }
+        else if(position > blockFocusMaxSeconds_)
+        {
+            position = blockFocusMaxSeconds_
+                       - (position - blockFocusMaxSeconds_);
+            focus.velocity = -focus.velocity;
+        }
+        focus.position = Clamp(position,
+                               blockFocusMinSeconds_,
+                               blockFocusMaxSeconds_);
+
+        if(focus.ttl >= 0.0f && focus.age > focus.ttl - 1.5f)
+            focus.targetWeight = 0.0f;
+        focus.weight += (focus.targetWeight - focus.weight) * fade;
+        if(focus.ttl >= 0.0f
+           && focus.age > focus.ttl
+           && focus.weight < 0.002f)
+        {
+            focus.active = false;
+            focus.weight = 0.0f;
+        }
+    }
+
+    if(blockFocusDepth_ > 0u)
+    {
+        focusBirthAccumulator_ += blockFocusBirthRate_ * dt;
+        uint8_t guard = 0u;
+        while(focusBirthAccumulator_ >= 1.0f && guard++ < 4u)
+        {
+            BirthFocus();
+            focusBirthAccumulator_ -= 1.0f;
+        }
+    }
+}
+
+int8_t RaydroneDsp::PickFocus(float& positionSeconds,
+                              float& apertureScale)
+{
+    float totalWeight = 0.0f;
+    for(uint8_t i = 0u; i < kMaxFoci; ++i)
+    {
+        if(foci_[i].active)
+            totalWeight += foci_[i].weight;
+    }
+    if(totalWeight <= 0.0001f)
+        return -1;
+
+    float selector = Random01() * totalWeight;
+    for(uint8_t i = 0u; i < kMaxFoci; ++i)
+    {
+        if(!foci_[i].active)
+            continue;
+        selector -= foci_[i].weight;
+        if(selector <= 0.0f)
+        {
+            positionSeconds = foci_[i].position;
+            const uint8_t level = blockFocusDepth_ >= foci_[i].depth
+                                      ? static_cast<uint8_t>(
+                                            blockFocusDepth_ - foci_[i].depth)
+                                      : 0u;
+            apertureScale = 1.0f;
+            for(uint8_t depth = 0u; depth < level; ++depth)
+                apertureScale *= 0.70f;
+            return static_cast<int8_t>(i);
+        }
+    }
+    return -1;
 }
 
 float RaydroneDsp::WrapTapePosition(float position) const
@@ -656,20 +966,59 @@ void RaydroneDsp::SpawnVoice(float apertureSeconds,
     if(activeCount_ > voiceLimit)
         return;
 
-    const float historySeconds
-        = static_cast<float>(tapeLength_) / sampleRate_;
-    const float lookBehindSeconds = Clamp(
-        fmaxf(0.12f, apertureSeconds + grainSeconds * 2.1f + 0.035f),
-        0.0f,
-        historySeconds * 0.45f);
+    float focusSeconds = 0.5f
+                         * (blockFocusMinSeconds_ + blockFocusMaxSeconds_);
+    float apertureScale = 1.0f;
+    if(PickFocus(focusSeconds, apertureScale) < 0
+       && blockEvolution_ > 0.0001f)
+    {
+        focusSeconds = blockFocusMinSeconds_
+                       + recursiveFocus_
+                             * (blockFocusMaxSeconds_
+                                - blockFocusMinSeconds_);
+    }
+    const float effectiveAperture = apertureSeconds * apertureScale;
     const float focus = static_cast<float>(tapeWrite_)
-                        - lookBehindSeconds * sampleRate_
-                        + (recursiveEnvelope_ - 0.35f)
-                              * blockRecursiveGain_ * apertureSeconds
-                              * sampleRate_ * 0.45f;
+                        - focusSeconds * sampleRate_;
     const float dispersion = TriangularInverse(NextQmc())
-                             * apertureSeconds * sampleRate_;
+                             * effectiveAperture * sampleRate_;
+    PlaceVoice(focus + dispersion,
+               grainSeconds,
+               gain,
+               width,
+               material,
+               voiceLimit,
+               blockBounceDepth_);
+}
 
+float RaydroneDsp::NextHarmonicRatio()
+{
+    if(blockHarmonicBlend_ <= 0.0001f
+       || Random01() >= blockHarmonicBlend_)
+        return 1.0f;
+
+    /* The same POWER family used by the WASM demo:
+     * sub · root · fifth · octave · octave+fifth. Round-robin allocation is
+     * the hardware equivalent of its stratified pitch sampling. */
+    static const float kPowerRatios[5] = {0.5f, 1.0f, 1.5f, 2.0f, 3.0f};
+    float ratio = kPowerRatios[harmonicIndex_];
+    harmonicIndex_ = static_cast<uint8_t>((harmonicIndex_ + 1u) % 5u);
+    /* Keep the live-tape read safely behind its writer: shimmer the lower
+     * POWER degrees, which still yields octave, fifth-high and double octave
+     * without producing the web engine's occasional 6x read head. */
+    if(ratio <= 1.5f && Random01() < blockShimmerChance_)
+        ratio *= 2.0f;
+    return ratio;
+}
+
+void RaydroneDsp::PlaceVoice(float position,
+                             float grainSeconds,
+                             float gain,
+                             float width,
+                             uint8_t material,
+                             uint8_t voiceLimit,
+                             uint8_t depth)
+{
     const uint8_t slot = AllocateVoice(voiceLimit);
     Voice& voice = voices_[slot];
     const float materialDuration = material == 3u ? 2.5f : 1.0f;
@@ -678,17 +1027,46 @@ void RaydroneDsp::SpawnVoice(float apertureSeconds,
     const float detune = 1.0f + (Random01() - 0.5f) * kMicroDetune;
     const float plasmaDetune
         = material == 5u ? 1.0f + (Random01() - 0.5f) * 0.04f : 1.0f;
+    const float harmonicRatio = NextHarmonicRatio();
     const float pan = (Random01() * 2.0f - 1.0f) * Clamp01(width);
 
-    voice.position        = WrapTapePosition(focus + dispersion);
+    voice.position        = WrapTapePosition(position);
     voice.age             = 0.0f;
     voice.inverseDuration = 1.0f / durationSamples;
     voice.gain            = gain;
-    voice.step            = detune * plasmaDetune;
+    voice.step            = detune * plasmaDetune * harmonicRatio;
     voice.panL            = sqrtf((1.0f - pan) * 0.5f);
     voice.panR            = sqrtf((1.0f + pan) * 0.5f);
     voice.tone            = 0.0f;
     voice.material        = material;
+    voice.depth           = depth;
+}
+
+void RaydroneDsp::SpawnBounce(float endPosition,
+                              uint8_t remainingDepth,
+                              float grainSeconds,
+                              float gain,
+                              float width,
+                              uint8_t material,
+                              uint8_t voiceLimit)
+{
+    float ageSamples = static_cast<float>(tapeWrite_) - endPosition;
+    if(ageSamples < 0.0f)
+        ageSamples += static_cast<float>(tapeLength_);
+    float ageSeconds = ageSamples / sampleRate_;
+    ageSeconds += (Random01() - 0.5f) * 0.10f;
+    ageSeconds = Clamp(ageSeconds,
+                       blockFocusMinSeconds_,
+                       blockFocusMaxSeconds_);
+    const float position = static_cast<float>(tapeWrite_)
+                           - ageSeconds * sampleRate_;
+    PlaceVoice(position,
+               grainSeconds,
+               gain,
+               width,
+               material,
+               voiceLimit,
+               remainingDepth);
 }
 
 float RaydroneDsp::ApplyMaterial(Voice& voice, float sample)
@@ -927,6 +1305,8 @@ void RaydroneDsp::Process(float inputL,
     const float apertureSeconds = blockApertureSeconds_;
     const float grainSeconds = blockGrainSeconds_;
     const float grainGain = blockGrainGain_;
+    const float recursiveWidth = fmaxf(0.78f * space,
+                                       0.75f * blockHarmonicBlend_);
     const float motionRate = 0.1f + 0.6f * motion;
     const float motionDepth = 0.45f * motion;
     /* Motion=0 is the default and needs no per-sample phase/floorf work. */
@@ -941,14 +1321,8 @@ void RaydroneDsp::Process(float inputL,
     if(qualityShed_)
         density *= 0.55f;
 
-    const float historySeconds
-        = static_cast<float>(tapeLength_) / sampleRate_;
-    const float lookBehindSeconds = Clamp(
-        fmaxf(0.12f, apertureSeconds + grainSeconds * 2.1f + 0.035f),
-        0.0f,
-        historySeconds * 0.45f);
     const uint32_t requiredHistory
-        = static_cast<uint32_t>(lookBehindSeconds * sampleRate_)
+        = static_cast<uint32_t>(blockFocusMaxSeconds_ * sampleRate_)
           + static_cast<uint32_t>(blockFrames_);
     const bool liveReady = tapeSeen_ >= requiredHistory;
 
@@ -960,7 +1334,7 @@ void RaydroneDsp::Process(float inputL,
             SpawnVoice(apertureSeconds,
                        grainSeconds,
                        grainGain,
-                       0.78f * space,
+                       recursiveWidth,
                        materialTarget_,
                        voiceLimit);
             spawnAccumulator_ -= 1.0f;
@@ -980,7 +1354,21 @@ void RaydroneDsp::Process(float inputL,
         const float phase = voice.age * voice.inverseDuration;
         if(phase >= 1.0f)
         {
+            const float endPosition = voice.position;
+            const uint8_t remainingDepth = voice.depth;
             ReleaseActiveVoice(activeIndex);
+            if(remainingDepth > 0u
+               && liveReady
+               && Random01() < blockBounceChance_)
+            {
+                SpawnBounce(endPosition,
+                            static_cast<uint8_t>(remainingDepth - 1u),
+                            grainSeconds,
+                            grainGain,
+                            recursiveWidth,
+                            materialTarget_,
+                            voiceLimit);
+            }
             continue;
         }
 
@@ -996,9 +1384,11 @@ void RaydroneDsp::Process(float inputL,
 
     float reflectedL;
     float reflectedR;
+    const float reflectionWet = fmaxf(0.72f * space,
+                                      0.42f * blockHarmonicBlend_);
     ProcessReflections(wetL,
                        wetR,
-                       0.72f * space,
+                       reflectionWet,
                        materialTarget_,
                        reflectedL,
                        reflectedR);
@@ -1024,10 +1414,11 @@ void RaydroneDsp::Process(float inputL,
     outputL = dryL + (chorusedL - dryL) * insertMix;
     outputR = dryR + (chorusedR - dryR) * insertMix;
 
-    /* Recursive auto-evolution follows the real output, not the UI gesture:
-     * this envelope is the signal that re-enters the next ray generation. */
+    /* Follow RayDrone's own wet output, excluding the parallel dry signal.
+     * This makes the recursion genuinely self-referential even at low MIX. */
     if (blockEvolution_ > 0.0001f) {
-        const float level = fminf(1.0f, 0.5f * (fabsf(outputL) + fabsf(outputR)));
+        const float level = fminf(
+            1.0f, 0.5f * (fabsf(chorusedL) + fabsf(chorusedR)));
         recursiveEnvelope_ += (level - recursiveEnvelope_) * 0.0025f;
     } else {
         recursiveEnvelope_ *= 0.9975f;
