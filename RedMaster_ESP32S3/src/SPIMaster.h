@@ -404,7 +404,7 @@ public:
     void synthNoteOnEx(uint8_t engine, uint8_t midiNote, uint8_t velocity, bool accent = false, bool slide = false);
     void synthNoteOff(uint8_t engine, uint8_t track, uint8_t note = 0xFF);
     void synthSetActive(uint8_t engineMask);
-    void synthSetActive16(uint16_t engineMask16); // 2-byte mask for 9 engines
+    void synthSetActive16(uint16_t engineMask16); // 2-byte mask for 10 engines
     void synthPreset(uint8_t engine, uint8_t preset);
     uint16_t getSynthActiveMask16() const { return cachedSynthActiveMask16; }
     uint8_t getSynthActiveMask() const { return (uint8_t)(cachedSynthActiveMask16 & 0xFF); }
@@ -530,7 +530,7 @@ private:
     SdStatusResponse cachedSdStatus;
     bool cachedSdStatusValid = false;
 
-    // Synth engine active mask — 16-bit for 9 engines
+    // Synth engine active mask — 16-bit for 10 engines
     uint16_t cachedSynthActiveMask16;
     
     // Per-track/pad cached filter state

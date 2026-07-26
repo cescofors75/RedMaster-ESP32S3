@@ -1035,7 +1035,7 @@ static void populateStateDocument(JsonDocument& doc) {
   
   doc["lfoActive"] = 0;
 
-  // New state: synth engine mask (16-bit for 9 engines)
+  // New state: synth engine mask (16-bit for 10 engines)
   doc["synthActiveMask"] = spiMaster.getSynthActiveMask16();
 
   // Song Chain state
@@ -6339,14 +6339,11 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
   }
 
   // {"cmd":"synthActive","mask":123}   (bit0=808, bit1=909, bit2=505, bit3=303, bit4=WT, bit5=SH101, bit6=FM2Op)
-  // {"cmd":"synthActive","mask":511}   (9 engines, 16-bit)
+  // {"cmd":"synthActive","mask":1023}  (10 engines, 16-bit)
   else if (cmd == "synthActive") {
-    uint16_t mask = doc["mask"] | 0x01FF;
-    if (mask > 0xFF) {
-      spiMaster.synthSetActive16(mask);
-    } else {
-      spiMaster.synthSetActive((uint8_t)mask);
-    }
+    uint16_t mask = (doc["mask"] | SYNTH_ALL_ENGINES_MASK)
+                  & SYNTH_ALL_ENGINES_MASK;
+    spiMaster.synthSetActive16(mask);
     StaticJsonDocument<64> resp;
     resp["type"] = "synthActiveAck";
     resp["mask"] = mask;

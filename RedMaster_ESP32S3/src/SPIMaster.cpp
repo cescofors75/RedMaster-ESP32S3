@@ -89,7 +89,7 @@ SPIMaster::SPIMaster() : seqNumber(0), spiErrorCount(0), stm32Connected(false), 
     cachedChorusStereoMode = 0;
     memset(cachedChokeGroup, 0, sizeof(cachedChokeGroup));
     memset(&cachedStatus, 0, sizeof(cachedStatus));
-    cachedSynthActiveMask16 = 0x01FF; // all 9 engines
+    cachedSynthActiveMask16 = SYNTH_ALL_ENGINES_MASK;
     
     for (int i = 0; i < MAX_AUDIO_TRACKS; i++) {
         cachedTrackFilter[i] = FILTER_NONE;
@@ -2072,6 +2072,7 @@ void SPIMaster::synthSetActive(uint8_t engineMask) {
 }
 
 void SPIMaster::synthSetActive16(uint16_t engineMask16) {
+    engineMask16 &= SYNTH_ALL_ENGINES_MASK;
     SynthActivePayload16 p;
     p.maskLo = (uint8_t)(engineMask16 & 0xFF);
     p.maskHi = (uint8_t)((engineMask16 >> 8) & 0xFF);

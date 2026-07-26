@@ -58,8 +58,7 @@ function Invoke-DfuDownloadWithTimeout {
     param(
         [Parameter(Mandatory = $true)][string]$Address,
         [Parameter(Mandatory = $true)][string]$FilePath,
-        [int]$TimeoutSeconds = 45,
-        [int]$TransferTimeoutSeconds = 240,
+        [int]$TimeoutSeconds = 30,
         [switch]$PromptReset
     )
 
@@ -80,45 +79,22 @@ function Invoke-DfuDownloadWithTimeout {
             Write-Host "dfu-util esta preparado; esperando la Daisy durante $TimeoutSeconds s..." -ForegroundColor Cyan
         }
 
-        $connectDeadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-        $transferDeadline = $null
-        $seenTransferStart = $false
+        $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
         $nextReminder = [DateTime]::UtcNow.AddSeconds(5)
-        while(-not $process.HasExited) {
+        while(-not $process.HasExited -and [DateTime]::UtcNow -lt $deadline) {
             Start-Sleep -Milliseconds 200
             $process.Refresh()
-
-            if(-not $seenTransferStart -and (Test-Path $outTmp)) {
-                $partialOut = Get-Content -LiteralPath $outTmp -Raw -ErrorAction SilentlyContinue
-                if($partialOut -match 'Downloading element to address|Erase\s+\[') {
-                    $seenTransferStart = $true
-                    $transferDeadline = [DateTime]::UtcNow.AddSeconds($TransferTimeoutSeconds)
-                }
-            }
-
-            if($PromptReset -and -not $seenTransferStart -and [DateTime]::UtcNow -ge $nextReminder) {
-                $remaining = [math]::Max(0, [math]::Ceiling(($connectDeadline - [DateTime]::UtcNow).TotalSeconds))
+            if($PromptReset -and [DateTime]::UtcNow -ge $nextReminder) {
+                $remaining = [math]::Max(0, [math]::Ceiling(($deadline - [DateTime]::UtcNow).TotalSeconds))
                 Write-Host "Esperando DFU: pulsa RESET sin BOOT ($remaining s restantes)..." -ForegroundColor Yellow
                 $nextReminder = [DateTime]::UtcNow.AddSeconds(5)
-            }
-
-            if(-not $seenTransferStart -and [DateTime]::UtcNow -ge $connectDeadline) {
-                break
-            }
-
-            if($seenTransferStart -and $transferDeadline -and [DateTime]::UtcNow -ge $transferDeadline) {
-                break
             }
         }
 
         if(-not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             $process.WaitForExit()
-            if($seenTransferStart) {
-                Write-Host "TIMEOUT: transferencia DFU excedio $TransferTimeoutSeconds s" -ForegroundColor Red
-            } else {
-                Write-Host "TIMEOUT: la Daisy no reaparecio en $TimeoutSeconds s" -ForegroundColor Red
-            }
+            Write-Host "TIMEOUT: la Daisy no reaparecio en $TimeoutSeconds s" -ForegroundColor Red
         }
 
         $stdout = if(Test-Path $outTmp) { Get-Content -LiteralPath $outTmp -Raw } else { '' }
@@ -190,7 +166,7 @@ if(-not $found) {
 if($bootloaderDfu) {
     'RESULT=BOOTLOADER_DFU_ALREADY_ACTIVE' | Tee-Object -FilePath $log -Append
     Write-Host 'DFU del bootloader Daisy detectado: saltando flasheo de bootloader interno' -ForegroundColor Green
-    Write-Host 'El bootloader dura 2 s; se intentara flasheo directo y solo se pedira RESET si no engancha.' -ForegroundColor Yellow
+    Write-Host 'El bootloader dura 2 s; el flasheador se armara y pedira un RESET adicional.' -ForegroundColor Yellow
 } else {
     Write-Host 'Flasheando bootloader interno...' -ForegroundColor Cyan
     $bootCandidates = @($bootPrimary)
@@ -250,36 +226,33 @@ if($SkipSamples -or -not (Test-Path $wavblob)) {
     $appAddress = '0x90040000:leave'
 }
 
-# Intento directo primero: si el DFU ya esta activo, no hace falta pedir RESET.
+# El listado inicial consume casi toda la ventana de 2 s. Armamos una descarga
+# vigilada y pedimos un RESET cuando dfu-util ya esta esperando la enumeracion.
+# En algunos intentos aparece un fallo transitorio de ERASE_PAGE/get_status;
+# reintentamos automaticamente para no abortar todo el flujo por un glitch USB.
 $appFlashOk = $false
-$resAppDirect = & $dfu -a 0 -s $appAddress -D $fw -d ",0483:df11" 2>&1 | Tee-Object -FilePath $log -Append | Out-String
-if($resAppDirect -match 'Download done') {
-    $appFlashOk = $true
-} else {
-    # Fallback supervisado: arma dfu-util -w y pide RESET solo si el intento directo no engancha.
-    $maxAppAttempts = 3
-    for($appTry = 1; $appTry -le $maxAppAttempts; $appTry++) {
-        if($appTry -gt 1) {
-            Write-Host "Reintentando firmware (intento $appTry/$maxAppAttempts)..." -ForegroundColor Yellow
-            "APP_FLASH_RETRY=$appTry" | Tee-Object -FilePath $log -Append | Out-Null
-        }
+$maxAppAttempts = 3
+for($appTry = 1; $appTry -le $maxAppAttempts; $appTry++) {
+    if($appTry -gt 1) {
+        Write-Host "Reintentando firmware (intento $appTry/$maxAppAttempts)..." -ForegroundColor Yellow
+        "APP_FLASH_RETRY=$appTry" | Tee-Object -FilePath $log -Append | Out-Null
+    }
 
-        $resApp = Invoke-DfuDownloadWithTimeout -Address $appAddress -FilePath $fw `
-            -TimeoutSeconds 45 -TransferTimeoutSeconds 240 -PromptReset
+    $resApp = Invoke-DfuDownloadWithTimeout -Address $appAddress -FilePath $fw `
+        -TimeoutSeconds 30 -PromptReset
 
-        if($resApp -match 'Download done') {
-            $appFlashOk = $true
-            break
-        }
-
-        if($resApp -match 'ERASE_PAGE|get_status|LIBUSB_ERROR|No DFU capable USB device|exit with ctrl-C') {
-            Start-Sleep -Milliseconds 500
-            continue
-        }
-
-        # Error no reconocido: no merece repetir muchas veces.
+    if($resApp -match 'Download done') {
+        $appFlashOk = $true
         break
     }
+
+    if($resApp -match 'ERASE_PAGE|get_status|LIBUSB_ERROR|No DFU capable USB device') {
+        Start-Sleep -Milliseconds 500
+        continue
+    }
+
+    # Error no reconocido: no merece repetir muchas veces.
+    break
 }
 
 if(-not $appFlashOk) {
