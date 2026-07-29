@@ -260,14 +260,6 @@ public:
     void setLimiterActive(bool active);       // Brick-wall 0dBFS limiter
     bool isLimiterActive() const { return cachedLimiterActive; }
 
-    // MASTER FX — RAYDRONE
-    // The complete 9-byte payload is sent atomically so Daisy never observes
-    // a partially-updated parameter set.
-    bool setRaydroneConfig(const RaydroneConfigPayload& config);
-    bool updateRaydroneConfig(const RaydroneConfigPayload& patch,
-                              uint8_t updateMask);
-    RaydroneConfigPayload getRaydroneConfig() const;
-
     // ══════════════════════════════════════════════════
     // MASTER FX ROUTING
     // ══════════════════════════════════════════════════
@@ -404,7 +396,7 @@ public:
     void synthNoteOnEx(uint8_t engine, uint8_t midiNote, uint8_t velocity, bool accent = false, bool slide = false);
     void synthNoteOff(uint8_t engine, uint8_t track, uint8_t note = 0xFF);
     void synthSetActive(uint8_t engineMask);
-    void synthSetActive16(uint16_t engineMask16); // 2-byte mask for 10 engines
+    void synthSetActive16(uint16_t engineMask16); // 2-byte mask for 9 engines
     void synthPreset(uint8_t engine, uint8_t preset);
     uint16_t getSynthActiveMask16() const { return cachedSynthActiveMask16; }
     uint8_t getSynthActiveMask() const { return (uint8_t)(cachedSynthActiveMask16 & 0xFF); }
@@ -510,7 +502,6 @@ private:
     float cachedTremoloDepth;
     float cachedWaveFolderGain;
     bool  cachedLimiterActive;
-    RaydroneConfigPayload cachedRaydroneConfig;
 
     // New FX cached state
     bool    cachedAutoWahActive;
@@ -530,7 +521,7 @@ private:
     SdStatusResponse cachedSdStatus;
     bool cachedSdStatusValid = false;
 
-    // Synth engine active mask — 16-bit for 10 engines
+    // Synth engine active mask — 16-bit for 9 engines
     uint16_t cachedSynthActiveMask16;
     
     // Per-track/pad cached filter state
@@ -567,8 +558,6 @@ private:
     
     // SPI mutex for thread safety (Core0 triggers vs Core1 process)
     SemaphoreHandle_t spiMutex;
-    // Serializes Raydrone read/merge/write across AsyncTCP, UDP and Core1.
-    mutable SemaphoreHandle_t raydroneConfigMutex;
     // Core0 → Core1 fire-and-forget command queue (avoids blocking WS handler)
     QueueHandle_t     spiCmdQueue;
 
@@ -578,7 +567,6 @@ private:
     // SPI low-level
     bool sendCommand(uint8_t cmd, const void* payload, uint16_t payloadLen);
     bool sendCommandDirect(uint8_t cmd, const void* payload, uint16_t payloadLen);
-    bool replayRaydroneConfigDirect();
     void drainCmdQueue();   // Called from Core1 process() loop
     bool sendAndReceive(uint8_t cmd, const void* payload, uint16_t payloadLen,
                         void* response, uint16_t responseLen);

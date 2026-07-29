@@ -9,7 +9,6 @@
 
 #include <stdint.h>
 #include "../../shared/red808_protocol_codes.h"
-#include "../../shared/raydrone_protocol.h"
 
 // ═══════════════════════════════════════════════════════
 // SPI PACKET STRUCTURE
@@ -264,10 +263,7 @@ typedef struct __attribute__((packed)) {
 #define SYNTH_ENGINE_FM2OP 6  // I2: 2-operator FM Yamaha-style
 #define SYNTH_ENGINE_PHYS  7  // Physical modeling: ModalVoice/StringVoice
 #define SYNTH_ENGINE_NOISE 8  // Noise/texture: Particle percussion
-#define SYNTH_ENGINE_RAYDRONE 9 // RayDrone granular render engine
-#define SYNTH_ENGINE_COUNT 10
-static constexpr uint16_t SYNTH_ALL_ENGINES_MASK =
-    (uint16_t)((1u << SYNTH_ENGINE_COUNT) - 1u);
+#define SYNTH_ENGINE_COUNT 9
 
 // TR-808 instrument IDs (engine=0)
 #define SYNTH_808_KICK     0
@@ -350,12 +346,12 @@ typedef struct __attribute__((packed)) {
 // CMD_SYNTH_ACTIVE (0xC5) — 1 or 2 bytes
 typedef struct __attribute__((packed)) {
     uint8_t  maskLo;      // bits 0-7 (engines 0-7)
-    uint8_t  maskHi;      // bit 0 = NOISE (8), bit 1 = RAYDRONE (9)
+    uint8_t  maskHi;      // bit 0 = engine 8 (NOISE)
 } SynthActivePayload16;
 
 // Legacy 1-byte variant (kept for backward compat)
 typedef struct __attribute__((packed)) {
-    uint8_t  engineMask;  // bits 0-7 (legacy; no puede controlar engines 8-9)
+    uint8_t  engineMask;  // bit0=808..bit6=FM2Op
 } SynthActivePayload;
 
 // CMD_SYNTH_PRESET (0xC6) — 2 bytes

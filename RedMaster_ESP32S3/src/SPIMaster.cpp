@@ -47,9 +47,8 @@ static const FilterPreset filterPresets[] = {
 // CONSTRUCTOR / DESTRUCTOR
 // ═══════════════════════════════════════════════════════
 
-SPIMaster::SPIMaster() : seqNumber(0), spiErrorCount(0), stm32Connected(false), spiMutex(nullptr), raydroneConfigMutex(nullptr), spiCmdQueue(nullptr), spiLogCallback(nullptr) {
+SPIMaster::SPIMaster() : seqNumber(0), spiErrorCount(0), stm32Connected(false), spiMutex(nullptr), spiCmdQueue(nullptr), spiLogCallback(nullptr) {
     spiMutex = xSemaphoreCreateMutex();
-    raydroneConfigMutex = xSemaphoreCreateMutex();
     // Initialize cached state
     cachedMasterVolume = 100;
     cachedSeqVolume = 100;
@@ -70,15 +69,6 @@ SPIMaster::SPIMaster() : seqNumber(0), spiErrorCount(0), stm32Connected(false), 
     cachedTremoloDepth = 0.7f;
     cachedWaveFolderGain = 1.0f;
     cachedLimiterActive = false;
-    cachedRaydroneConfig.version = RAYDRONE_CONFIG_VERSION;
-    cachedRaydroneConfig.flags = 0;
-    cachedRaydroneConfig.material = RAYDRONE_DEFAULT_MATERIAL;
-    cachedRaydroneConfig.character = RAYDRONE_DEFAULT_CHARACTER;
-    cachedRaydroneConfig.motion = RAYDRONE_DEFAULT_MOTION;
-    cachedRaydroneConfig.space = RAYDRONE_DEFAULT_SPACE;
-    cachedRaydroneConfig.volume = RAYDRONE_DEFAULT_VOLUME;
-    cachedRaydroneConfig.mix = RAYDRONE_DEFAULT_MIX;
-    cachedRaydroneConfig.evolution = RAYDRONE_DEFAULT_EVOLUTION;
     cachedAutoWahActive = false;
     cachedAutoWahLevel = 80;
     cachedAutoWahMix = 50;
@@ -89,7 +79,7 @@ SPIMaster::SPIMaster() : seqNumber(0), spiErrorCount(0), stm32Connected(false), 
     cachedChorusStereoMode = 0;
     memset(cachedChokeGroup, 0, sizeof(cachedChokeGroup));
     memset(&cachedStatus, 0, sizeof(cachedStatus));
-    cachedSynthActiveMask16 = SYNTH_ALL_ENGINES_MASK;
+    cachedSynthActiveMask16 = 0x01FF; // all 9 engines
     
     for (int i = 0; i < MAX_AUDIO_TRACKS; i++) {
         cachedTrackFilter[i] = FILTER_NONE;
@@ -128,10 +118,6 @@ SPIMaster::~SPIMaster() {
         vSemaphoreDelete(spiMutex);
         spiMutex = nullptr;
     }
-    if (raydroneConfigMutex) {
-        vSemaphoreDelete(raydroneConfigMutex);
-        raydroneConfigMutex = nullptr;
-    }
     if (spiCmdQueue) {
         vQueueDelete(spiCmdQueue);
         spiCmdQueue = nullptr;
@@ -163,7 +149,6 @@ bool SPIMaster::begin() {
     for (int attempt = 0; attempt < kBootPingAttempts; attempt++) {
         if (ping(rtt)) {
             stm32Connected = true;
-            replayRaydroneConfigDirect();
             return true;
         }
         delay(200);
@@ -408,11 +393,6 @@ void SPIMaster::process() {
         uint32_t rttUs = 0;
         if (ping(rttUs)) {
             lastPingRttMs = (float)rttUs / 1000.0f;
-            /*
-             * Periodic idempotent replay repairs a dropped fire-and-forget
-             * packet and also covers a fast Daisy reset between heartbeats.
-             */
-            replayRaydroneConfigDirect();
         }
         lastHeartbeat = millis();
     }
@@ -449,11 +429,7 @@ void SPIMaster::process() {
             uint32_t rtt;
             if (ping(rtt)) {
                 stm32Connected = true;
-                const bool raydroneReplayed =
-                    replayRaydroneConfigDirect();
-                Serial.printf("[SPI] Daisy reconectada (RTT %lu us, Raydrone replay=%s)\n",
-                              (unsigned long)rtt,
-                              raydroneReplayed ? "ok" : "error");
+                Serial.printf("[SPI] Daisy reconectada (RTT %lu us)\n", (unsigned long)rtt);
             } else if (millis() - lastRetryLog >= 15000) {
                 Serial.printf("[SPI] Daisy sigue OFFLINE (errores SPI=%lu); revise alimentacion, GND, CS7/SCK4/MOSI5/MISO6 y firmware Daisy\n",
                               (unsigned long)spiErrorCount);
@@ -628,106 +604,6 @@ void SPIMaster::setSampleRateReduction(uint32_t rate) {
     cachedSrReduce = rate;
     Uint32Payload p = {rate};
     sendCommand(CMD_FILTER_SR_REDUCE, &p, sizeof(p));
-}
-
-// ═══════════════════════════════════════════════════════
-// MASTER EFFECTS — RAYDRONE
-// ═══════════════════════════════════════════════════════
-
-bool SPIMaster::setRaydroneConfig(const RaydroneConfigPayload& config) {
-    return updateRaydroneConfig(config, RAYDRONE_UPDATE_ALL);
-}
-
-bool SPIMaster::updateRaydroneConfig(const RaydroneConfigPayload& patch,
-                                     uint8_t updateMask) {
-    if (!raydroneConfigMutex ||
-        xSemaphoreTake(raydroneConfigMutex, pdMS_TO_TICKS(30)) != pdTRUE) {
-        return false;
-    }
-
-    RaydroneConfigPayload normalized = cachedRaydroneConfig;
-    if (updateMask & RAYDRONE_UPDATE_ACTIVE) {
-        normalized.flags = patch.flags;
-    }
-    if (updateMask & RAYDRONE_UPDATE_MATERIAL) {
-        normalized.material = patch.material;
-    }
-    if (updateMask & RAYDRONE_UPDATE_CHARACTER) {
-        normalized.character = patch.character;
-    }
-    if (updateMask & RAYDRONE_UPDATE_MOTION) {
-        normalized.motion = patch.motion;
-    }
-    if (updateMask & RAYDRONE_UPDATE_SPACE) {
-        normalized.space = patch.space;
-    }
-    if (updateMask & RAYDRONE_UPDATE_VOLUME) {
-        normalized.volume = patch.volume;
-    }
-    if (updateMask & RAYDRONE_UPDATE_MIX) {
-        normalized.mix = patch.mix;
-    }
-    if (updateMask & RAYDRONE_UPDATE_EVOLUTION) {
-        normalized.evolution = patch.evolution;
-    }
-
-    normalized.version = RAYDRONE_CONFIG_VERSION;
-    normalized.flags &= RAYDRONE_FLAG_ACTIVE;
-    if (normalized.material >= RAYDRONE_MATERIAL_COUNT) {
-        normalized.material = RAYDRONE_MATERIAL_COUNT - 1;
-    }
-    if (normalized.character > RAYDRONE_CHARACTER_SAFE_MAX) normalized.character = RAYDRONE_CHARACTER_SAFE_MAX;
-    if (normalized.motion > 100) normalized.motion = 100;
-    if (normalized.space > 100) normalized.space = 100;
-    if (normalized.volume > 100) normalized.volume = 100;
-    if (normalized.mix > 100) normalized.mix = 100;
-    if (normalized.evolution > 100) normalized.evolution = 100;
-
-    if (!sendCommand(CMD_RAYDRONE_CONFIG, &normalized, sizeof(normalized))) {
-        xSemaphoreGive(raydroneConfigMutex);
-        return false;
-    }
-
-    cachedRaydroneConfig = normalized;
-    xSemaphoreGive(raydroneConfigMutex);
-    return true;
-}
-
-RaydroneConfigPayload SPIMaster::getRaydroneConfig() const {
-    RaydroneConfigPayload snapshot = {};
-    if (!raydroneConfigMutex ||
-        xSemaphoreTake(raydroneConfigMutex, pdMS_TO_TICKS(30)) != pdTRUE) {
-        snapshot.version = RAYDRONE_CONFIG_VERSION;
-        snapshot.material = RAYDRONE_DEFAULT_MATERIAL;
-        snapshot.character = RAYDRONE_DEFAULT_CHARACTER;
-        snapshot.motion = RAYDRONE_DEFAULT_MOTION;
-        snapshot.space = RAYDRONE_DEFAULT_SPACE;
-        snapshot.volume = RAYDRONE_DEFAULT_VOLUME;
-        snapshot.mix = RAYDRONE_DEFAULT_MIX;
-        snapshot.evolution = RAYDRONE_DEFAULT_EVOLUTION;
-        return snapshot;
-    }
-    snapshot = cachedRaydroneConfig;
-    xSemaphoreGive(raydroneConfigMutex);
-    return snapshot;
-}
-
-bool SPIMaster::replayRaydroneConfigDirect() {
-    /*
-     * Route 12 is normally permanent and ACTIVE is the only user-facing
-     * bypass. Reassert the route before every idempotent replay so upgrading
-     * only the S3 also repairs a Daisy left disconnected by older firmware.
-     */
-    const MasterFxRoutePayload route = {
-        MASTER_FX_ROUTE_RAYDRONE,
-        1,
-    };
-    const RaydroneConfigPayload config = getRaydroneConfig();
-    const bool routeSent =
-        sendCommandDirect(CMD_MASTER_FX_ROUTE, &route, sizeof(route));
-    const bool configSent =
-        sendCommandDirect(CMD_RAYDRONE_CONFIG, &config, sizeof(config));
-    return routeSent && configSent;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1538,26 +1414,10 @@ bool SPIMaster::ping(uint32_t& roundtripUs) {
         if (!stm32Connected) stm32Connected = true;  // auto-reconnect si el boot ping falló
         return true;
     }
-    stm32Connected = false;
     return false;
 }
 
 void SPIMaster::resetDSP() {
-    RaydroneConfigPayload raydroneDefaults = {};
-    raydroneDefaults.version = RAYDRONE_CONFIG_VERSION;
-    raydroneDefaults.material = RAYDRONE_DEFAULT_MATERIAL;
-    raydroneDefaults.character = RAYDRONE_DEFAULT_CHARACTER;
-    raydroneDefaults.motion = RAYDRONE_DEFAULT_MOTION;
-    raydroneDefaults.space = RAYDRONE_DEFAULT_SPACE;
-    raydroneDefaults.volume = RAYDRONE_DEFAULT_VOLUME;
-    raydroneDefaults.mix = RAYDRONE_DEFAULT_MIX;
-    raydroneDefaults.evolution = RAYDRONE_DEFAULT_EVOLUTION;
-    if (!raydroneConfigMutex ||
-        xSemaphoreTake(raydroneConfigMutex, portMAX_DELAY) == pdTRUE) {
-        cachedRaydroneConfig = raydroneDefaults;
-        if (raydroneConfigMutex) xSemaphoreGive(raydroneConfigMutex);
-    }
-
     sendCommand(CMD_RESET, nullptr, 0);
     
     // Reset cached state
@@ -2072,7 +1932,6 @@ void SPIMaster::synthSetActive(uint8_t engineMask) {
 }
 
 void SPIMaster::synthSetActive16(uint16_t engineMask16) {
-    engineMask16 &= SYNTH_ALL_ENGINES_MASK;
     SynthActivePayload16 p;
     p.maskLo = (uint8_t)(engineMask16 & 0xFF);
     p.maskHi = (uint8_t)((engineMask16 >> 8) & 0xFF);

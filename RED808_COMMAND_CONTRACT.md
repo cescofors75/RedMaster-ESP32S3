@@ -130,79 +130,6 @@ Comandos canonicos:
 
 Los campos `value` de mix pueden llegar como `0..1` o `0..100`; Master normaliza segun el comando existente.
 
-RayDrone admite actualizaciones parciales. Todos los campos son opcionales para
-clientes genericos; los que falten conservan el ultimo valor autoritativo del
-S3. Si se incluye `version`, debe valer `1`:
-
-```json
-{
-  "cmd":"setRaydrone",
-  "version":1,
-  "requestId":305419897,
-  "active":true,
-  "material":0,
-  "character":35,
-  "motion":0,
-  "space":15,
-  "volume":80,
-  "mix":70
-}
-```
-
-| Campo | Rango | Significado |
-|---|---:|---|
-| `active` | bool | Activa el insert RayDrone |
-| `material` | `0..5` | Vacio, Metal, Madera, Cristal, Agua o Plasma |
-| `character` | `0..100` | Apertura, duracion y densidad de rayos |
-| `motion` | `0..100` | Modulacion de densidad y chorus |
-| `space` | `0..100` | Apertura estereo y reflexiones |
-| `volume` | `0..100` | Nivel del motor humedo |
-| `mix` | `0..100` | Mezcla dry/wet del insert master |
-
-P4 envia solo el campo que cambia y S3 lo fusiona bajo mutex con su snapshot
-autoritativo. S3 envia siempre los ocho bytes juntos a Daisy con
-`CMD_RAYDRONE_CONFIG` (`0x28`); la version de payload vigente es `1`. La ruta
-interna `MASTER_FX_ROUTE_RAYDRONE` (`12`) permanece conectada y el bit
-`active` es la unica autoridad de bypass, evitando una transicion repartida
-entre dos paquetes.
-
-Tras aceptar un cambio, S3 publica un datagrama compacto para todos los clientes
-UDP:
-
-```json
-{
-  "type":"raydrone",
-  "version":1,
-  "ok":true,
-  "updateMask":64,
-  "requestId":305419897,
-  "active":true,
-  "material":0,
-  "character":35,
-  "motion":0,
-  "space":15,
-  "volume":80,
-  "mix":70
-}
-```
-
-`updateMask` usa los bits `active..mix` (`1,2,4,8,16,32,64`). P4 asigna un
-`requestId` no nulo nuevo a cada valor local; S3 lo refleja en el evento. Solo
-una confirmacion con el mismo identificador libera el ownership de ese campo,
-por lo que un eco antiguo no puede confirmar por error una secuencia como
-`50 -> 60 -> 50`. Un evento con `ok:false` y el identificador pendiente revierte
-el campo al valor autoritativo incluido. P4 reintenta solicitudes pendientes de
-forma idempotente y al reconectar.
-
-Los cambios remotos sin `requestId` respetan el ownership por campo y no bloquean
-los demas controles. El enlace S3->Daisy no tiene ACK de aplicacion; cada
-heartbeat (2 s) reimpone primero `route12=true` y despues el snapshot para
-reparar de forma eventual un paquete perdido, un firmware anterior que dejara
-la ruta desconectada o un reinicio rapido de Daisy.
-
-Daisy mantiene siempre llena una cinta circular de entrada de cuatro segundos,
-incluso con el efecto apagado, para que la activacion no empiece desde silencio.
-
 P4 FX LAB muestra seis macros soportados por Master/Daisy:
 
 | P4 | Transporte | Comandos principales | Rango recomendado |
@@ -269,16 +196,6 @@ Snapshot compacto del estado autoritativo del Master hacia P4/S3.
     "phaserActive":true,
     "phaserDepth":0.50,
     "chorusActive":false,
-    "raydrone":{
-      "version":1,
-      "active":true,
-      "material":0,
-      "character":35,
-      "motion":0,
-      "space":15,
-      "volume":80,
-      "mix":70
-    },
     "trackReverbSend":[0],
     "trackDelaySend":[0],
     "trackChorusSend":[0],

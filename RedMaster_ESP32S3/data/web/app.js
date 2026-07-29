@@ -555,9 +555,6 @@ function handleWebSocketMessage(data) {
         case 'state':
             updateSequencerState(data);
             updateDeviceStats(data);
-            if (data.fx && data.fx.raydrone && typeof window.updateRaydroneUI === 'function') {
-                window.updateRaydroneUI(data.fx.raydrone);
-            }
             if (Array.isArray(data.samples)) {
                 applySampleMetadataFromState(data.samples);
             }
@@ -611,9 +608,14 @@ function handleWebSocketMessage(data) {
             // Fallback minimo del servidor cuando no puede mandar el patron
             // completo (heap bajo): sincronizar al menos indice y nombre.
             if (data.pattern !== undefined) {
+                currentPatternIndex = data.pattern;
                 const psName = data.pattern < PATTERN_NAMES.length
                     ? PATTERN_NAMES[data.pattern] : `PATTERN ${data.pattern + 1}`;
-                applyPatternUiState(data.pattern, psName);
+                const psEl = document.getElementById('currentPatternName');
+                if (psEl) psEl.textContent = psName;
+                const psCirc = document.getElementById('circularPatternName');
+                if (psCirc) psCirc.textContent = psName;
+                updateHeaderPatternDisplay(data.pattern, psName);
             }
             break;
         case 'songPattern':
@@ -634,10 +636,15 @@ function handleWebSocketMessage(data) {
             (window.loadPatternData || loadPatternData)(data);
             // Actualizar patrón actual si viene el índice
             if (data.index !== undefined) {
+                currentPatternIndex = data.index;
                 const patternName = data.name || (data.index < PATTERN_NAMES.length
                     ? PATTERN_NAMES[data.index]
                     : `PATTERN ${data.index + 1}`);
-                applyPatternUiState(data.index, patternName);
+                const nameEl = document.getElementById('currentPatternName');
+                if (nameEl) nameEl.textContent = patternName;
+                const circularPatternName = document.getElementById('circularPatternName');
+                if (circularPatternName) circularPatternName.textContent = patternName;
+                updateHeaderPatternDisplay(data.index, patternName);
             }
             break;
         case 'sampleCounts':
@@ -821,10 +828,6 @@ function handleWebSocketMessage(data) {
             handleMasterFxUpdate(data);
             break;
 
-        case 'raydrone':
-            if (typeof window.updateRaydroneUI === 'function') window.updateRaydroneUI(data);
-            break;
-
         case 'trackFxUpdate':
             handleTrackFxUpdate(data);
             break;
@@ -950,9 +953,18 @@ function handlePhysButton(data) {
             // Actualizar índice de patrón en la UI sin pedir todo el estado
             const idx = data.pattern;
             if (idx !== undefined) {
+                currentPatternIndex = idx;
                 const PNAMES = (typeof PATTERN_NAMES !== 'undefined' && PATTERN_NAMES.length > idx)
                     ? PATTERN_NAMES[idx] : `PATTERN ${idx + 1}`;
-                applyPatternUiState(idx, PNAMES);
+                const nameEl = document.getElementById('currentPatternName');
+                if (nameEl) nameEl.textContent = PNAMES;
+                const circularEl = document.getElementById('circularPatternName');
+                if (circularEl) circularEl.textContent = PNAMES;
+                // Mantener el readout del header (numero + nombre) en el mismo
+                // paso — sin esto, un cambio de patron disparado desde el panel
+                // fisico o desde la P4 dejaba el nombre actualizado pero el
+                // "P01 ..." del header con el patron anterior.
+                updateHeaderPatternDisplay(idx, PNAMES);
                 // Toast con número de patrón
                 if (window.showToast) {
                     const dir = data.action === 'nextPattern' ? '▶ Siguiente' : '◀ Anterior';
@@ -1212,9 +1224,6 @@ function handleMasterFxUpdate(data) {
     // --- Live Pitch ---
     else if (p === 'livePitch') {
         const sl = byId('livePitchSlider'); if (sl) { sl.value = v; const vd = byId('livePitchValue'); if (vd) vd.textContent = parseFloat(v).toFixed(2); }
-    }
-    if (p === 'raydrone' && data.raydrone && typeof window.updateRaydroneUI === 'function') {
-        window.updateRaydroneUI(data.raydrone);
     }
 }
 
@@ -4988,7 +4997,17 @@ function setupControls() {
             const pattern = parseInt(btn.dataset.pattern);
             const patternName = btn.textContent.trim();
             _lastUserPatternSelectTime = Date.now();
-            applyPatternUiState(pattern, patternName);
+            currentPatternIndex = pattern;
+
+            // Actualizar display del patrón
+            document.getElementById('currentPatternName').textContent = patternName;
+            updateHeaderPatternDisplay(pattern, patternName);
+
+            // Update circular pattern name
+            const circularPatternName = document.getElementById('circularPatternName');
+            if (circularPatternName) {
+                circularPatternName.textContent = patternName;
+            }
 
             // Cambiar pattern directamente por WebSocket
             // El backend envía automáticamente los datos del patrón
@@ -5531,21 +5550,6 @@ function updateHeaderPatternDisplay(index, name) {
     readout.textContent = `P${String(index + 1).padStart(2, '0')} ${patternName}`;
 }
 
-// One renderer for every pattern label. Header, sequencer and circular view
-// must never derive their own names from different packets/fallback tables.
-function applyPatternUiState(index, name) {
-    if (index === undefined || index === null) return;
-    const safeIndex = Math.max(0, Number(index) | 0);
-    const resolved = name || (safeIndex < PATTERN_NAMES.length
-        ? PATTERN_NAMES[safeIndex] : `PATTERN ${safeIndex + 1}`);
-    currentPatternIndex = safeIndex;
-    ['currentPatternName', 'circularPatternName'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = resolved;
-    });
-    updateHeaderPatternDisplay(safeIndex, resolved);
-}
-
 function syncLedMonoMode() {
     const isMono = document.documentElement.dataset.theme === 'greyscale' ||
         document.body.classList.contains('mono-mode');
@@ -5717,11 +5721,16 @@ function updateSequencerState(data) {
         // manda sobre un broadcast que la contradiga durante ese margen.
         const recentLocalSelect = (Date.now() - _lastUserPatternSelectTime) < 600;
         if (currentPatternIndex !== data.pattern && !recentLocalSelect) {
+            currentPatternIndex = data.pattern;
             // Pattern changed, update name and request new data
             const patternName = data.patternMeta?.name || (data.pattern < PATTERN_NAMES.length
                 ? PATTERN_NAMES[data.pattern]
                 : `PATTERN ${data.pattern + 1}`);
-            applyPatternUiState(data.pattern, patternName);
+            const nameEl = document.getElementById('currentPatternName');
+            if (nameEl) nameEl.textContent = patternName;
+            const circEl = document.getElementById('circularPatternName');
+            if (circEl) circEl.textContent = patternName;
+            updateHeaderPatternDisplay(data.pattern, patternName);
             setTimeout(() => {
                 sendWebSocket({ cmd: 'getPattern' });
             }, 100);
@@ -5772,7 +5781,7 @@ function updateSongModeUI(enabled, length, currentPattern) {
             btn.title = `Bar ${i + 1}`;
             btn.addEventListener('click', () => {
                 _lastUserPatternSelectTime = Date.now();
-                applyPatternUiState(i, `BAR ${i + 1}`);
+                currentPatternIndex = i;
                 sendWebSocket({ cmd: 'selectPattern', index: i });
                 // Update local state immediately
                 updateSongBarHighlight(i);
@@ -5800,6 +5809,7 @@ function handleSongPatternChange(pattern, songLen) {
     // Called when ESP32 auto-advances pattern in song mode
     songModeActive = true;
     songLength = songLen;
+    currentPatternIndex = pattern;
     updateSongBarHighlight(pattern);
     
     // Request new pattern data for display
@@ -5807,7 +5817,11 @@ function handleSongPatternChange(pattern, songLen) {
     
     // Update pattern name display
     const patternName = `BAR ${pattern + 1}`;
-    applyPatternUiState(pattern, patternName);
+    const patternNameEl = document.getElementById('currentPatternName');
+    if (patternNameEl) patternNameEl.textContent = patternName;
+    const circularPatternName = document.getElementById('circularPatternName');
+    if (circularPatternName) circularPatternName.textContent = patternName;
+    updateHeaderPatternDisplay(pattern, patternName);
 }
 
 function exitSongMode() {
@@ -6008,6 +6022,7 @@ function changePattern(delta) {
 
 function selectPattern(index) {
     if (index < 0 || index >= 128) return;
+    currentPatternIndex = index;
     _lastUserPatternSelectTime = Date.now();
 
     // Send pattern change to ESP32
@@ -6015,7 +6030,11 @@ function selectPattern(index) {
 
     // Update UI display
     const name = index < PATTERN_NAMES.length ? PATTERN_NAMES[index] : `PATTERN ${index + 1}`;
-    applyPatternUiState(index, name);
+    const el = document.getElementById('currentPatternName');
+    if (el) el.textContent = name;
+    const circEl = document.getElementById('circularPatternName');
+    if (circEl) circEl.textContent = name;
+    updateHeaderPatternDisplay(index, name);
 
     // Los pasos del patrón anterior siguen pintados hasta que llegue la
     // respuesta de getPattern (round-trip WS): atenuar el grid evita que

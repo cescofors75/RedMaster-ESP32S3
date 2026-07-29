@@ -12,7 +12,7 @@ TARGET = DemoBells
 CPP_SOURCES = demo_bells.cpp syscalls.cpp
 else
 TARGET = DrumMachine
-CPP_SOURCES = main.cpp raydrone_dsp.cpp syscalls.cpp
+CPP_SOURCES = main.cpp syscalls.cpp
 endif
 
 # Include path for synth headers + DaisySP-LGPL
