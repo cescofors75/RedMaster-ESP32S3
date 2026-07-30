@@ -531,7 +531,8 @@ static volatile uint8_t gGrooveSwingAmount = 0;
 static volatile bool gMasterPhaserActive = false;
 static volatile float gMasterDelayMix = 0.0f;
 static volatile float gMasterPhaserDepth = 0.0f;
-static volatile float gMasterReverbMix = 0.3f;
+static volatile float gMasterReverbMix = 0.0f;
+static volatile bool gClubWarmPreset = false;
 static volatile bool gMasterFlangerActive = false;
 static volatile bool gMasterCompressorActive = false;
 static volatile int gMasterFilterType = 0;
@@ -542,7 +543,11 @@ static volatile float gMasterFilterResonance = 1.0f;
 static volatile float gMasterDistortion = 0.0f;
 extern void dsqUploadPattern(int pattern);           // upload one pattern to Daisy sequencer (Core1 only)
 extern void dsqUploadPatternDeferred(int pattern);   // safe from Core0: sets flag for Core1
+extern void dsqPreparePatternDeferred(int pattern);  // upload only, keep current scene
 extern void dsqSelectPatternDeferred(int pattern);   // select-only path (1 SPI cmd, no reupload)
+extern void dsqQueuePatternDeferred(int pattern, uint8_t bars); // native Daisy bar queue
+extern void dsqLaunchDemoSetDeferred(); // refresh bank + launch curated chain on Core1
+extern void dsqCancelPatternQueueDeferred();
 extern void dsqUploadAndPlayDeferred(int pattern);   // upload + select + play, en orden garantizado
 extern int dsqGetResidentSlot(int masterPattern);
 extern void setTrackSynthEngine(int track, int8_t engine);  // fwd: definido en main.cpp, usado por el pattern bank loader
@@ -916,8 +921,9 @@ static void populateStateDocument(JsonDocument& doc) {
   doc["type"] = "state";
   doc["playing"] = sequencer.isPlaying();
   doc["tempo"] = sequencer.getTempo();
-  const int currentPattern = sequencer.getCurrentPattern();
+  const int currentPattern = sequencer.getPerformancePattern();
   doc["pattern"] = currentPattern;
+  doc["queuedPattern"] = sequencer.getQueuedPattern();
   PatternMetadata patternMetadata{};
   if (sequencer.getPatternMetadata(currentPattern, patternMetadata)) {
     JsonObject meta = doc.createNestedObject("patternMeta");
@@ -943,6 +949,7 @@ static void populateStateDocument(JsonDocument& doc) {
   doc["humanizeTimingMs"] = sequencer.getHumanizeTimingMs();
   doc["humanizeVelocity"] = sequencer.getHumanizeVelocityAmount();
   doc["heap"] = ESP.getFreeHeap();
+  doc["mixPreset"] = gClubWarmPreset ? "clubWarm" : "dry";
 
   JsonArray loopActive = doc.createNestedArray("loopActive");
   JsonArray loopPaused = doc.createNestedArray("loopPaused");
@@ -3035,7 +3042,8 @@ void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
   uint32_t sdLoadedMask = sdOk ? sdStat.samplesLoaded : 0;
 
   doc["cmd"] = "state_sync";
-  doc["pattern"] = sequencer.getCurrentPattern();
+  doc["pattern"] = sequencer.getPerformancePattern();
+  doc["queuedPattern"] = sequencer.getQueuedPattern();
   doc["playing"] = sequencer.isPlaying();
   doc["tempo"] = sequencer.getTempo();
   doc["step"] = sequencer.getCurrentStep();
@@ -3046,6 +3054,7 @@ void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
   doc["kit"] = sdOk ? String(sdStat.currentKit) : "";
   doc["sdPresent"] = sdOk ? (bool)sdStat.present : false;
   doc["sdLoadedMask"] = sdLoadedMask;
+  doc["mixPreset"] = gClubWarmPreset ? "clubWarm" : "dry";
 
   JsonArray mute = doc.createNestedArray("mute");
   JsonArray solo = doc.createNestedArray("solo");
@@ -3310,11 +3319,21 @@ void WebInterface::broadcastPadTrigger(int pad) {
 static volatile int _pendingBroadcastStep = -1;     // -1 = nothing pending
 static volatile int _pendingSongPattern   = -1;     // -1 = nothing pending
 static volatile int _pendingSongLength    = 0;
+static volatile int _pendingDaisyStep     = -1;
+static volatile int _pendingDaisyPattern  = 0;
+static volatile bool _pendingDaisyPlaying = false;
 
 void WebInterface::broadcastStep(int step) {
   // Called from Core1 (stepChangeCallback) — do NOT touch ws here!
   // Just set the volatile flag; update() on Core0 will do the actual broadcast.
   _pendingBroadcastStep = step;
+}
+
+void WebInterface::publishDaisyTransport(int step, int pattern, bool playing) {
+  // Core1 producer / Core0 consumer. Write marker last for a coherent tuple.
+  _pendingDaisyPattern = pattern;
+  _pendingDaisyPlaying = playing;
+  _pendingDaisyStep = step;
 }
 
 void WebInterface::broadcastSongPattern(int pattern, int songLength) {
@@ -3458,6 +3477,34 @@ void WebInterface::update() {
   }
 
   // ── Consume deferred broadcasts from Core1 (thread-safe: only ws access from Core0) ──
+  int daisyStep = _pendingDaisyStep;
+  if (daisyStep >= 0) {
+    _pendingDaisyStep = -1;
+    const int daisyPattern = _pendingDaisyPattern;
+    const bool daisyPlaying = _pendingDaisyPlaying;
+    StaticJsonDocument<128> pos;
+    pos["cmd"] = "transport_pos";
+    pos["step"] = daisyStep;
+    pos["pattern"] = daisyPattern;
+    pos["playing"] = daisyPlaying;
+    for (auto& entry : udpClients)
+      sendUdpJsonTo(entry.second.ip, entry.second.port, pos);
+    if (!pageLoading && ws->count() > 0) {
+      char stepBuf[40];
+      int stepLen = snprintf(stepBuf, sizeof(stepBuf),
+                             "{\"type\":\"step\",\"step\":%d}", daisyStep);
+      ws->textAll(stepBuf, stepLen);
+      static int lastDaisyWsPattern = -1;
+      if (daisyPattern != lastDaisyWsPattern) {
+        lastDaisyWsPattern = daisyPattern;
+        char patBuf[88];
+        int patLen = snprintf(patBuf, sizeof(patBuf),
+          "{\"type\":\"songPattern\",\"pattern\":%d,\"songLength\":1}",
+          daisyPattern);
+        ws->textAll(patBuf, patLen);
+      }
+    }
+  }
   int step = _pendingBroadcastStep;
   if (step >= 0) {
     _pendingBroadcastStep = -1;
@@ -3884,6 +3931,120 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
       String out; serializeJson(resp, out);
       if (ws) ws->textAll(out);
     }
+  }
+  else if (cmd == "queuePattern") {
+    int pattern = !doc["index"].isNull() ? doc["index"].as<int>()
+                                         : doc["pattern"].as<int>();
+    pattern = constrain(pattern, 0, MAX_PATTERNS - 1);
+    if (!sequencer.isPlaying()) {
+      sequencer.selectPattern(pattern);
+      dsqUploadPatternDeferred(pattern);
+      broadcastUdpPatternSync(pattern);
+    } else {
+      sequencer.queuePattern(pattern);
+      dsqQueuePatternDeferred(pattern, 0);
+    }
+    broadcastSequencerState();
+  }
+  else if (cmd == "cancelPatternQueue") {
+    sequencer.cancelQueuedPattern();
+    dsqCancelPatternQueueDeferred();
+    broadcastSequencerState();
+  }
+  else if (cmd == "triggerFill" || cmd == "triggerVariation" ||
+           cmd == "triggerBuild4" || cmd == "triggerDrop") {
+    if (!sequencer.isPlaying()) return;
+    const int source = sequencer.getPerformancePattern();
+    const bool variation = (cmd == "triggerVariation");
+    const bool build4 = (cmd == "triggerBuild4");
+    const bool drop = (cmd == "triggerDrop");
+    const int scratch = variation ? (MAX_PATTERNS - 1)
+                      : build4 ? (MAX_PATTERNS - 3)
+                      : drop ? (MAX_PATTERNS - 4)
+                      : (MAX_PATTERNS - 2);
+    const int length = sequencer.getPatternLength();
+    const int base = max(0, length - 16);
+    sequencer.copyPattern(source, scratch);
+
+    if (variation) {
+      // Safe 808/505 answer: hats, clap/rim and tom syncopation only.
+      // Track 0 (kick), track 7 (808/303 bass) and melodic tracks are untouched.
+      const uint8_t tracks[] = {2, 5, 6, 9, 10};
+      const uint8_t relSteps[] = {7, 10, 11, 14, 15};
+      for (uint8_t i = 0; i < sizeof(tracks); ++i) {
+        const int step = base + relSteps[i];
+        sequencer.setStep(scratch, tracks[i], step, true, (uint8_t)(86 + i * 8));
+      }
+    } else if (build4) {
+      // Four-bar energy scene: denser hats/claps and a final tom answer.
+      // The copied kick/bass foundation is never edited.
+      const uint8_t hatSteps[] = {2, 6, 10, 14};
+      for (uint8_t rel : hatSteps)
+        sequencer.setStep(scratch, 2, base + rel, true, 92);
+      sequencer.setStep(scratch, 3, base + 7, true, 86);
+      sequencer.setStep(scratch, 3, base + 15, true, 98);
+      sequencer.setStep(scratch, 5, base + 4, true, 98);
+      sequencer.setStep(scratch, 5, base + 12, true, 108);
+      sequencer.setStep(scratch, 9, base + 13, true, 94);
+      sequencer.setStep(scratch, 10, base + 14, true, 106);
+      sequencer.setStep(scratch, 10, base + 15, true, 118);
+    } else if (drop) {
+      // Remove only the drum family from the final beat. Bass (7), synths and
+      // XTRA tails keep tension; the original groove returns on the downbeat.
+      const uint8_t drumTracks[] = {0,1,2,3,4,5,6,8,9,10};
+      for (uint8_t track : drumTracks)
+        for (int rel = 12; rel < 16; ++rel)
+          sequencer.setStep(scratch, track, base + rel, false, 0);
+    } else {
+      // One-bar tom/snare lift over an exact copy of the current groove.
+      for (int rel = 8; rel < 16; ++rel) {
+        const int track = (rel < 11) ? 8 : (rel < 14 ? 9 : 10);
+        sequencer.setStep(scratch, track, base + rel, true,
+                          (uint8_t)constrain(78 + (rel - 8) * 6, 1, 127));
+      }
+      sequencer.setStep(scratch, 1, base + 14, true, 112);
+      sequencer.setStep(scratch, 5, base + 15, true, 120);
+    }
+    dsqPreparePatternDeferred(scratch);
+    const uint8_t bars = build4 ? 4 : 1;
+    sequencer.queuePatternForBars(scratch, bars);
+    dsqQueuePatternDeferred(scratch, bars);
+    broadcastSequencerState();
+  }
+  else if (cmd == "setMixPreset") {
+    const bool warm = doc["preset"].as<String>().equalsIgnoreCase("clubWarm") ||
+                      (doc.containsKey("warm") && doc["warm"].as<bool>());
+    gClubWarmPreset = warm;
+    gMasterCompressorActive = warm;
+    gMasterReverbMix = warm ? 0.06f : 0.0f;
+    spiMaster.setCompressorActive(warm);
+    if (warm) {
+      spiMaster.setCompressorThreshold(-8.0f);
+      spiMaster.setCompressorRatio(1.6f);
+      spiMaster.setCompressorAttack(25.0f);
+      spiMaster.setCompressorRelease(120.0f);
+      spiMaster.setCompressorMakeupGain(0.5f);
+      spiMaster.setReverb(true, 0.30f, 4500.0f, 0.06f);
+    } else {
+      spiMaster.setReverb(false, 0.0f, 200.0f, 0.0f);
+    }
+    for (int track = 0; track < 16; ++track) spiMaster.setTrackReverbSend(track, 0);
+    if (warm) {
+      spiMaster.setTrackReverbSend(1, 8);
+      spiMaster.setTrackReverbSend(3, 4);
+      spiMaster.setTrackReverbSend(4, 6);
+      spiMaster.setTrackReverbSend(5, 12);
+    }
+    broadcastSequencerState();
+    broadcastUdpStateSync();
+  }
+  else if (cmd == "launchDemoSet") {
+    dsqLaunchDemoSetDeferred();
+    StaticJsonDocument<96> resp;
+    resp["type"] = "demoSet";
+    resp["state"] = "preparing";
+    String out; serializeJson(resp, out);
+    if (ws) ws->textAll(out);
   }
   else if (cmd == "selectPattern") {
     // No encadenar `doc["a"] | doc["b"] | default`: el primer `|` de

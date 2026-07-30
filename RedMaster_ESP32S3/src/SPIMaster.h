@@ -414,6 +414,8 @@ public:
     bool dsqControl(uint8_t mode);
     // Select active pattern
     bool dsqSelectPattern(uint8_t pattern);
+    bool dsqQueuePattern(uint8_t pattern, uint8_t bars = 0);
+    bool dsqCancelPatternQueue();
     // Set pattern length (16/32/64)
     bool dsqSetLength(uint8_t length);
     // Mute/unmute a track

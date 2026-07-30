@@ -17,6 +17,7 @@ void input_manager_init();
 void input_manager_poll_i2c();
 void input_manager_poll_analog();
 bool input_manager_pop_event(InputEvent& out);
+uint32_t input_manager_dropped_event_count();
 
 // Set a ByteButton LED color from any task (module 0 or 1).
 // The I2C task picks it up on the next poll cycle.

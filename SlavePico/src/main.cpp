@@ -21,7 +21,11 @@ void task_input_i2c(void* /*arg*/) {
   for (;;) {
     // Block until INT fires (instant) or kInputPollMs timeout (fallback).
     // When kEnableDfRotaryInterrupt=false, only the timeout path runs.
-    xSemaphoreTake(sem, pdMS_TO_TICKS(cfg::kInputPollMs));
+    if (sem) {
+      xSemaphoreTake(sem, pdMS_TO_TICKS(cfg::kInputPollMs));
+    } else {
+      vTaskDelay(pdMS_TO_TICKS(cfg::kInputPollMs));
+    }
     input_manager_poll_i2c();
   }
 }
@@ -60,9 +64,13 @@ void setup() {
 
 #if defined(ARDUINO_ARCH_ESP32)
   if (cfg::kEnableI2cPolling) {
-    xTaskCreate(task_input_i2c, "input_i2c", 4096, nullptr, 2, nullptr);
+    if (xTaskCreate(task_input_i2c, "input_i2c", 4096, nullptr, 2, nullptr) != pdPASS) {
+      Serial.println("[SlavePico] ERROR: input_i2c task creation failed");
+    }
   }
-  xTaskCreate(task_input_analog, "input_analog", 3072, nullptr, 1, nullptr);
+  if (xTaskCreate(task_input_analog, "input_analog", 3072, nullptr, 1, nullptr) != pdPASS) {
+    Serial.println("[SlavePico] ERROR: input_analog task creation failed");
+  }
 #endif
 }
 
@@ -73,7 +81,8 @@ void loop() {
     uint32_t now = millis();
     if (now - g_lastSerialAliveMs >= 3000) {
       g_lastSerialAliveMs = now;
-      Serial.printf("[SlavePico] alive wifi=%d udp=%d\n", static_cast<int>(WiFi.status()), udp_is_ready() ? 1 : 0);
+      uint32_t dropped = input_manager_dropped_event_count();
+      Serial.printf("[SlavePico] alive wifi=%d udp=%d dropped=%lu\n", static_cast<int>(WiFi.status()), udp_is_ready() ? 1 : 0, static_cast<unsigned long>(dropped));
     }
   }
   delay(2);

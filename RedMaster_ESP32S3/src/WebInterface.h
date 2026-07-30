@@ -45,6 +45,7 @@ public:
   void sendSequencerStateToClient(AsyncWebSocketClient* client);
   void broadcastPadTrigger(int pad);
   void broadcastStep(int step);
+  void publishDaisyTransport(int step, int pattern, bool playing);
   void broadcastSongPattern(int pattern, int songLength);
   void broadcastUdpSongPattern(int pattern, int songLength);
   

@@ -57,9 +57,9 @@ SPIMaster::SPIMaster() : seqNumber(0), spiErrorCount(0), stm32Connected(false), 
     
     // New FX cached state
     cachedReverbActive = false;
-    cachedReverbFeedback = 0.85f;
-    cachedReverbLpFreq = 8000.0f;
-    cachedReverbMix = 0.3f;
+    cachedReverbFeedback = 0.0f;
+    cachedReverbLpFreq = 200.0f;
+    cachedReverbMix = 0.0f;
     cachedChorusActive = false;
     cachedChorusRate = 0.5f;
     cachedChorusDepth = 0.5f;
@@ -273,7 +273,7 @@ bool SPIMaster::sendCommandDirect(uint8_t cmd, const void* payload, uint16_t pay
 
     if (spiLogCallback && cmd != CMD_GET_PEAKS && cmd != CMD_GET_CPU_LOAD
                        && cmd != CMD_PING    && cmd != CMD_GET_STATUS
-                       && cmd != CMD_GET_VOICES) {
+                       && cmd != CMD_GET_VOICES && cmd != CMD_DSQ_GET_POS) {
         char buf[96];
         snprintf(buf, sizeof(buf),
             "{\"type\":\"spi_log\",\"cmd\":\"0x%02X\",\"seq\":%d,\"len\":%d,\"ms\":%lu}",
@@ -1990,6 +1990,19 @@ bool SPIMaster::dsqControl(uint8_t mode) {
 bool SPIMaster::dsqSelectPattern(uint8_t pattern) {
     uint8_t buf[1] = { (uint8_t)(pattern % DSQ_PATTERNS) };
     return sendCommand(CMD_DSQ_SELECT_PATTERN, buf, 1);
+}
+
+bool SPIMaster::dsqQueuePattern(uint8_t pattern, uint8_t bars) {
+    uint8_t buf[2] = {
+        (uint8_t)(pattern % DSQ_PATTERNS),
+        (uint8_t)constrain(bars, 0, 16)
+    };
+    return sendCommand(CMD_DSQ_QUEUE_PATTERN, buf, sizeof(buf));
+}
+
+bool SPIMaster::dsqCancelPatternQueue() {
+    const uint8_t buf[2] = {0xFF, 0};
+    return sendCommand(CMD_DSQ_QUEUE_PATTERN, buf, sizeof(buf));
 }
 
 bool SPIMaster::dsqSetLength(uint8_t length) {

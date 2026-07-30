@@ -433,6 +433,7 @@ enum MasterFxRouteId : uint8_t {
 #define CMD_DSQ_SET_TRACK_SWING  0xDA /* E4: [track(1), swing 0-100(1)] per-track swing                    */
 #define CMD_DSQ_SET_HUMANIZE     0xDB /* E2: [timingMs(1), velocityAmt(1)] humanizacion global              */
 #define CMD_DSQ_SET_STEP_NOTES   0xDE /* [pat,trk,step,flags,note0,note1,note2,note3]                      */
+#define CMD_DSQ_QUEUE_PATTERN     0xDF /* [pat,bars] 0=normal, 1..16=escena temporal con retorno             */
 
 /* Filter types */
 #define FTYPE_NONE       0
@@ -774,7 +775,7 @@ static float trackGain[MAX_PADS];
 /* ═══════════════════════════════════════════════════════════════════
  *  8b. DAISY SEQUENCER  (sample-accurate, BPM clock in AudioCallback)
  * ═══════════════════════════════════════════════════════════════════ */
-#define DSQ_PATTERNS   16
+#define DSQ_PATTERNS   20  /* banco factory: P01–P20, sin wrap de índice */
 #define DSQ_TRACKS    16
 #define DSQ_MAX_STEPS 64
 
@@ -811,6 +812,11 @@ DSY_SDRAM_BSS static DsqStepFull dsqSteps[DSQ_PATTERNS][DSQ_TRACKS][DSQ_MAX_STEP
 struct DaisySeqState {
     bool     playing;
     uint8_t  currentPattern;
+    int8_t   queuedPattern;
+    int8_t   performanceReturnPattern;
+    uint8_t  queuedPatternBars;
+    uint8_t  performanceBarsRemaining;
+    bool     performancePatternActive;
     uint8_t  patternLength;    /* 16, 32, or 64         */
     int16_t  currentStep;      /* -1 = not started      */
     float    tempo;            /* BPM                   */
@@ -903,6 +909,8 @@ static void DsqInit() {
     dseq.tempo        = 120.0f;
     dseq.patternLength = 16;
     dseq.currentStep  = -1;
+    dseq.queuedPattern = -1;
+    dseq.performanceReturnPattern = -1;
     DsqUpdateSamplesPerStep();
 }
 
@@ -4624,6 +4632,28 @@ void AudioCallback(AudioHandle::InputBuffer  /*in*/,
                  * Previously the old pattern fired step 0 and only then changed
                  * pattern, producing a one-step hybrid at every transition. */
                 const bool patternWrapped = previousStep >= 0 && dseq.currentStep == 0;
+                if(patternWrapped){
+                    if(dseq.performancePatternActive && dseq.performanceReturnPattern >= 0){
+                        if(dseq.performanceBarsRemaining > 1){
+                            dseq.performanceBarsRemaining--;
+                        } else {
+                            dseq.currentPattern = (uint8_t)dseq.performanceReturnPattern;
+                            dseq.performanceReturnPattern = -1;
+                            dseq.performanceBarsRemaining = 0;
+                            dseq.performancePatternActive = false;
+                        }
+                    } else if(dseq.queuedPattern >= 0){
+                        const uint8_t nextPattern = (uint8_t)dseq.queuedPattern;
+                        dseq.queuedPattern = -1;
+                        if(dseq.queuedPatternBars > 0){
+                            dseq.performanceReturnPattern = (int8_t)dseq.currentPattern;
+                            dseq.performanceBarsRemaining = dseq.queuedPatternBars;
+                            dseq.performancePatternActive = true;
+                        }
+                        dseq.queuedPatternBars = 0;
+                        dseq.currentPattern = nextPattern;
+                    }
+                }
                 if(songPlaying && patternWrapped && songLength > 0){
                     songRepeatCnt++;
                     if(songRepeatCnt >= songChain[songIdx].repeats){
@@ -7602,7 +7632,26 @@ static void ProcessCommand()
         break;
 
     case CMD_DSQ_SELECT_PATTERN:
-        if(len >= 1) dseq.currentPattern = p[0] % DSQ_PATTERNS;
+        if(len >= 1){
+            dseq.currentPattern = p[0] % DSQ_PATTERNS;
+            dseq.queuedPattern = -1;
+            dseq.performanceReturnPattern = -1;
+            dseq.queuedPatternBars = 0;
+            dseq.performanceBarsRemaining = 0;
+            dseq.performancePatternActive = false;
+        }
+        break;
+
+    case CMD_DSQ_QUEUE_PATTERN:
+        if(len >= 1){
+            if(p[0] == 0xFF){
+                dseq.queuedPattern = -1;
+                dseq.queuedPatternBars = 0;
+            } else {
+                dseq.queuedPattern = (int8_t)(p[0] % DSQ_PATTERNS);
+                dseq.queuedPatternBars = (len >= 2 && p[1] <= 16) ? p[1] : 0;
+            }
+        }
         break;
 
     case CMD_DSQ_SET_LENGTH:

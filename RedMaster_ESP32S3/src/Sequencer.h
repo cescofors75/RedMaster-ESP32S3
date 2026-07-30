@@ -96,6 +96,7 @@ public:
   
   // Pattern editing
   void setStep(int track, int step, bool active, uint8_t velocity = 127);
+  void setStep(int pattern, int track, int step, bool active, uint8_t velocity = 127);
   bool getStep(int track, int step);
   bool getStep(int pattern, int track, int step);  // Get step from specific pattern
   void clearPattern(int pattern);
@@ -178,6 +179,15 @@ public:
   
   // Pattern management
   void selectPattern(int pattern);
+  // Live performance changes. They are committed only when the playhead wraps
+  // to step 0, so a remote display can prepare the next scene without moving
+  // the audible transport in the middle of a bar.
+  void queuePattern(int pattern);
+  void queueOneBarPattern(int pattern);
+  void queuePatternForBars(int pattern, uint8_t bars);
+  int getQueuedPattern();
+  void cancelQueuedPattern();
+  int getPerformancePattern(); // hides temporary FILL/VAR scratch scenes from UIs
   int getCurrentPattern();
   void copyPattern(int src, int dst);
   void setPatternMetadata(int pattern, const PatternMetadata& metadata);
@@ -266,6 +276,11 @@ private:
   int patternLength;  // Active step count: 16, 32, or 64
   volatile int currentPattern;
   volatile int currentStep;
+  volatile int queuedPattern;
+  volatile int performanceReturnPattern;
+  volatile uint8_t queuedPatternBars;
+  volatile uint8_t performanceBarsRemaining;
+  volatile bool performancePatternActive;
   float tempo; // BPM
   uint32_t lastStepTime;
   volatile uint32_t stepInterval; // microseconds

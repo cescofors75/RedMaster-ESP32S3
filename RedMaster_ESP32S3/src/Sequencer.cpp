@@ -26,6 +26,11 @@ Sequencer::Sequencer() :
   playing(false), 
   currentPattern(0), 
   currentStep(0), 
+  queuedPattern(-1),
+  performanceReturnPattern(-1),
+  queuedPatternBars(0),
+  performanceBarsRemaining(0),
+  performancePatternActive(false),
   tempo(120.0f),
   lastStepTime(0),
   nextStepInterval(0),
@@ -183,9 +188,40 @@ void Sequencer::update() {
     currentStep = currentStep + 1;
     if (currentStep >= patternLength) {
       currentStep = 0;
-      
+
+      // Live queue has priority over song modes. A one-bar scene (FILL/VAR)
+      // automatically returns at the following wrap. Kick/bass safety for VAR
+      // is handled when its temporary scene is prepared.
+      if (performancePatternActive && performanceReturnPattern >= 0) {
+        if (performanceBarsRemaining > 1) {
+          performanceBarsRemaining = (uint8_t)(performanceBarsRemaining - 1u);
+        } else {
+          currentPattern = performanceReturnPattern;
+          performanceReturnPattern = -1;
+          performanceBarsRemaining = 0;
+          performancePatternActive = false;
+          patternChanged = true;
+          changedPattern = currentPattern;
+          changedLength = 1;
+        }
+      } else if (queuedPattern >= 0) {
+        const int next = queuedPattern;
+        const uint8_t bars = queuedPatternBars;
+        queuedPattern = -1;
+        queuedPatternBars = 0;
+        if (bars > 0) {
+          performanceReturnPattern = currentPattern;
+          performanceBarsRemaining = bars;
+          performancePatternActive = true;
+        }
+        currentPattern = next;
+        patternChanged = true;
+        changedPattern = currentPattern;
+        changedLength = 1;
+      }
+
       // Song Chain mode: custom pattern chain with repeats
-      if (songChainActive && songChainCount > 0) {
+      if (!patternChanged && songChainActive && songChainCount > 0) {
         songChainRepeatCnt++;
         uint8_t needed = songChain[songChainIdx].repeats;
         if (needed == 0) needed = 1;
@@ -205,7 +241,7 @@ void Sequencer::update() {
         }
       }
       // Legacy song mode: linear pattern advance
-      else if (songMode && songLength > 1) {
+      else if (!patternChanged && songMode && songLength > 1) {
         int nextPattern = currentPattern + 1;
         if (nextPattern >= songLength) {
           nextPattern = 0; // Loop back to start
@@ -667,7 +703,64 @@ void Sequencer::selectPattern(int pattern) {
   if (pattern < 0 || pattern >= MAX_PATTERNS) return;
   lockState();
   currentPattern = pattern;
+  queuedPattern = -1;
+  queuedPatternBars = 0;
+  performanceReturnPattern = -1;
+  performanceBarsRemaining = 0;
+  performancePatternActive = false;
   unlockState();
+}
+
+void Sequencer::setStep(int pattern, int track, int step, bool active, uint8_t velocity) {
+  if (pattern < 0 || pattern >= MAX_PATTERNS) return;
+  if (track < 0 || track >= MAX_TRACKS) return;
+  if (step < 0 || step >= STEPS_PER_PATTERN) return;
+  lockPattern();
+  pd->steps[pattern][track][step] = active;
+  pd->velocities[pattern][track][step] = velocity;
+  unlockPattern();
+}
+
+void Sequencer::queuePattern(int pattern) {
+  if (pattern < 0 || pattern >= MAX_PATTERNS) return;
+  lockState();
+  queuedPattern = pattern;
+  queuedPatternBars = 0;
+  unlockState();
+}
+
+void Sequencer::queueOneBarPattern(int pattern) {
+  queuePatternForBars(pattern, 1);
+}
+
+void Sequencer::queuePatternForBars(int pattern, uint8_t bars) {
+  if (pattern < 0 || pattern >= MAX_PATTERNS) return;
+  lockState();
+  queuedPattern = pattern;
+  queuedPatternBars = constrain(bars, 1, 16);
+  unlockState();
+}
+
+int Sequencer::getQueuedPattern() {
+  lockState();
+  const int value = queuedPattern;
+  unlockState();
+  return value;
+}
+
+void Sequencer::cancelQueuedPattern() {
+  lockState();
+  queuedPattern = -1;
+  queuedPatternBars = 0;
+  unlockState();
+}
+
+int Sequencer::getPerformancePattern() {
+  lockState();
+  const int value = (performancePatternActive && performanceReturnPattern >= 0)
+      ? performanceReturnPattern : currentPattern;
+  unlockState();
+  return value;
 }
 
 void Sequencer::muteTrack(int track, bool muted) {

@@ -4,7 +4,7 @@
 // Used by both BlueSlaveV2 (ESP32-S3) and BlueSlaveP4 to render
 // the PIANO PARAMS LVGL screen and emit UDP {synth303Param|synthParam|synthPreset}.
 //
-// Mirrors RedMaster_ESP32S3/data/web/synth-editor.js and extended P4 GTR UI.
+// Mirrors RedMaster_ESP32S3/data/web/synth-editor.js.
 // =============================================================================
 #pragma once
 #include <stdint.h>
@@ -13,7 +13,7 @@
 // Engine indices (compatible with Daisy synthNoteOnEx / synthParam)
 //   0 = 808 sampler   1 = 909 sampler   2 = 505 sampler   (NOT exposed here)
 //   3 = TB-303         4 = Wavetable    5 = SH-101         6 = FM 2-Op
-//   7 = Physical modeling guitar
+//   7 = reserved legacy physical-model engine (not exposed in the UI)
 
 #define SP_ENGINE_303    3
 #define SP_ENGINE_WT     4
@@ -21,7 +21,7 @@
 #define SP_ENGINE_FM2OP  6
 #define SP_ENGINE_PHYS   7
 
-#define SP_ENGINE_COUNT  5   // engines 3..7
+#define SP_ENGINE_COUNT  4   // exposed engines 3..6
 
 typedef struct {
     uint8_t      param_id;
@@ -258,7 +258,4 @@ static const SynthEngineDef SP_ENGINES[SP_ENGINE_COUNT] = {
     { SP_ENGINE_FM2OP, "FM2",   "FM 2-Op",
       SP_PARAMS_FM2OP, (uint8_t)(sizeof(SP_PARAMS_FM2OP)/sizeof(SP_PARAMS_FM2OP[0])),
             SP_PRESETS_FM2OP,4 },
-        { SP_ENGINE_PHYS,  "GTR",   "Physical Guitar",
-            SP_PARAMS_PHYS,  (uint8_t)(sizeof(SP_PARAMS_PHYS)/sizeof(SP_PARAMS_PHYS[0])),
-            SP_PRESETS_PHYS, 4 },
 };

@@ -378,9 +378,10 @@ typedef struct __attribute__((packed)) {
 #define CMD_CLEAN_TRACK_ACTIVE   0xDC  // [track(1), active(1)] include/exclude clean track from global transport
 #define CMD_CLEAN_TRACK_MUTE     0xDD  // [track(1), muted(1)] mute clean track audio
 #define CMD_DSQ_SET_STEP_NOTES   0xDE  // [pattern,track,step,flags,note0..note3]
+#define CMD_DSQ_QUEUE_PATTERN    0xDF  // [pattern,bars] 0=normal, 1..16=temp scene
 
 // ─── DSQ Step packet (4 bytes) – used in upload track ───
-#define DSQ_PATTERNS   16
+#define DSQ_PATTERNS   20
 #define DSQ_TRACKS     16
 #define DSQ_MAX_STEPS  64
 

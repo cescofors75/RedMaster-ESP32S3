@@ -174,6 +174,7 @@
 #define CMD_DSQ_SET_HUMANIZE     0xDB
 #define CMD_CLEAN_TRACK_ACTIVE   0xDC
 #define CMD_CLEAN_TRACK_MUTE     0xDD
+#define CMD_DSQ_QUEUE_PATTERN    0xDF
 
 #define CMD_GET_STATUS   0xE0
 #define CMD_GET_PEAKS    0xE1
@@ -189,7 +190,7 @@
 #define CMD_SONG_CONTROL  0xF3
 #define CMD_SONG_GET_POS  0xF4
 
-#define DSQ_PATTERNS  16
+#define DSQ_PATTERNS  20
 #define DSQ_TRACKS    16
 #define DSQ_MAX_STEPS 64
 

@@ -6,6 +6,7 @@
 #include <Wire.h>
 #if defined(ARDUINO_ARCH_ESP32)
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #endif
 
@@ -14,7 +15,7 @@
 #include "drivers/i2c_driver.h"
 
 namespace {
-constexpr uint8_t kQueueLen = 32;
+constexpr uint8_t kQueueLen = 64;
 constexpr uint8_t kByteButtonStatusReg = 0x00;
 constexpr uint8_t kByteButtonStatus8ByteReg = 0x60;
 constexpr uint8_t kByteButtonButtons = 8;
@@ -30,9 +31,14 @@ constexpr uint8_t kDfRotaryCount = 4;
 constexpr uint16_t kDfRotaryCenter = 512;
 constexpr uint16_t kDfRotaryStepThreshold = 2;
 constexpr uint32_t kDfButtonGuardMs = 250;
+#if defined(ARDUINO_ARCH_ESP32)
+QueueHandle_t g_eventQueue = nullptr;
+#else
 InputEvent g_queue[kQueueLen] = {};
-volatile uint8_t g_head = 0;
-volatile uint8_t g_tail = 0;
+uint8_t g_head = 0;
+uint8_t g_tail = 0;
+#endif
+volatile uint32_t g_droppedEvents = 0;
 int16_t g_lastFader = -1;
 bool g_hubDetected = false;
 bool g_byteButton0Detected = false;
@@ -50,6 +56,7 @@ uint8_t g_m5Encoder0PresenceCount = 0;
 uint8_t g_hubProbeChannel = 0;
 uint32_t g_lastHubProbeLogMs = 0;
 uint32_t g_hubRecoverUntilMs = 0;
+uint32_t g_nextHubProbeMs = 0;
 uint8_t g_hubRecoverCount = 0;
 DFRobot_VisualRotaryEncoder_I2C* g_dfRotary[kDfRotaryCount] = {};
 bool g_dfRotaryDetected[kDfRotaryCount] = {};
@@ -88,13 +95,44 @@ static LedRequest g_pendingLed1[8] = {};
 struct EncLedRequest { uint8_t r, g, b; bool dirty; };
 static EncLedRequest g_pendingEncLed0[8] = {};
 static EncLedRequest g_pendingEncLed1[8] = {};
+#if defined(ARDUINO_ARCH_ESP32)
+portMUX_TYPE g_ledMux = portMUX_INITIALIZER_UNLOCKED;
+#endif
 
 bool push_event(uint8_t id, uint8_t elementId, int16_t value, uint8_t type) {
+#if defined(ARDUINO_ARCH_ESP32)
+  const InputEvent event{id, elementId, value, type};
+  if (!g_eventQueue || xQueueSend(g_eventQueue, &event, 0) != pdTRUE) {
+    __atomic_fetch_add(&g_droppedEvents, 1, __ATOMIC_RELAXED);
+    return false;
+  }
+  return true;
+#else
   uint8_t next = static_cast<uint8_t>((g_head + 1) % kQueueLen);
-  if (next == g_tail) return false;
+  if (next == g_tail) {
+    ++g_droppedEvents;
+    return false;
+  }
   g_queue[g_head] = {id, elementId, value, type};
   g_head = next;
   return true;
+#endif
+}
+
+template <typename Request>
+bool take_pending_led(Request* requests, uint8_t index, Request& out) {
+#if defined(ARDUINO_ARCH_ESP32)
+  portENTER_CRITICAL(&g_ledMux);
+#endif
+  bool available = requests[index].dirty;
+  if (available) {
+    out = requests[index];
+    requests[index].dirty = false;
+  }
+#if defined(ARDUINO_ARCH_ESP32)
+  portEXIT_CRITICAL(&g_ledMux);
+#endif
+  return available;
 }
 
 bool probe_selected_bus_device(uint8_t address) {
@@ -427,6 +465,12 @@ bool detect_m5encoder1_locked() {
 } // namespace
 
 void input_manager_init() {
+#if defined(ARDUINO_ARCH_ESP32)
+  g_eventQueue = xQueueCreate(kQueueLen, sizeof(InputEvent));
+  if (!g_eventQueue) {
+    Serial.println("[SlavePico] ERROR: input event queue allocation failed");
+  }
+#endif
   if (cfg::kEnableFaderAnalog) {
     pinMode(cfg::kFaderAnalogPin, INPUT);
   }
@@ -468,6 +512,11 @@ void input_manager_poll_i2c() {
   if (!i2c_driver_is_ready()) return;
   if (!i2c_lock(30)) return;
 
+  uint32_t nowMs = millis();
+  if (nowMs < g_nextHubProbeMs) {
+    i2c_unlock();
+    return;
+  }
   bool hubDetectedNow = detect_hub_locked();
   if (hubDetectedNow != g_hubDetected) {
     g_hubDetected = hubDetectedNow;
@@ -478,9 +527,12 @@ void input_manager_poll_i2c() {
   }
 
   if (!hubDetectedNow) {
+    // Avoid flooding Serial/the bus when the hub is unplugged or unpowered.
+    g_nextHubProbeMs = nowMs + 500;
     i2c_unlock();
     return;
   }
+  g_nextHubProbeMs = nowMs;
 
   if (cfg::kI2cBaseIsolationMode) {
     poll_hub_base_isolation_locked();
@@ -554,10 +606,10 @@ void input_manager_poll_i2c() {
       // Apply pending LED state colors queued by udp_handler (settled from previous press)
       if (g_byteButton0LedsReady) {
         for (uint8_t i = 0; i < kByteButtonButtons; i++) {
-          if (!g_pendingLed0[i].dirty) continue;
-          g_pendingLed0[i].dirty = false;
+          LedRequest request{};
+          if (!take_pending_led(g_pendingLed0, i, request)) continue;
           (void)write_bytebutton_led_locked(devices::HUB_CH_BYTEBTN_0, i,
-            g_pendingLed0[i].r, g_pendingLed0[i].g, g_pendingLed0[i].b);
+            request.r, request.g, request.b);
         }
       }
     }
@@ -615,10 +667,10 @@ void input_manager_poll_i2c() {
       }
       if (g_byteButton1LedsReady) {
         for (uint8_t i = 0; i < kByteButtonButtons; i++) {
-          if (!g_pendingLed1[i].dirty) continue;
-          g_pendingLed1[i].dirty = false;
+          LedRequest request{};
+          if (!take_pending_led(g_pendingLed1, i, request)) continue;
           (void)write_bytebutton_led_locked(devices::HUB_CH_BYTEBTN_1, i,
-            g_pendingLed1[i].r, g_pendingLed1[i].g, g_pendingLed1[i].b);
+            request.r, request.g, request.b);
         }
       }
     }
@@ -677,9 +729,9 @@ void input_manager_poll_i2c() {
         }
       }
       for (uint8_t enc = 0; enc < kEncodersPerModule; ++enc) {
-        if (!g_pendingEncLed0[enc].dirty) continue;
-        g_pendingEncLed0[enc].dirty = false;
-        (void)g_m5Encoder0.writeRGB(enc, g_pendingEncLed0[enc].r, g_pendingEncLed0[enc].g, g_pendingEncLed0[enc].b);
+        EncLedRequest request{};
+        if (!take_pending_led(g_pendingEncLed0, enc, request)) continue;
+        (void)g_m5Encoder0.writeRGB(enc, request.r, request.g, request.b);
       }
       i2c_hub_deselect();
     }
@@ -736,9 +788,9 @@ void input_manager_poll_i2c() {
         }
       }
       for (uint8_t enc = 0; enc < kEncodersPerModule; ++enc) {
-        if (!g_pendingEncLed1[enc].dirty) continue;
-        g_pendingEncLed1[enc].dirty = false;
-        (void)g_m5Encoder1.writeRGB(enc, g_pendingEncLed1[enc].r, g_pendingEncLed1[enc].g, g_pendingEncLed1[enc].b);
+        EncLedRequest request{};
+        if (!take_pending_led(g_pendingEncLed1, enc, request)) continue;
+        (void)g_m5Encoder1.writeRGB(enc, request.r, request.g, request.b);
       }
       i2c_hub_deselect();
     }
@@ -766,10 +818,18 @@ void input_manager_poll_analog() {
 }
 
 bool input_manager_pop_event(InputEvent& out) {
+#if defined(ARDUINO_ARCH_ESP32)
+  return g_eventQueue && xQueueReceive(g_eventQueue, &out, 0) == pdTRUE;
+#else
   if (g_tail == g_head) return false;
   out = g_queue[g_tail];
   g_tail = static_cast<uint8_t>((g_tail + 1) % kQueueLen);
   return true;
+#endif
+}
+
+uint32_t input_manager_dropped_event_count() {
+  return g_droppedEvents;
 }
 
 #if defined(ARDUINO_ARCH_ESP32)
@@ -780,20 +840,44 @@ SemaphoreHandle_t input_get_i2c_semaphore() {
 
 void input_set_bytebutton_led(uint8_t btn, uint8_t r, uint8_t g, uint8_t b) {
   if (btn >= kByteButtonButtons) return;
+#if defined(ARDUINO_ARCH_ESP32)
+  portENTER_CRITICAL(&g_ledMux);
+#endif
   g_pendingLed0[btn] = {r, g, b, true};
+#if defined(ARDUINO_ARCH_ESP32)
+  portEXIT_CRITICAL(&g_ledMux);
+#endif
 }
 
 void input_set_bytebutton1_led(uint8_t btn, uint8_t r, uint8_t g, uint8_t b) {
   if (btn >= kByteButtonButtons) return;
+#if defined(ARDUINO_ARCH_ESP32)
+  portENTER_CRITICAL(&g_ledMux);
+#endif
   g_pendingLed1[btn] = {r, g, b, true};
+#if defined(ARDUINO_ARCH_ESP32)
+  portEXIT_CRITICAL(&g_ledMux);
+#endif
 }
 
 void input_set_enc0_led(uint8_t enc, uint8_t r, uint8_t g, uint8_t b) {
   if (enc >= kEncodersPerModule) return;
+#if defined(ARDUINO_ARCH_ESP32)
+  portENTER_CRITICAL(&g_ledMux);
+#endif
   g_pendingEncLed0[enc] = {r, g, b, true};
+#if defined(ARDUINO_ARCH_ESP32)
+  portEXIT_CRITICAL(&g_ledMux);
+#endif
 }
 
 void input_set_enc1_led(uint8_t enc, uint8_t r, uint8_t g, uint8_t b) {
   if (enc >= kEncodersPerModule) return;
+#if defined(ARDUINO_ARCH_ESP32)
+  portENTER_CRITICAL(&g_ledMux);
+#endif
   g_pendingEncLed1[enc] = {r, g, b, true};
+#if defined(ARDUINO_ARCH_ESP32)
+  portEXIT_CRITICAL(&g_ledMux);
+#endif
 }

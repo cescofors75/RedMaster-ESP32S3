@@ -18,6 +18,7 @@ wl_status_t g_lastWifiStatus = WL_IDLE_STATUS;
 bool g_wifiConnectRequested = false;
 bool g_wifiAssociated = false;
 bool g_wifiHasIp = false;
+bool g_hasMasterSync = false;
 bool g_delayActive = false;
 bool g_reverbActive = false;
 bool g_phaserActive = false;
@@ -38,9 +39,10 @@ static int16_t g_trackVolume[16] = {
 };
 
 void udp_send_json(const JsonDocument& doc) {
-  g_udp.beginPacket(g_masterIp, cfg::kMasterUdpPort);
+  if (!udp_is_ready()) return;
+  if (!g_udp.beginPacket(g_masterIp, cfg::kMasterUdpPort)) return;
   serializeJson(doc, g_udp);
-  g_udp.endPacket();
+  (void)g_udp.endPacket();
 }
 
 float map_range(float value, float inMin, float inMax, float outMin, float outMax) {
@@ -68,6 +70,7 @@ void on_wifi_event(arduino_event_id_t event, arduino_event_info_t info) {
   if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
     g_wifiAssociated = false;
     g_wifiHasIp = false;
+    g_hasMasterSync = false;
     g_wifiConnectRequested = false;
     if (!cfg::kDebugLog) return;
     Serial.printf(
@@ -84,14 +87,24 @@ void on_wifi_event(arduino_event_id_t event, arduino_event_info_t info) {
     g_wifiAssociated = true;
     g_wifiHasIp = true;
     g_wifiConnectRequested = true;
+    g_hasMasterSync = false;
+    // Request an authoritative state on the next loop iteration.
+    g_lastHeartbeatMs = millis() - cfg::kHeartbeatMs;
     if (!cfg::kDebugLog) return;
     Serial.printf("[SlavePico][WiFi] got ip=%s\n", WiFi.localIP().toString().c_str());
   }
 }
 
 void ensure_wifi_connected() {
-  if (g_wifiHasIp || g_wifiAssociated || g_wifiConnectRequested) return;
+  if (g_wifiHasIp) return;
   uint32_t now = millis();
+  if (g_wifiConnectRequested) {
+    if (now - g_lastWifiAttemptMs < cfg::kWifiConnectTimeoutMs) return;
+    if (cfg::kDebugLog) Serial.println("[SlavePico][WiFi] connection attempt timed out; retrying");
+    WiFi.disconnect();
+    g_wifiConnectRequested = false;
+    g_wifiAssociated = false;
+  }
   if (now - g_lastWifiAttemptMs < cfg::kWifiReconnectMs) return;
   g_lastWifiAttemptMs = now;
   g_wifiConnectRequested = true;
@@ -132,7 +145,7 @@ static void handle_bytebutton_b0(uint8_t button) {
       break;
     }
     case 2: {  // PATTERN +
-      if (g_currentPattern < 15) g_currentPattern++;
+      if (g_currentPattern < static_cast<int>(cfg::kMasterPatternCount - 1)) g_currentPattern++;
       JsonDocument d;
       d["src"] = "SlavePico"; d["cmd"] = "selectPattern"; d["index"] = g_currentPattern;
       udp_send_json(d);
@@ -359,10 +372,13 @@ void udp_handler_process() {
     udp_send_heartbeat();
   }
 
-  // Parse incoming state_sync from master to keep g_trackVolume[] in sync
+  // Accept control state only from the configured master.
   while (int rxLen = g_udp.parsePacket()) {
-    if (rxLen <= 0 || rxLen > 768) { while (g_udp.available()) g_udp.read(); continue; }
-    static char rxBuf[769];
+    if (g_udp.remoteIP() != g_masterIp || rxLen <= 0 || rxLen >= static_cast<int>(cfg::kUdpMaxPacketBytes)) {
+      while (g_udp.available()) g_udp.read();
+      continue;
+    }
+    static char rxBuf[cfg::kUdpMaxPacketBytes];
     int n = g_udp.read(rxBuf, sizeof(rxBuf) - 1);
     if (n <= 0) continue;
     rxBuf[n] = 0;
@@ -370,6 +386,21 @@ void udp_handler_process() {
     if (deserializeJson(rxDoc, rxBuf) != DeserializationError::Ok) continue;
     const char* rxCmd = rxDoc["cmd"] | "";
     if (strcmp(rxCmd, "state_sync") == 0) {
+      g_hasMasterSync = true;
+      g_currentPattern = constrain(rxDoc["pattern"] | g_currentPattern, 0, static_cast<int>(cfg::kMasterPatternCount - 1));
+      g_isPlaying = rxDoc["playing"] | g_isPlaying;
+      int stepCount = rxDoc["stepCount"] | g_currentStepCount;
+      if (stepCount == 16 || stepCount == 32 || stepCount == 64) g_currentStepCount = stepCount;
+      JsonObject fx = rxDoc["fx"];
+      if (fx) {
+        if (!fx["delayActive"].isNull()) g_delayActive = fx["delayActive"].as<bool>();
+        if (!fx["reverbActive"].isNull()) g_reverbActive = fx["reverbActive"].as<bool>();
+        if (!fx["phaserActive"].isNull()) g_phaserActive = fx["phaserActive"].as<bool>();
+        if (!fx["flangerActive"].isNull()) g_flangerActive = fx["flangerActive"].as<bool>();
+        if (!fx["chorusActive"].isNull()) g_chorusActive = fx["chorusActive"].as<bool>();
+        if (!fx["compressorActive"].isNull()) g_compressorActive = fx["compressorActive"].as<bool>();
+        g_muteAllFx = !g_delayActive && !g_reverbActive && !g_phaserActive;
+      }
       JsonArray vols = rxDoc["trackVolumes"];
       if (vols) {
         int t = 0;
@@ -440,12 +471,14 @@ void udp_send_event(const InputEvent& ev) {
           break;
         case devices::CTRL_DF_ROTARY_1:
         {
-          JsonDocument activeDoc;
-          g_delayActive = true;
-          activeDoc["src"] = "SlavePico";
-          activeDoc["cmd"] = "setDelayActive";
-          activeDoc["value"] = true;
-          udp_send_json(activeDoc);
+          if (!g_delayActive) {
+            JsonDocument activeDoc;
+            g_delayActive = true;
+            activeDoc["src"] = "SlavePico";
+            activeDoc["cmd"] = "setDelayActive";
+            activeDoc["value"] = true;
+            udp_send_json(activeDoc);
+          }
           doc["cmd"] = "setDelayMix";
           doc["value"] = map_range(raw, 0.0f, 1023.0f, 0.0f, 100.0f);
           doc["input"] = "dfRotary";
@@ -454,12 +487,14 @@ void udp_send_event(const InputEvent& ev) {
         }
         case devices::CTRL_DF_ROTARY_2:
         {
-          JsonDocument activeDoc;
-          g_reverbActive = true;
-          activeDoc["src"] = "SlavePico";
-          activeDoc["cmd"] = "setReverbActive";
-          activeDoc["value"] = true;
-          udp_send_json(activeDoc);
+          if (!g_reverbActive) {
+            JsonDocument activeDoc;
+            g_reverbActive = true;
+            activeDoc["src"] = "SlavePico";
+            activeDoc["cmd"] = "setReverbActive";
+            activeDoc["value"] = true;
+            udp_send_json(activeDoc);
+          }
           doc["cmd"] = "setReverbMix";
           doc["value"] = map_range(raw, 0.0f, 1023.0f, 0.0f, 100.0f);
           doc["input"] = "dfRotary";
@@ -468,12 +503,14 @@ void udp_send_event(const InputEvent& ev) {
         }
         case devices::CTRL_DF_ROTARY_3:
         {
-          JsonDocument activeDoc;
-          g_phaserActive = true;
-          activeDoc["src"] = "SlavePico";
-          activeDoc["cmd"] = "setPhaserActive";
-          activeDoc["value"] = true;
-          udp_send_json(activeDoc);
+          if (!g_phaserActive) {
+            JsonDocument activeDoc;
+            g_phaserActive = true;
+            activeDoc["src"] = "SlavePico";
+            activeDoc["cmd"] = "setPhaserActive";
+            activeDoc["value"] = true;
+            udp_send_json(activeDoc);
+          }
           doc["cmd"] = "setPhaserDepth";
           doc["value"] = map_range(raw, 0.0f, 1023.0f, 0.0f, 100.0f);
           doc["input"] = "dfRotary";
@@ -517,14 +554,12 @@ void udp_send_heartbeat() {
   if (!udp_is_ready()) return;
 
   JsonDocument doc;
-  doc["cmd"] = "slaveHeartbeat";
+  doc["cmd"] = "hello";
   doc["src"] = "SlavePico";
   doc["ip"] = WiFi.localIP().toString();
   doc["rssi"] = WiFi.RSSI();
 
-  g_udp.beginPacket(g_masterIp, cfg::kMasterUdpPort);
-  serializeJson(doc, g_udp);
-  g_udp.endPacket();
+  udp_send_json(doc);
 
   if (cfg::kDebugLog) {
     Serial.printf("[SlavePico][UDP] heartbeat -> %s:%u\n", cfg::kMasterIp, cfg::kMasterUdpPort);

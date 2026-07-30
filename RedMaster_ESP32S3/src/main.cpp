@@ -287,6 +287,11 @@ static portMUX_TYPE _pendingDsqMux = portMUX_INITIALIZER_UNLOCKED;
 static volatile int8_t _pendingDsqUpload = -1;   // pattern index, -1 = idle
 static volatile bool   _pendingDsqSelect = false;
 static volatile int8_t _pendingDsqSelectOnly = -1; // pattern index for select-only path
+static volatile int8_t _pendingDsqQueue = -1;      // pattern index for next bar
+static volatile uint8_t _pendingDsqQueueBars = 0;
+static volatile uint8_t _pendingNativeTransitions = 0;
+static volatile bool _pendingDemoSetLaunch = false;
+static volatile bool _pendingDsqQueueCancel = false;
 static volatile bool   _pendingDsqPlay = false;    // arrancar Daisy tras upload (ordenado)
 static int16_t _daisySlotMasterPattern[DSQ_PATTERNS];
 static uint32_t _daisySlotLastUse[DSQ_PATTERNS] = {};
@@ -325,6 +330,50 @@ void dsqSelectPatternDeferred(int pattern) {
     pattern = clampMasterPattern(pattern);
     portENTER_CRITICAL(&_pendingDsqMux);
     _pendingDsqSelectOnly = (int8_t)pattern;
+    portEXIT_CRITICAL(&_pendingDsqMux);
+}
+
+void dsqPreparePatternDeferred(int pattern) {
+    pattern = clampMasterPattern(pattern);
+    portENTER_CRITICAL(&_pendingDsqMux);
+    _pendingDsqSelect = false;
+    _pendingDsqUpload = (int8_t)pattern;
+    portEXIT_CRITICAL(&_pendingDsqMux);
+}
+
+void dsqQueuePatternDeferred(int pattern, uint8_t bars) {
+    pattern = clampMasterPattern(pattern);
+    portENTER_CRITICAL(&_pendingDsqMux);
+    _pendingDsqQueue = (int8_t)pattern;
+    _pendingDsqQueueBars = constrain(bars, 0, 16);
+    _pendingNativeTransitions = bars > 0 ? 2 : 1;
+    portEXIT_CRITICAL(&_pendingDsqMux);
+}
+
+void dsqCancelPatternQueueDeferred() {
+    portENTER_CRITICAL(&_pendingDsqMux);
+    _pendingDsqQueue = -1;
+    _pendingDsqQueueBars = 0;
+    _pendingNativeTransitions = 0;
+    _pendingDsqQueueCancel = true;
+    portEXIT_CRITICAL(&_pendingDsqMux);
+}
+
+static bool dsqConsumeNativeTransition() {
+    bool native = false;
+    portENTER_CRITICAL(&_pendingDsqMux);
+    if (_pendingNativeTransitions > 0) {
+        _pendingNativeTransitions = (uint8_t)(_pendingNativeTransitions - 1u);
+        native = true;
+    }
+    portEXIT_CRITICAL(&_pendingDsqMux);
+    return native;
+}
+
+void dsqLaunchDemoSetDeferred() {
+    portENTER_CRITICAL(&_pendingDsqMux);
+    _pendingDemoSetLaunch = true;
+    _pendingNativeTransitions = 0;
     portEXIT_CRITICAL(&_pendingDsqMux);
 }
 
@@ -554,8 +603,92 @@ void spiAudioTask(void *pvParameters) {
             applyPatternPerformance(selOnly);
         }
 
+        // Native Daisy queue: target is made resident first, then Daisy stores
+        // the slot and commits it sample-accurately before firing step 0.
+        int8_t queuedMaster;
+        uint8_t queuedBars;
+        portENTER_CRITICAL(&_pendingDsqMux);
+        queuedMaster = _pendingDsqQueue;
+        queuedBars = _pendingDsqQueueBars;
+        _pendingDsqQueue = -1;
+        _pendingDsqQueueBars = 0;
+        portEXIT_CRITICAL(&_pendingDsqMux);
+        if (queuedMaster >= 0) {
+            const int slot = ensurePatternResident(queuedMaster, false);
+            spiMaster.dsqQueuePattern((uint8_t)slot, queuedBars);
+        }
+        bool cancelQueue = false;
+        portENTER_CRITICAL(&_pendingDsqMux);
+        cancelQueue = _pendingDsqQueueCancel;
+        _pendingDsqQueueCancel = false;
+        portEXIT_CRITICAL(&_pendingDsqMux);
+        if (cancelQueue) spiMaster.dsqCancelPatternQueue();
+
+        bool launchDemo = false;
+        portENTER_CRITICAL(&_pendingDsqMux);
+        launchDemo = _pendingDemoSetLaunch;
+        _pendingDemoSetLaunch = false;
+        portEXIT_CRITICAL(&_pendingDsqMux);
+        if (launchDemo) {
+            struct DemoScene { uint8_t pattern; uint8_t bars; };
+            static constexpr DemoScene demo[] = {
+                {10,4}, {11,4}, {13,4}, {2,8}, {1,4}, {0,8},
+                {4,4}, {5,8}, {7,4}, {6,4}, {8,8}, {12,4},
+                {14,4}, {15,4}, {16,8}, {17,1}, {18,1}, {19,8}
+            };
+            constexpr uint8_t count = sizeof(demo) / sizeof(demo[0]);
+            Sequencer::SongChainEntry local[count] = {};
+            SongEntry daisy[count] = {};
+            sequencer.stop();
+            spiMaster.dsqControl(0);
+            for (uint8_t i = 0; i < count; ++i) {
+                local[i].pattern = demo[i].pattern;
+                local[i].repeats = demo[i].bars;
+                // Force-refresh every scene from the active S3 bank, then send
+                // physical resident slots to Daisy's sample-accurate song chain.
+                daisy[i].pattern = (uint8_t)ensurePatternResident(demo[i].pattern, true);
+                daisy[i].repeats = demo[i].bars;
+            }
+            sequencer.songChainUpload(local, count);
+            spiMaster.songUpload(daisy, count);
+            sequencer.songChainPlay();
+            spiMaster.songControl(1);
+        }
+
         sequencer.update();   // Mantiene internos del secuenciador (beat UI, song mode)
         spiMaster.process();
+
+        // Daisy is the audible clock. Poll its real sample-accurate position
+        // and publish only changes; P4 no longer has to wait for the slower
+        // logical S3 clock or the multi-packet pattern payload.
+        static uint32_t lastDaisyPosPollMs = 0;
+        static int lastDaisyUiStep = -1;
+        static int lastDaisyUiPattern = -1;
+        static bool lastDaisyUiPlaying = false;
+        const uint32_t posNowMs = millis();
+        if (posNowMs - lastDaisyPosPollMs >= 20) {
+            lastDaisyPosPollMs = posNowMs;
+            uint8_t daisyStep = 0, daisySlot = 0;
+            bool daisyPlaying = false;
+            if (spiMaster.dsqGetPos(daisyStep, daisySlot, daisyPlaying)) {
+                int masterPattern = -1;
+                if (daisySlot < DSQ_PATTERNS) {
+                    portENTER_CRITICAL(&_pendingDsqMux);
+                    masterPattern = _daisySlotMasterPattern[daisySlot];
+                    portEXIT_CRITICAL(&_pendingDsqMux);
+                }
+                if (masterPattern < 0 || masterPattern >= MAX_PATTERNS - 4)
+                    masterPattern = sequencer.getPerformancePattern();
+                if ((int)daisyStep != lastDaisyUiStep ||
+                    masterPattern != lastDaisyUiPattern ||
+                    daisyPlaying != lastDaisyUiPlaying) {
+                    lastDaisyUiStep = daisyStep;
+                    lastDaisyUiPattern = masterPattern;
+                    lastDaisyUiPlaying = daisyPlaying;
+                    webInterface.publishDaisyTransport(daisyStep, masterPattern, daisyPlaying);
+                }
+            }
+        }
 
 #if RED808_MASTER_SPI_TRIGGER_TEST
         static uint32_t lastDiagTriggerMs = 0;
@@ -684,16 +817,10 @@ static void applyProfessionalMixBaseline() {
     spiMaster.setTremoloActive(false);
     spiMaster.setWaveFolderGain(1.0f);
 
-    // Compressor: suave glue para pegar la mezcla
-    spiMaster.setCompressorActive(true);
-    spiMaster.setCompressorThreshold(-12.0f);
-    spiMaster.setCompressorRatio(2.5f);
-    spiMaster.setCompressorAttack(10.0f);
-    spiMaster.setCompressorRelease(100.0f);
-    spiMaster.setCompressorMakeupGain(2.0f);
-
-    // Reverb: room sutil para dar espacio
-    spiMaster.setReverb(true, 0.45f, 6000.0f, 0.12f);  // feedback=0.45, lpFreq=6kHz, mix=12%
+    // Arranque neutro: ningún FX colorea el primer sonido. El músico activa
+    // cada proceso desde la UI y todos los niveles empiezan en cero.
+    spiMaster.setCompressorActive(false);
+    spiMaster.setReverb(false, 0.0f, 200.0f, 0.0f);
 
     // Chorus off, limiter on
     spiMaster.setChorusActive(false);
@@ -724,12 +851,6 @@ static void applyProfessionalMixBaseline() {
     spiMaster.setTrackVolume(5, 95);    // CP
     spiMaster.setTrackVolume(6, 85);    // RS
     spiMaster.setTrackVolume(7, 80);    // CB
-
-    // Reverb sends: snare/clap con room, kick seco
-    spiMaster.setTrackReverbSend(1, 18);   // SD: algo de room
-    spiMaster.setTrackReverbSend(5, 22);   // CP: clap con reverb
-    spiMaster.setTrackReverbSend(3, 15);   // OH: un toque
-    spiMaster.setTrackReverbSend(4, 25);   // CY: más espacio
 
     // Panorámica estéreo para anchura
     spiMaster.setTrackPan(2, -15);    // CH: ligeramente izq
@@ -938,13 +1059,18 @@ void setup() {
 
     // Callback para sincronización en tiempo real con la web
     sequencer.setStepChangeCallback([](int newStep) {
+        (void)newStep;
         releaseSequencerMelodicHolds();
-        webInterface.broadcastStep(newStep);
     });
     // Callback para cambio de patrón en song mode
     sequencer.setPatternChangeCallback([](int newPattern, int songLength) {
-        dsqSelectPatternDeferred(newPattern);
-        webInterface.broadcastSongPattern(newPattern, songLength);
+        const bool daisyAlreadyQueued = dsqConsumeNativeTransition();
+        // Scratch scenes MAX-4..MAX-1 power DROP/BUILD/FILL/VAR but are deliberately
+        // invisible to controllers: the header keeps showing the song scene.
+        if (newPattern < MAX_PATTERNS - 4) {
+            if (!daisyAlreadyQueued) dsqSelectPatternDeferred(newPattern);
+            webInterface.broadcastSongPattern(newPattern, songLength);
+        }
     });
     sequencer.setTempo(110); // BPM inicial
     spiMaster.setTempo(110.0f); // Sync BPM to Daisy transport
@@ -970,13 +1096,13 @@ void setup() {
     // de verificar/cargar los samples del kit por defecto.
     loadDefaultKitAfterNetwork();
 
-    // Cargar el banco "20 Bangers 808" desde LittleFS encima del banco
+    // Cargar el banco factory de 20 patrones desde LittleFS encima del banco
     // integrado de 16. Si el archivo no existe (fs sin subir), se mantiene
     // el integrado como fallback seguro.
     {
         String bankErr;
-        if (webInterface.loadPatternBank("10_temas_referencia_808", &bankErr)) {
-            syslog("BOOT", "Pattern bank '20 Bangers 808' cargado desde LittleFS");
+        if (webInterface.loadPatternBank("20_patrones_factory_daisy", &bankErr)) {
+            syslog("BOOT", "Pattern bank '20 Patrones Factory Daisy' cargado desde LittleFS");
         } else {
             syslog("BOOT", "Banco JSON no cargado (%s) - usando 16 integrados",
                    bankErr.c_str());

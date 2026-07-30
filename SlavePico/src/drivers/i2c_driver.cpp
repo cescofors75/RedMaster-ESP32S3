@@ -17,6 +17,9 @@ bool g_i2cReady = false;
 
 bool i2c_driver_init() {
   g_i2cReady = Wire.begin(cfg::kI2cSdaPin, cfg::kI2cSclPin, cfg::kI2cClockHz);
+  if (g_i2cReady) {
+    Wire.setTimeOut(cfg::kI2cTimeoutMs);
+  }
 #if defined(ARDUINO_ARCH_ESP32)
   if (!g_i2cMutex) {
     g_i2cMutex = xSemaphoreCreateMutex();

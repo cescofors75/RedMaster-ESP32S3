@@ -1,0 +1,150 @@
+diff --git a/RedMaster_ESP32S3/src/Sequencer.cpp b/RedMaster_ESP32S3/src/Sequencer.cpp
+index eb47982..cc03cee 100644
+--- a/RedMaster_ESP32S3/src/Sequencer.cpp
++++ b/RedMaster_ESP32S3/src/Sequencer.cpp
+@@ -55,6 +55,8 @@ Sequencer::Sequencer() :
+         pd->stepReverbSendLockEnabled[p][t][s] = false;
+         pd->stepReverbSendLockValue[p][t][s] = 0;
+       }
++      pd->trackEngine[p][t] = -1;  // sampler by default (0 would mean 808!)
++      pd->trackPreset[p][t] = 0;
+     }
+   }
+   
+@@ -335,6 +337,8 @@ void Sequencer::clearPattern(int pattern) {
+     for (int s = 0; s < STEPS_PER_PATTERN; s++) {
+       pd->stepCutoffLockHz[pattern][t][s] = 1000;
+     }
++    pd->trackEngine[pattern][t] = -1;  // sampler by default
++    pd->trackPreset[pattern][t] = 0;
+   }
+   unlockPattern();
+ }
+@@ -517,6 +521,29 @@ void Sequencer::setPatternBulk(int pattern, const bool stepsData[MAX_TRACKS][STE
+   unlockPattern();
+ }
+ 
++// ── Per-pattern track engine + factory preset (recall on pattern switch) ──
++void Sequencer::setTrackEngine(int pattern, int track, int8_t engine) {
++  if (pattern < 0 || pattern >= MAX_PATTERNS) return;
++  if (track < 0 || track >= MAX_TRACKS) return;
++  if (engine < -1 || engine > 8) engine = -1;
++  pd->trackEngine[pattern][track] = engine;
++}
++int8_t Sequencer::getTrackEngine(int pattern, int track) {
++  if (pattern < 0 || pattern >= MAX_PATTERNS) return -1;
++  if (track < 0 || track >= MAX_TRACKS) return -1;
++  return pd->trackEngine[pattern][track];
++}
++void Sequencer::setTrackPreset(int pattern, int track, uint8_t preset) {
++  if (pattern < 0 || pattern >= MAX_PATTERNS) return;
++  if (track < 0 || track >= MAX_TRACKS) return;
++  pd->trackPreset[pattern][track] = preset;
++}
++uint8_t Sequencer::getTrackPreset(int pattern, int track) {
++  if (pattern < 0 || pattern >= MAX_PATTERNS) return 0;
++  if (track < 0 || track >= MAX_TRACKS) return 0;
++  return pd->trackPreset[pattern][track];
++}
++
+ void Sequencer::selectPattern(int pattern) {
+   if (pattern < 0 || pattern >= MAX_PATTERNS) return;
+ 
+diff --git a/RedMaster_ESP32S3/src/Sequencer.h b/RedMaster_ESP32S3/src/Sequencer.h
+index 769c9d3..aef0694 100644
+--- a/RedMaster_ESP32S3/src/Sequencer.h
++++ b/RedMaster_ESP32S3/src/Sequencer.h
+@@ -45,6 +45,10 @@ struct PatternData {
+   uint8_t stepNotes[MAX_PATTERNS][MAX_TRACKS][STEPS_PER_PATTERN];
+   uint8_t stepNoteVoices[MAX_PATTERNS][MAX_TRACKS][STEPS_PER_PATTERN][MELODY_STEP_VOICES];
+   uint8_t stepFlags[MAX_PATTERNS][MAX_TRACKS][STEPS_PER_PATTERN];
++  // Per-pattern routing memory: synth engine + factory preset per track.
++  // Recalled (and pushed to the Daisy) whenever the pattern becomes active.
++  int8_t  trackEngine[MAX_PATTERNS][MAX_TRACKS];   // -1 = sampler, 0..8 = synth engine
++  uint8_t trackPreset[MAX_PATTERNS][MAX_TRACKS];   // factory preset index (0..N)
+ };
+ // sizeof(PatternData) ≈ 229 KB  →  allocated from 8 MB PSRAM, not DRAM
+ 
+@@ -138,6 +142,12 @@ public:
+   uint8_t getStepFlags(int track, int step);
+   uint8_t getStepFlags(int pattern, int track, int step);
+ 
++  // Per-pattern track engine + factory preset (recalled on pattern switch)
++  void    setTrackEngine(int pattern, int track, int8_t engine);
++  int8_t  getTrackEngine(int pattern, int track);
++  void    setTrackPreset(int pattern, int track, uint8_t preset);
++  uint8_t getTrackPreset(int pattern, int track);
++
+   // Bulk pattern writing (for reliable MIDI import)
+   void setPatternBulk(int pattern, const bool stepsData[MAX_TRACKS][STEPS_PER_PATTERN], const uint8_t velsData[MAX_TRACKS][STEPS_PER_PATTERN]);
+   
+diff --git a/RedMaster_ESP32S3/src/WebInterface.cpp b/RedMaster_ESP32S3/src/WebInterface.cpp
+index 7a4618a..ca5c4a4 100644
+--- a/RedMaster_ESP32S3/src/WebInterface.cpp
++++ b/RedMaster_ESP32S3/src/WebInterface.cpp
+@@ -633,6 +633,38 @@ static bool loadPatternBankFromFs(const String& requestPath, String* errMsg = nu
+ 
+     sequencer.clearPattern(slot);
+     sequencer.setPatternBulk(slot, stepsData, velsData);
++
++    // ── Segunda pasada: melodia (notes/flags) + engine/preset por track ──
++    // Va DESPUES de clearPattern+setPatternBulk porque clearPattern borra
++    // stepNoteVoices/stepFlags y resetea trackEngine/trackPreset.
++    for (JsonObjectConst trObj : tracks) {
++      int track = trObj["track"] | -1;
++      if (track < 0 || track >= MAX_TRACKS) continue;
++
++      // Engine + factory preset por track (memoria por patron)
++      int engine = trObj["engine"] | -2;          // -2 = ausente → no tocar
++      if (engine >= -1 && engine <= 8) {
++        sequencer.setTrackEngine(slot, track, (int8_t)engine);
++      }
++      if (trObj.containsKey("preset")) {
++        int preset = trObj["preset"] | 0;
++        sequencer.setTrackPreset(slot, track, (uint8_t)constrain(preset, 0, 31));
++      }
++
++      // Melodia: nota principal (voice 0) + flags accent/slide por paso
++      JsonArrayConst notes = trObj["notes"].as<JsonArrayConst>();
++      JsonArrayConst flags = trObj["flags"].as<JsonArrayConst>();
++      for (int step = 0; step < stepCount && step < STEPS_PER_PATTERN; step++) {
++        if (!notes.isNull() && step < (int)notes.size()) {
++          uint8_t n = (uint8_t)constrain((int)notes[step], 0, 127);
++          if (n) sequencer.setStepNoteVoice(slot, track, step, 0, n);
++        }
++        if (!flags.isNull() && step < (int)flags.size()) {
++          sequencer.setStepFlags(slot, track, step,
++                                 (uint8_t)((int)flags[step] & 0x03));
++        }
++      }
++    }
+   }
+ 
+   JsonArrayConst songChain = doc["songChain"].as<JsonArrayConst>();
+diff --git a/RedMaster_ESP32S3/src/main.cpp b/RedMaster_ESP32S3/src/main.cpp
+index 0bb92ff..739a43d 100644
+--- a/RedMaster_ESP32S3/src/main.cpp
++++ b/RedMaster_ESP32S3/src/main.cpp
+@@ -336,6 +336,22 @@ void dsqUploadPattern(int pattern) {
+             }
+         }
+     }
++
++    // ── Recall de routing por patron: engine + factory preset por track ──
++    // El stepCallback del ESP32 lee getTrackSynthEngine() en vivo, asi que al
++    // activar un patron sincronizamos el engine global (gTrackSynthEngine), el
++    // engine en la Daisy (samplers vs synth) y el preset de fabrica de cada
++    // motor melodico/percusivo. Patrones sin 'engine' en el JSON quedan en -1
++    // (sampler) y no cambian nada.
++    for (int trk = 0; trk < DSQ_TRACKS; trk++) {
++        int8_t eng = sequencer.getTrackEngine(pattern, trk);
++        setTrackSynthEngine(trk, eng);
++        spiMaster.dsqSetTrackEngine((uint8_t)trk, eng);
++        if (eng >= 0) {
++            spiMaster.synthPreset((uint8_t)eng, sequencer.getTrackPreset(pattern, trk));
++            vTaskDelay(pdMS_TO_TICKS(2));
++        }
++    }
+ }
+ 
+ // CORE 1: Sequencer UI + SPI Master
