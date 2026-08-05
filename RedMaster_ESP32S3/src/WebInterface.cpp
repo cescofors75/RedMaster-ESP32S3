@@ -6,13 +6,16 @@
 #include "WebInterface.h"
 #include "SPIMaster.h"
 #include "Sequencer.h"
+#include "PatternBank.h"
 #include "SampleManager.h"
 #include "SysLog.h"
 #include "WebSecurity.h"
 #include "WebUploadPipeline.h"
 #include <esp_wifi.h>
 #include <esp_heap_caps.h>
+#include <esp_system.h>
 #include <esp_task_wdt.h>
+#include <atomic>
 #include <memory>   // std::shared_ptr (snapshot de sample en /api/sampledata)
 
 #ifndef ENABLE_PHYSICAL_BUTTONS
@@ -130,6 +133,39 @@ static inline void jsonBufUnlock() {
 // so commands that need a direct reply use this latched endpoint.
 static IPAddress s_udpReplyIp(0, 0, 0, 0);
 static uint16_t  s_udpReplyPort = 0;
+
+// Master-authoritative ordering for pattern changes. UDP rows are split over
+// 16 datagrams, and two P4s can issue selections while an older burst is still
+// in flight. Epoch distinguishes master reboots; revision makes stale bursts
+// harmless even when their rows arrive after the newer selection.
+static std::atomic<uint32_t> s_patternEpoch{0};
+static std::atomic<uint32_t> s_patternRevision{1};
+
+static uint32_t patternEpoch() {
+  uint32_t epoch = s_patternEpoch.load(std::memory_order_acquire);
+  if (epoch != 0) return epoch;
+  uint32_t candidate = esp_random();
+  if (candidate == 0) candidate = 1;
+  uint32_t expected = 0;
+  if (!s_patternEpoch.compare_exchange_strong(expected, candidate,
+                                               std::memory_order_acq_rel)) {
+    candidate = expected;
+  }
+  return candidate;
+}
+
+static uint32_t currentPatternRevision() {
+  return s_patternRevision.load(std::memory_order_acquire);
+}
+
+static uint32_t bumpPatternRevision() {
+  uint32_t revision = s_patternRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
+  if (revision == 0) {
+    s_patternRevision.store(1, std::memory_order_release);
+    revision = 1;
+  }
+  return revision;
+}
 
 // PSRAM allocator for ArduinoJson — documents allocated here never touch internal heap
 struct PsramAllocator {
@@ -648,6 +684,12 @@ static bool loadPatternBankFromFs(const String& requestPath, String* errMsg = nu
     return false;
   }
 
+  // Sound routing is part of the pattern bank, not a single global latch.
+  // Rebuild the registry on every bank load so a scene cannot inherit the
+  // generated engine/preset left behind by whichever JSON object came last.
+  resetPatternSoundProfiles();
+  const bool isFactoryTwenty = path.endsWith("/20_patrones_factory_daisy.json");
+
   for (JsonObjectConst patObj : patterns) {
     int slot = patObj["slot"] | -1;
     if (slot < 0 || slot >= MAX_PATTERNS) continue;
@@ -657,13 +699,19 @@ static bool loadPatternBankFromFs(const String& requestPath, String* errMsg = nu
     strlcpy(metadata.name, patObj["name"] | existing.name, sizeof(metadata.name));
     strlcpy(metadata.genre, patObj["genre"] | existing.genre, sizeof(metadata.genre));
     strlcpy(metadata.kit, patObj["kit"] | existing.kit, sizeof(metadata.kit));
-    metadata.recommendedBpm = constrain((int)(patObj["recommendedBpm"] | existing.recommendedBpm), 30, 300);
+    const int bankBpm = (tempo >= 40.0f && tempo <= 240.0f)
+        ? (int)(tempo + 0.5f) : (int)(sequencer.getTempo() + 0.5f);
+    const int fallbackBpm = (existing.recommendedBpm >= 40 && existing.recommendedBpm <= 240)
+        ? existing.recommendedBpm : bankBpm;
+    metadata.recommendedBpm = constrain((int)(patObj["recommendedBpm"] | fallbackBpm), 40, 240);
     metadata.swing = constrain((int)(patObj["swing"] | existing.swing), 0, 100);
     metadata.humanizeTimingMs = constrain((int)(patObj["humanizeTimingMs"] | existing.humanizeTimingMs), 0, 30);
     metadata.humanizeVelocity = constrain((int)(patObj["humanizeVelocity"] | existing.humanizeVelocity), 0, 40);
     bool stepsData[MAX_TRACKS][STEPS_PER_PATTERN] = {};
     uint8_t velsData[MAX_TRACKS][STEPS_PER_PATTERN];
     memset(velsData, 127, sizeof(velsData));
+    BuiltinPatternSoundProfile soundProfile{};
+    for (int track = 0; track < MAX_TRACKS; ++track) soundProfile.engines[track] = -1;
 
     JsonArrayConst tracks = patObj["tracks"].as<JsonArrayConst>();
     for (JsonObjectConst trObj : tracks) {
@@ -682,16 +730,18 @@ static bool loadPatternBankFromFs(const String& requestPath, String* errMsg = nu
           velsData[track][step] = constrain(velocity, 1, 127);
         }
       }
-      // Engine opcional por track (-1=sample, 3=303, 5=SH101, ...): se aplica
-      // globalmente (los engines no son por-patrón) y se sincroniza a la Daisy
-      // para que no dispare el sample en paralelo.
+      // Engine/preset are captured per pattern. applyPatternPerformance()
+      // applies the complete 16-track snapshot at the transition boundary.
       int engine = trObj["engine"] | -2;
       if (engine >= -1 && engine <= 8) {
-        setTrackSynthEngine(track, (int8_t)engine);
-        spiMaster.dsqSetTrackEngine((uint8_t)track, (int8_t)engine);
-        spiMaster.dsqSetMute((uint8_t)track, false);
+        soundProfile.engines[track] = (int8_t)engine;
+        if (engine >= 0) {
+          soundProfile.presets[engine] = (uint8_t)constrain((int)(trObj["preset"] | 0), 0, 31);
+        }
       }
     }
+
+    setPatternSoundProfile(slot, soundProfile);
 
     sequencer.clearPattern(slot);
     sequencer.setPatternBulk(slot, stepsData, velsData);
@@ -754,6 +804,10 @@ static bool loadPatternBankFromFs(const String& requestPath, String* errMsg = nu
         }
       }
     }
+  }
+
+  if (isFactoryTwenty) {
+    refineFactoryTwentyPatternBank(sequencer);
   }
 
   JsonArrayConst songChain = doc["songChain"].as<JsonArrayConst>();
@@ -1668,7 +1722,9 @@ bool WebInterface::begin(const char* apSsid, const char* apPassword,
     bool sdOk = spiMaster.getCachedSdStatus(sdStat);
     uint32_t sdLoadedMask = sdOk ? sdStat.samplesLoaded : 0;
 
-    doc["pattern"] = sequencer.getCurrentPattern();
+    doc["pattern"] = sequencer.getPerformancePattern();
+    doc["patternEpoch"] = patternEpoch();
+    doc["patternRevision"] = currentPatternRevision();
     doc["playing"] = sequencer.isPlaying();
     doc["tempo"] = sequencer.getTempo();
     doc["step"] = sequencer.getCurrentStep();
@@ -3043,6 +3099,8 @@ void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
 
   doc["cmd"] = "state_sync";
   doc["pattern"] = sequencer.getPerformancePattern();
+  doc["patternEpoch"] = patternEpoch();
+  doc["patternRevision"] = currentPatternRevision();
   doc["queuedPattern"] = sequencer.getQueuedPattern();
   doc["playing"] = sequencer.isPlaying();
   doc["tempo"] = sequencer.getTempo();
@@ -3188,15 +3246,20 @@ void WebInterface::broadcastUdpTrackVolume(int track, int volume) {
 }
 
 void WebInterface::broadcastUdpSongPattern(int pattern, int songLength) {
-  if (udpClients.empty() || pattern < 0 || pattern >= MAX_PATTERNS) return;
-  StaticJsonDocument<128> doc;
+  if (pattern < 0 || pattern >= MAX_PATTERNS) return;
+  const uint32_t revision = bumpPatternRevision();
+  if (udpClients.empty()) return;
+  StaticJsonDocument<192> doc;
   doc["type"] = "songPattern";
   doc["pattern"] = pattern;
   doc["songLength"] = songLength;
+  doc["patternEpoch"] = patternEpoch();
+  doc["patternRevision"] = revision;
   for (auto& entry : udpClients) {
     sendUdpJsonTo(entry.second.ip, entry.second.port, doc);
     yield();
   }
+  broadcastUdpPatternSync(pattern, revision);
 }
 
 // v2.9 — Build & send melody_sync packet (engine/octave/rec/step/pad/grid)
@@ -3254,9 +3317,12 @@ void WebInterface::broadcastMelodySync() {
 /* v2.6 — Push the active pattern (drum steps + selected index) to every
  * known UDP slave. Triggered whenever the active pattern changes via web/UI
  * so the LCD slaves don't show a stale pattern. */
-void WebInterface::sendUdpPatternRows(IPAddress ip, uint16_t port, int patternNum) {
+void WebInterface::sendUdpPatternRows(IPAddress ip, uint16_t port, int patternNum,
+                                      uint32_t revision) {
   if (ip == IPAddress(0, 0, 0, 0) || port == 0) return;
   if (patternNum < 0 || patternNum >= MAX_PATTERNS) return;
+  if (revision == 0) revision = currentPatternRevision();
+  const bool active = patternNum == sequencer.getPerformancePattern();
   int stepCount = constrain(sequencer.getPatternLength(), 16, STEPS_PER_PATTERN);
   for (int t = 0; t < MAX_TRACKS; t++) {
     char rowHex[17];
@@ -3270,10 +3336,12 @@ void WebInterface::sendUdpPatternRows(IPAddress ip, uint16_t port, int patternNu
       rowHex[nib] = (value < 10) ? ('0' + value) : ('A' + value - 10);
     }
     rowHex[nibbles] = '\0';
-    char buf[128];
+    char buf[208];
     int len = snprintf(buf, sizeof(buf),
-      "{\"cmd\":\"pattern_row\",\"pattern\":%d,\"track\":%d,\"stepCount\":%d,\"row\":\"%s\"}",
-      patternNum, t, stepCount, rowHex);
+      "{\"cmd\":\"pattern_row\",\"pattern\":%d,\"track\":%d,\"stepCount\":%d,"
+      "\"active\":%s,\"patternEpoch\":%lu,\"patternRevision\":%lu,\"row\":\"%s\"}",
+      patternNum, t, stepCount, active ? "true" : "false",
+      (unsigned long)patternEpoch(), (unsigned long)revision, rowHex);
     if (len > 0 && len < (int)sizeof(buf)) {
       udp.beginPacket(ip, port);
       udp.write((const uint8_t*)buf, len);
@@ -3283,10 +3351,11 @@ void WebInterface::sendUdpPatternRows(IPAddress ip, uint16_t port, int patternNu
   }
 }
 
-void WebInterface::broadcastUdpPatternSync(int patternNum) {
+void WebInterface::broadcastUdpPatternSync(int patternNum, uint32_t revision) {
   if (udpClients.empty()) return;
+  if (revision == 0) revision = currentPatternRevision();
   for (auto& entry : udpClients) {
-    sendUdpPatternRows(entry.second.ip, entry.second.port, patternNum);
+    sendUdpPatternRows(entry.second.ip, entry.second.port, patternNum, revision);
     yield();
   }
 }
@@ -3487,8 +3556,17 @@ void WebInterface::update() {
     pos["step"] = daisyStep;
     pos["pattern"] = daisyPattern;
     pos["playing"] = daisyPlaying;
+    pos["patternEpoch"] = patternEpoch();
+    pos["patternRevision"] = currentPatternRevision();
     for (auto& entry : udpClients)
       sendUdpJsonTo(entry.second.ip, entry.second.port, pos);
+    static int lastDaisyUdpPattern = -1;
+    if (daisyPattern != lastDaisyUdpPattern) {
+      lastDaisyUdpPattern = daisyPattern;
+      // Engine/preset routing is applied on the SPI task at the audible
+      // transition. Push it immediately so every P4's sequencer options match.
+      broadcastUdpStateSync();
+    }
     if (!pageLoading && ws->count() > 0) {
       char stepBuf[40];
       int stepLen = snprintf(stepBuf, sizeof(stepBuf),
@@ -3505,6 +3583,7 @@ void WebInterface::update() {
       }
     }
   }
+
   int step = _pendingBroadcastStep;
   if (step >= 0) {
     _pendingBroadcastStep = -1;
@@ -3528,6 +3607,7 @@ void WebInterface::update() {
       ws->textAll(buf, len);
     }
     broadcastUdpSongPattern(songPat, songLen);
+    broadcastUdpStateSync();
   }
 
   // Broadcast audio levels for all WS clients (main UI + /adm)
@@ -3936,10 +4016,18 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
     int pattern = !doc["index"].isNull() ? doc["index"].as<int>()
                                          : doc["pattern"].as<int>();
     pattern = constrain(pattern, 0, MAX_PATTERNS - 1);
+    // A manual choice from any P4 takes ownership from an automatic audition.
+    // Stop both logical and Daisy song chains before arming/selecting it.
+    if (sequencer.isSongChainActive()) {
+      sequencer.songChainStop();
+      spiMaster.songControl(0);
+    }
+    sequencer.setSongMode(false);
     if (!sequencer.isPlaying()) {
       sequencer.selectPattern(pattern);
       dsqUploadPatternDeferred(pattern);
-      broadcastUdpPatternSync(pattern);
+      const uint32_t revision = bumpPatternRevision();
+      broadcastUdpPatternSync(pattern, revision);
     } else {
       sequencer.queuePattern(pattern);
       dsqQueuePatternDeferred(pattern, 0);
@@ -4054,17 +4142,34 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
     if (!doc["index"].isNull())        pattern = doc["index"].as<int>();
     else if (!doc["pattern"].isNull()) pattern = doc["pattern"].as<int>();
     else                               pattern = sequencer.getCurrentPattern();
+    pattern = constrain(pattern, 0, MAX_PATTERNS - 1);
     syslog("CMD", "selPat idx=%d heap=%u", pattern, ESP.getFreeHeap());
+    // Explicit selection overrides DEMO SET/song mode on both authorities.
+    sequencer.songChainStop();
+    sequencer.setSongMode(false);
+    spiMaster.songControl(0);
+    sequencer.cancelQueuedPattern();
+    dsqCancelPatternQueueDeferred();
     sequencer.selectPattern(pattern);
+    const uint32_t revision = bumpPatternRevision();
     // Reliability first: refresh Daisy slot on selection to avoid silent
     // patterns when a previous upload did not fully commit.
     dsqUploadPatternDeferred(pattern);
     /* v2.6 — Push to UDP slaves so LCD pattern display always matches master */
-    broadcastUdpPatternSync(pattern);
+    broadcastUdpPatternSync(pattern, revision);
     if (s_udpReplyIp != IPAddress(0, 0, 0, 0) && s_udpReplyPort != 0) {
-      // Also reply directly to the requester. This avoids the P4 timeout when
-      // the UDP client map is still empty/stale just after a Master reboot.
-      sendUdpPatternRows(s_udpReplyIp, s_udpReplyPort, pattern);
+      // handleUdp() registers the endpoint before dispatch. Only use a direct
+      // fallback if the bounded client map could not retain it; otherwise the
+      // requester would receive the same 16-row burst twice.
+      bool requesterWasBroadcast = false;
+      for (const auto& entry : udpClients) {
+        if (entry.second.ip == s_udpReplyIp && entry.second.port == s_udpReplyPort) {
+          requesterWasBroadcast = true;
+          break;
+        }
+      }
+      if (!requesterWasBroadcast)
+        sendUdpPatternRows(s_udpReplyIp, s_udpReplyPort, pattern, revision);
     }
     
     // broadcastSequencerState + pattern JSON — no SPI blocking now

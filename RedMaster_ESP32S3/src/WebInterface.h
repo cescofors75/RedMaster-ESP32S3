@@ -112,8 +112,9 @@ private:
   bool shouldSendUdpStateSync(const char* cmd) const;
   /* v2.6 — Push pattern + selected index to all UDP slaves (P4/S3).
    * Fixes bug where slaves displayed stale pattern after web changed it. */
-  void sendUdpPatternRows(IPAddress ip, uint16_t port, int patternNum);
-  void broadcastUdpPatternSync(int patternNum);
+  void sendUdpPatternRows(IPAddress ip, uint16_t port, int patternNum,
+                          uint32_t revision = 0);
+  void broadcastUdpPatternSync(int patternNum, uint32_t revision = 0);
 
   /* v2.9 — Melody (P4 piano + S3 melody screen) authoritative state.
    * Master holds the currently-edited grid + per-pad bindings, broadcasts

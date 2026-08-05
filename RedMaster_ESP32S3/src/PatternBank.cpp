@@ -11,6 +11,9 @@ enum Engine : int8_t {
   SMP = -1, E808 = 0, E909, E505, E303, EWT, ESH, EFM, EPHYS, ENOISE
 };
 
+BuiltinPatternSoundProfile ACTIVE_SOUND_PROFILE[MAX_PATTERNS] = {};
+bool ACTIVE_SOUND_PROFILE_VALID[MAX_PATTERNS] = {};
+
 struct MetaSeed {
   const char* name;
   const char* genre;
@@ -150,6 +153,51 @@ void sampleMotion(Sequencer& seq, uint8_t track, uint16_t low, uint16_t high,
   seq.setStepCutoffLock(track, 0, true, low);
   seq.setStepCutoffLock(track, 16, true, high);
   seq.setStepReverbSendLock(track, 28, true, reverbSend);
+}
+
+// Track 7 is physical/display pad 8. The original factory JSON gated its 303
+// on 13-16 of every 16 steps in most scenes. Apart from masking the drums, a
+// stale engine assignment could make that wall sound like an endless hi-hat.
+// A mask per scene gives every bass phrase air and keeps the density bounded.
+constexpr uint16_t FACTORY_PAD8_MASK[FACTORY_PATTERN_COUNT] = {
+  0x4949, 0x9595, 0x0000, 0x4D4D, 0x4921,
+  0x9529, 0xA9A5, 0x0000, 0xA549, 0x4491,
+  0x2121, 0x1081, 0x0000, 0x4441, 0xADAD,
+  0xE595, 0x5555, 0x0000, 0x0000, 0xA525
+};
+
+constexpr uint8_t FACTORY_PAD8_ROOT[FACTORY_PATTERN_COUNT] = {
+  36,36,36,36,36, 38,38,38,38,38, 41,41,41,41,36, 41,36,36,36,36
+};
+
+void rewriteFactoryPad8Line(Sequencer& seq, int pattern) {
+  static constexpr uint8_t scale[] = {0,3,5,7,10,12,15,17};
+  const uint16_t mask = FACTORY_PAD8_MASK[pattern];
+  uint8_t phraseIndex = 0;
+  for (uint8_t step = 0; step < 16; ++step) {
+    seq.setStep(pattern, CB, step, false, 1);
+    seq.setStepNote(pattern, CB, step, 0);
+    seq.clearStepNoteVoices(pattern, CB, step);
+    seq.setStepFlags(pattern, CB, step, 0);
+    if ((mask & (uint16_t)(1u << step)) == 0) continue;
+
+    const uint8_t note = FACTORY_PAD8_ROOT[pattern] +
+        scale[(phraseIndex + (uint8_t)pattern) & 0x07u];
+    int velocity = 62 + ((pattern >= 14) ? 18 : (pattern >= 5 ? 10 : 4));
+    velocity += (step % 4 == 0) ? 24 : ((phraseIndex & 1u) ? -7 : 3);
+    velocity = constrain(velocity, 45, 122);
+    uint8_t flags = (step % 4 == 0) ? 0x01 : 0;
+    if ((pattern == 3 || pattern == 8 || pattern >= 14) &&
+        step > 0 && (mask & (uint16_t)(1u << (step - 1))) &&
+        (phraseIndex % 3u == 2u)) {
+      flags |= 0x02;
+    }
+    seq.setStep(pattern, CB, step, true, (uint8_t)velocity);
+    seq.setStepNote(pattern, CB, step, note);
+    seq.setStepNoteVoice(pattern, CB, step, 0, note);
+    seq.setStepFlags(pattern, CB, step, flags);
+    ++phraseIndex;
+  }
 }
 
 void buildPattern(Sequencer& seq, int p) {
@@ -367,17 +415,45 @@ void buildPattern(Sequencer& seq, int p) {
 } // namespace
 
 void initializeProfessionalPatternBank(Sequencer& sequencer) {
+  resetPatternSoundProfiles();
   sequencer.setPatternLength(32);
   for (int pattern = 0; pattern < BUILTIN_PATTERN_COUNT; ++pattern) {
     buildPattern(sequencer, pattern);
+    BuiltinPatternSoundProfile profile{};
+    memcpy(profile.engines, ENGINE_PROFILE[pattern], sizeof(profile.engines));
+    memcpy(profile.presets, PRESET_PROFILE[pattern], sizeof(profile.presets));
+    setPatternSoundProfile(pattern, profile);
   }
   sequencer.selectPattern(0);
   sequencer.setHumanize(META[0].timing, META[0].velocity);
 }
 
 bool getBuiltinPatternSoundProfile(int pattern, BuiltinPatternSoundProfile& out) {
-  if (pattern < 0 || pattern >= BUILTIN_PATTERN_COUNT) return false;
-  memcpy(out.engines, ENGINE_PROFILE[pattern], sizeof(out.engines));
-  memcpy(out.presets, PRESET_PROFILE[pattern], sizeof(out.presets));
+  if (pattern < 0 || pattern >= MAX_PATTERNS || !ACTIVE_SOUND_PROFILE_VALID[pattern]) return false;
+  memcpy(&out, &ACTIVE_SOUND_PROFILE[pattern], sizeof(out));
   return true;
+}
+
+void resetPatternSoundProfiles(void) {
+  memset(ACTIVE_SOUND_PROFILE, 0, sizeof(ACTIVE_SOUND_PROFILE));
+  memset(ACTIVE_SOUND_PROFILE_VALID, 0, sizeof(ACTIVE_SOUND_PROFILE_VALID));
+}
+
+void setPatternSoundProfile(int pattern, const BuiltinPatternSoundProfile& profile) {
+  if (pattern < 0 || pattern >= MAX_PATTERNS) return;
+  memcpy(&ACTIVE_SOUND_PROFILE[pattern], &profile, sizeof(profile));
+  ACTIVE_SOUND_PROFILE_VALID[pattern] = true;
+}
+
+uint8_t getConfiguredPatternCount(void) {
+  for (int pattern = MAX_PATTERNS - 1; pattern >= 0; --pattern) {
+    if (ACTIVE_SOUND_PROFILE_VALID[pattern]) return (uint8_t)(pattern + 1);
+  }
+  return 0;
+}
+
+void refineFactoryTwentyPatternBank(Sequencer& sequencer) {
+  for (int pattern = 0; pattern < FACTORY_PATTERN_COUNT; ++pattern) {
+    rewriteFactoryPad8Line(sequencer, pattern);
+  }
 }

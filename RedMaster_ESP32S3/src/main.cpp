@@ -291,6 +291,7 @@ static volatile int8_t _pendingDsqQueue = -1;      // pattern index for next bar
 static volatile uint8_t _pendingDsqQueueBars = 0;
 static volatile uint8_t _pendingNativeTransitions = 0;
 static volatile bool _pendingDemoSetLaunch = false;
+static volatile bool _nativeDemoSetActive = false;
 static volatile bool _pendingDsqQueueCancel = false;
 static volatile bool   _pendingDsqPlay = false;    // arrancar Daisy tras upload (ordenado)
 static int16_t _daisySlotMasterPattern[DSQ_PATTERNS];
@@ -362,7 +363,9 @@ void dsqCancelPatternQueueDeferred() {
 static bool dsqConsumeNativeTransition() {
     bool native = false;
     portENTER_CRITICAL(&_pendingDsqMux);
-    if (_pendingNativeTransitions > 0) {
+    if (_nativeDemoSetActive) {
+        native = true;
+    } else if (_pendingNativeTransitions > 0) {
         _pendingNativeTransitions = (uint8_t)(_pendingNativeTransitions - 1u);
         native = true;
     }
@@ -486,7 +489,7 @@ static int ensurePatternResident(int masterPattern, bool forceUpload) {
 static void applyPatternPerformance(int masterPattern) {
     PatternMetadata metadata{};
     if (!sequencer.getPatternMetadata(masterPattern, metadata)) return;
-    if (masterPattern < BUILTIN_PATTERN_COUNT) {
+    if (metadata.recommendedBpm >= 40 && metadata.recommendedBpm <= 240) {
         sequencer.setTempo((float)metadata.recommendedBpm);
         spiMaster.setTempo((float)metadata.recommendedBpm);
     }
@@ -531,11 +534,15 @@ void spiAudioTask(void *pvParameters) {
         _daisySlotLastUse[slot] = 0;
     }
 
-    // El banco profesional ocupa los 16 slots residentes al arrancar.
+    // El banco activo ocupa sus slots residentes al arrancar (20 en el banco
+    // factory; 16 si LittleFS falta y seguimos con el fallback integrado).
     // 20ms de gap entre patrones para que la Daisy procese cada lote
     // antes de empezar el siguiente — evita que comandos posteriores caigan
     // al vacío y dejen slots con datos parciales (sintoma: patrones que no suenan).
-    for (int pat = 0; pat < BUILTIN_PATTERN_COUNT; pat++) {
+    int startupPatternCount = getConfiguredPatternCount();
+    if (startupPatternCount <= 0) startupPatternCount = BUILTIN_PATTERN_COUNT;
+    startupPatternCount = constrain(startupPatternCount, 1, DSQ_PATTERNS);
+    for (int pat = 0; pat < startupPatternCount; pat++) {
         dsqUploadPatternToSlot(pat, pat);
         _daisySlotMasterPattern[pat] = pat;
         _daisySlotLastUse[pat] = ++_daisyResidentClock;
@@ -631,31 +638,49 @@ void spiAudioTask(void *pvParameters) {
         portEXIT_CRITICAL(&_pendingDsqMux);
         if (launchDemo) {
             struct DemoScene { uint8_t pattern; uint8_t bars; };
-            static constexpr DemoScene demo[] = {
-                {10,4}, {11,4}, {13,4}, {2,8}, {1,4}, {0,8},
-                {4,4}, {5,8}, {7,4}, {6,4}, {8,8}, {12,4},
-                {14,4}, {15,4}, {16,8}, {17,1}, {18,1}, {19,8}
+            // Complete ~80-second audition: every factory scene exactly once,
+            // ordered as an energy curve rather than by genre folder.
+            static constexpr DemoScene demo20[FACTORY_PATTERN_COUNT] = {
+                {11,2}, {8,2},  {3,2},  {16,2}, {2,2},
+                {7,2},  {13,2}, {12,2}, {0,2},  {4,2},
+                {10,2}, {9,2},  {1,2},  {6,2},  {14,2},
+                {15,2}, {17,1}, {5,2},  {18,1}, {19,4}
             };
-            constexpr uint8_t count = sizeof(demo) / sizeof(demo[0]);
-            Sequencer::SongChainEntry local[count] = {};
-            SongEntry daisy[count] = {};
+            Sequencer::SongChainEntry local[FACTORY_PATTERN_COUNT] = {};
+            SongEntry daisy[FACTORY_PATTERN_COUNT] = {};
+            uint8_t count = 0;
+            int configured = getConfiguredPatternCount();
+            if (configured <= 0) configured = BUILTIN_PATTERN_COUNT;
             sequencer.stop();
             spiMaster.dsqControl(0);
-            for (uint8_t i = 0; i < count; ++i) {
-                local[i].pattern = demo[i].pattern;
-                local[i].repeats = demo[i].bars;
+            for (uint8_t i = 0; i < FACTORY_PATTERN_COUNT; ++i) {
+                if (demo20[i].pattern >= configured) continue;
+                local[count].pattern = demo20[i].pattern;
+                local[count].repeats = demo20[i].bars;
                 // Force-refresh every scene from the active S3 bank, then send
                 // physical resident slots to Daisy's sample-accurate song chain.
-                daisy[i].pattern = (uint8_t)ensurePatternResident(demo[i].pattern, true);
-                daisy[i].repeats = demo[i].bars;
+                daisy[count].pattern = (uint8_t)ensurePatternResident(demo20[i].pattern, true);
+                daisy[count].repeats = demo20[i].bars;
+                ++count;
             }
-            sequencer.songChainUpload(local, count);
-            spiMaster.songUpload(daisy, count);
-            sequencer.songChainPlay();
-            spiMaster.songControl(1);
+            if (count > 0) {
+                sequencer.songChainUpload(local, count);
+                spiMaster.songUpload(daisy, count);
+                applyPatternPerformance(local[0].pattern);
+                portENTER_CRITICAL(&_pendingDsqMux);
+                _nativeDemoSetActive = true;
+                portEXIT_CRITICAL(&_pendingDsqMux);
+                sequencer.songChainPlay();
+                spiMaster.songControl(1);
+            }
         }
 
         sequencer.update();   // Mantiene internos del secuenciador (beat UI, song mode)
+        if (_nativeDemoSetActive && !sequencer.isSongChainActive()) {
+            portENTER_CRITICAL(&_pendingDsqMux);
+            _nativeDemoSetActive = false;
+            portEXIT_CRITICAL(&_pendingDsqMux);
+        }
         spiMaster.process();
 
         // Daisy is the audible clock. Poll its real sample-accurate position
@@ -1069,6 +1094,7 @@ void setup() {
         // invisible to controllers: the header keeps showing the song scene.
         if (newPattern < MAX_PATTERNS - 4) {
             if (!daisyAlreadyQueued) dsqSelectPatternDeferred(newPattern);
+            else applyPatternPerformance(newPattern);
             webInterface.broadcastSongPattern(newPattern, songLength);
         }
     });
@@ -1195,7 +1221,10 @@ void setup() {
                 break;
             case BTN_FUNC_NEXT_PATTERN:
             case BTN_FUNC_NEXT_PAT_PLAY: {
-                int next = (sequencer.getCurrentPattern() + 1) % BUILTIN_PATTERN_COUNT;
+                int patternCount = max(1, (int)getConfiguredPatternCount());
+                int next = (sequencer.getCurrentPattern() + 1) % patternCount;
+                sequencer.songChainStop();
+                spiMaster.songControl(0);
                 sequencer.selectPattern(next);
                 dsqSelectPatternDeferred(next);
                 if (funcId == BTN_FUNC_NEXT_PAT_PLAY) { sequencer.start(); spiMaster.dsqControl(1); }
@@ -1203,11 +1232,15 @@ void setup() {
                 snprintf(buf, sizeof(buf),
                     "{\"type\":\"physButton\",\"action\":\"nextPattern\",\"pattern\":%d}", next);
                 webInterface.broadcastRaw(buf);
+                webInterface.broadcastUdpSongPattern(next, 1);
                 break;
             }
             case BTN_FUNC_PREV_PATTERN:
             case BTN_FUNC_PREV_PAT_PLAY: {
-                int prev = (sequencer.getCurrentPattern() + BUILTIN_PATTERN_COUNT - 1) % BUILTIN_PATTERN_COUNT;
+                int patternCount = max(1, (int)getConfiguredPatternCount());
+                int prev = (sequencer.getCurrentPattern() + patternCount - 1) % patternCount;
+                sequencer.songChainStop();
+                spiMaster.songControl(0);
                 sequencer.selectPattern(prev);
                 dsqSelectPatternDeferred(prev);
                 if (funcId == BTN_FUNC_PREV_PAT_PLAY) { sequencer.start(); spiMaster.dsqControl(1); }
@@ -1215,6 +1248,7 @@ void setup() {
                 snprintf(buf, sizeof(buf),
                     "{\"type\":\"physButton\",\"action\":\"prevPattern\",\"pattern\":%d}", prev);
                 webInterface.broadcastRaw(buf);
+                webInterface.broadcastUdpSongPattern(prev, 1);
                 break;
             }
             case BTN_FUNC_TAP_TEMPO:
@@ -1293,12 +1327,15 @@ void setup() {
             case BTN_FUNC_PATTERN_3: case BTN_FUNC_PATTERN_4: case BTN_FUNC_PATTERN_5:
             case BTN_FUNC_PATTERN_6: case BTN_FUNC_PATTERN_7: {
                 int pIdx = funcId - BTN_FUNC_PATTERN_0;
+                sequencer.songChainStop();
+                spiMaster.songControl(0);
                 sequencer.selectPattern(pIdx);
                 dsqSelectPatternDeferred(pIdx);
                 ctrlButtons.flashLed(btnIdx, CTRL_CLR_CYAN);
                 snprintf(buf, sizeof(buf),
                     "{\"type\":\"physButton\",\"action\":\"nextPattern\",\"pattern\":%d}", pIdx);
                 webInterface.broadcastRaw(buf);
+                webInterface.broadcastUdpSongPattern(pIdx, 1);
                 break;
             }
             /* ── Live Pads (disparo directo vía SPI) ── */
