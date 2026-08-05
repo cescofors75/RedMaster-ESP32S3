@@ -1,0 +1,8 @@
+build/
+build_direct/
+build_diag/
+build_diag_direct/
+*.elf
+*.bin
+*.hex
+*.map
