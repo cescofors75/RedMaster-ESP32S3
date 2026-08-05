@@ -16,6 +16,7 @@
 #include <map>
 #include <functional>
 #include "MIDIController.h"
+#include "usb_transport_protocol.h"
 
 #define UDP_PORT 8888  // Puerto para recibir comandos UDP
 
@@ -39,6 +40,15 @@ public:
   void update();
   void handleUdp();  // Nueva función para procesar paquetes UDP
   bool isSTAMode() const { return _staConnected; }
+
+  // Native USB CDC transport used by the ESP32-P4. JSON uses the same command
+  // contract as UDP/WebSocket; WAV data is staged through the existing Daisy
+  // upload pipeline.
+  void handleUsbJson(const char* json, size_t len);
+  uint8_t beginUsbDaisyUpload(uint8_t pad, const char* filename, uint32_t totalSize);
+  uint8_t writeUsbDaisyUpload(const uint8_t* data, size_t len);
+  uint8_t endUsbDaisyUpload();
+  void abortUsbDaisyUpload();
   
   void broadcastSequencerState();
   bool loadPatternBank(const String& file, String* errMsg = nullptr);
@@ -105,6 +115,8 @@ private:
   void processCommand(const JsonDocument& doc, bool* handled = nullptr);  // common command dispatcher
   void sendUdpJsonTo(IPAddress ip, uint16_t port, const JsonDocument& doc);
   void sendUdpStateSync(IPAddress ip, uint16_t port);
+  void populateStateSyncDocument(JsonDocument& doc);
+  void sendUsbStateSync();
   void broadcastUdpStateSync();
   void broadcastUdpMasterFx(const char* param, bool value);
   void broadcastUdpMasterFx(const char* param, float value);
@@ -114,6 +126,7 @@ private:
    * Fixes bug where slaves displayed stale pattern after web changed it. */
   void sendUdpPatternRows(IPAddress ip, uint16_t port, int patternNum,
                           uint32_t revision = 0);
+  void sendUsbPatternRows(int patternNum, uint32_t revision = 0);
   void broadcastUdpPatternSync(int patternNum, uint32_t revision = 0);
 
   /* v2.9 — Melody (P4 piano + S3 melody screen) authoritative state.
@@ -133,6 +146,7 @@ private:
   bool     melodyPadGrid[16][16][12]  = {};
   void     broadcastMelodySync();
   void     sendMelodySyncTo(IPAddress ip, uint16_t port);
+  void     sendUsbMelodySync();
   void     melodyClearGrid();
   
   // File upload handlers

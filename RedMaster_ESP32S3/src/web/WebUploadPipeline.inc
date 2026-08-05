@@ -753,8 +753,6 @@ void WebInterface::handleCleanTrackUpload(AsyncWebServerRequest *request, String
 }
 
 void WebInterface::broadcastUploadProgress(int pad, int percent) {
-  if (!initialized || !ws) return;
-  
   StaticJsonDocument<128> doc;
   doc["type"] = "uploadProgress";
   doc["pad"] = pad;
@@ -762,12 +760,11 @@ void WebInterface::broadcastUploadProgress(int pad, int percent) {
   
   String output;
   serializeJson(doc, output);
-  ws->textAll(output);
+  if (initialized && ws) ws->textAll(output);
+  sendP4UsbJson(doc);
 }
 
 void WebInterface::broadcastUploadComplete(int pad, bool success, const String& message) {
-  if (!initialized || !ws) return;
-  
   StaticJsonDocument<256> doc;
   doc["type"] = "uploadComplete";
   doc["pad"] = pad;
@@ -776,12 +773,14 @@ void WebInterface::broadcastUploadComplete(int pad, bool success, const String& 
   
   String output;
   serializeJson(doc, output);
-  ws->textAll(output);
+  if (initialized && ws) ws->textAll(output);
+  sendP4UsbJson(doc);
 }
 
 void WebInterface::broadcastRaw(const char* json) {
-  if (!initialized || !ws || ws->count() == 0) return;
+  if (!json || !json[0]) return;
   if (ESP.getFreeHeap() < 20000) return;   // drop if heap critical
-  ws->textAll(json);
+  if (initialized && ws && ws->count() > 0) ws->textAll(json);
+  if (p4UsbLink.connected()) p4UsbLink.sendJson(json);
 }
 

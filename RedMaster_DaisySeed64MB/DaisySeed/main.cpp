@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════════════
  *  RED808 DRUM MACHINE — Daisy Seed Slave
  * ─────────────────────────────────────────────────────────────────
- *  STM32H750 + 64 MB SDRAM | SPI1 slave | Protocolo RED808
+ *  Daisy Seed / Seed3 · STM32H750 + 64 MB SDRAM | SPI1 slave | Protocolo RED808
  *  48000 Hz · 128 samples/block · 24 pads · 32 voces
  *  Master FX: Delay, Reverb, Chorus, Tremolo, Comp, Wavefolder,
  *             Limiter, Phaser, Flanger, Global Filter
@@ -8911,7 +8911,7 @@ int main()
     if(kEnableStartLog)
         hw.StartLog(false);
     Log("══════════════════════════════════════════");
-    Log("  RED808 DrumMachine — Daisy Seed Slave");
+    Log("  RED808 DrumMachine — Daisy Seed / Seed3 Slave");
     Log("  %d pads · %d voices · %d Hz · %d block",
         MAX_PADS, MAX_VOICES, SAMPLE_RATE, AUDIO_BLOCK);
     Log("  Synth: TR808 · TR909 · TR505 · TB303");
@@ -9043,7 +9043,7 @@ int main()
                     Log("  Pad %2d: %lu frames OK", padIdx, sampleLength[padIdx]);
             }
         } else {
-            Log("No hay WAV blob en QSPI (0x90080000)");
+            Log("No hay WAV blob en QSPI (0x900C0000)");
         }
     }
     bool sdOk = false;

@@ -9,7 +9,13 @@
 #include "Sequencer.h"
 #include "PatternBank.h"
 #include "WebInterface.h"
+#include "P4UsbLink.h"
+#ifndef RED808_USB_MIDI_HOST
+#define RED808_USB_MIDI_HOST 0
+#endif
+#if RED808_USB_MIDI_HOST
 #include "MIDIController.h"
+#endif
 #include "SysLog.h"
 #if ENABLE_PHYSICAL_BUTTONS
 #include "PhysControlButtons.h"
@@ -69,7 +75,9 @@ SPIMaster spiMaster;
 SampleManager sampleManager;
 Sequencer sequencer;
 WebInterface webInterface;
+#if RED808_USB_MIDI_HOST
 MIDIController midiController;
+#endif
 Adafruit_NeoPixel rgbLed(RGB_LED_NUM, RGB_LED_PIN, NEO_GRB + NEO_KHZ800);
 
 #if ENABLE_PHYSICAL_BUTTONS
@@ -751,7 +759,12 @@ void systemTask(void *pvParameters) {
 #endif
     
     while (true) {
+#if RED808_P4_USB_ENABLED
+        p4UsbLink.update();
+#endif
+#if RED808_USB_MIDI_HOST
         midiController.update();
+#endif
         webInterface.update();
         webInterface.handleUdp();
 #if ENABLE_PHYSICAL_BUTTONS
@@ -945,7 +958,9 @@ void setup() {
            ESP.getFreeHeap(), (uint32_t)ESP.getFreePsram(), (uint32_t)ESP.getPsramSize());
 
     // NVS ya esta disponible en setup: cargar mapeos MIDI persistidos aqui.
+#if RED808_USB_MIDI_HOST
     midiController.loadMappings();
+#endif
 
     // 2. SPI Master — connects to STM32 for audio DSP
     if (!spiMaster.begin()) {
@@ -1118,6 +1133,24 @@ void setup() {
         delay(50);
     }
 
+#if RED808_P4_USB_ENABLED
+    p4UsbLink.setHandlers(
+        [](const char* json, size_t len) { webInterface.handleUsbJson(json, len); },
+        [](uint8_t pad, const char* filename, uint32_t totalSize) -> uint8_t {
+          return webInterface.beginUsbDaisyUpload(pad, filename, totalSize);
+        },
+        [](const uint8_t* data, size_t len) -> uint8_t {
+          return webInterface.writeUsbDaisyUpload(data, len);
+        },
+        []() -> uint8_t { return webInterface.endUsbDaisyUpload(); },
+        []() { webInterface.abortUsbDaisyUpload(); });
+    if (!p4UsbLink.begin()) {
+        syslog("BOOT", "Native USB P4 link init FAILED");
+    } else {
+        syslog("BOOT", "Native USB P4 link ready");
+    }
+#endif
+
     // AsyncWebServer ya puede entregar la portada mientras la Daisy termina
     // de verificar/cargar los samples del kit por defecto.
     loadDefaultKitAfterNetwork();
@@ -1135,6 +1168,7 @@ void setup() {
         }
     }
 
+#if RED808_USB_MIDI_HOST
     webInterface.setMIDIController(&midiController);
     midiController.setMessageCallback([](const MIDIMessage& msg) {
         webInterface.broadcastMIDIMessage(msg);
@@ -1149,6 +1183,9 @@ void setup() {
         webInterface.broadcastMIDIDeviceStatus(connected, info);
     });
     midiController.begin();
+#else
+    webInterface.setMIDIController(nullptr);
+#endif
 
 #if ENABLE_PHYSICAL_BUTTONS
     // Callback: WebInterface notifica cuando llega POST /api/buttons

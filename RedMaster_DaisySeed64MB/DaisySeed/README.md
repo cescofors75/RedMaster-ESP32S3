@@ -7,7 +7,7 @@ SPI1 slave — protocolo RED808 compatible con **ESP32-S3** master.
 
 | Componente | Descripción |
 |---|---|
-| **Daisy Seed** | Electro-Smith (STM32H750 + 64MB SDRAM + codec integrado) |
+| **Daisy Seed / Seed3** | Daisy (STM32H750 + 64 MB SDRAM + 8 MB QSPI) |
 | **Micro SD** | Módulo SPI de 6 pines, 3.3 V |
 | **ESP32-S3 N16R8** | Master SPI + Web UI + Sequencer |
 
@@ -54,6 +54,19 @@ Codec integrado en la Daisy Seed → salida por **jack de 3.5mm**.
 | SDRAM para samples | 24 × 96000 int16 ≈ 4.4 MB |
 | Max duración sample | ~2.17 s per pad (SPI) |
 | SD card loading | ~0.25 s para 16 samples |
+
+### Compatibilidad con Daisy Seed3
+
+Seed3 es compatible pin a pin y a nivel de firmware con la Daisy Seed anterior,
+por lo que no requiere cambios en SPI1, SPI3, SDRAM, QSPI ni en el mapa de audio.
+El nuevo códec TI TAC5242 mejora el ruido y admite hasta 32-bit/192 kHz, pero este
+firmware conserva deliberadamente **48 kHz/24-bit SAI**: todo el secuenciador,
+los remuestreadores y los buffers de efectos están dimensionados para 48 kHz, y
+192 kHz multiplicaría por cuatro la carga del callback sin aportar una ventaja
+útil a los samples PCM de la batería.
+
+La entrada USB-C de Seed3 está configurada para 5 V/500 mA. El montaje externo
+y los pines de alimentación deben seguir las recomendaciones del datasheet.
 
 ## Protocolo RED808
 
@@ -197,6 +210,19 @@ compases:
 ```bash
 make RED808_STARTUP_SHOWCASE_DEMO=1 -j4
 ```
+
+En Windows, el flujo reproducible recomendado (directorio separado y limpieza
+automática de objetos al cambiar las macros del perfil) es:
+
+```powershell
+.\build_daisy.ps1 -ShowcaseDemo
+.\flash_daisy.ps1 -ShowcaseDemo
+```
+
+`build_daisy.ps1 -ShowcaseDemo` genera
+`DaisySeed/build_showcase/DrumMachine.bin`, que es exactamente el binario que
+selecciona el flasheador. El perfil se recompila desde cero para impedir que un
+`main.o` creado sin Showcase sea reutilizado por Make.
 
 La demo usa el secuenciador sample-accurate de Daisy: los samples cargados desde
 el kit SD forman la batería principal, dos capas 808/909 aportan detalles y un

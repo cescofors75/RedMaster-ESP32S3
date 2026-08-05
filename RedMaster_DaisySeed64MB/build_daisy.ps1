@@ -14,6 +14,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Keep presentation builds isolated from the normal firmware. This also makes
+# `build_daisy.ps1 -ShowcaseDemo` produce the path expected by flash_daisy.ps1.
+if($ShowcaseDemo -and -not $BuildDir) {
+    $BuildDir = 'build_showcase'
+}
+
 function Find-FirstExistingFile {
     param([string[]]$Patterns)
     foreach($pattern in $Patterns) {
@@ -81,17 +87,6 @@ Write-Host "Make:          $($makeCmd.Source)" -ForegroundColor Cyan
 
 Push-Location $ProjectDir
 try {
-    if($Clean) {
-        & $makeCmd.Source clean
-        if($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    }
-
-    if($StressReport -and -not $Clean) {
-        Write-Host "StressReport: limpiando objetos para aplicar macros de diagnostico..." -ForegroundColor Yellow
-        & $makeCmd.Source clean
-        if($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    }
-
     $makeArgs = @()
     if($BuildDir)         { $makeArgs += "BUILD_DIR=$BuildDir" }
     if($DemoBells)        { $makeArgs += 'DEMO_BELLS=1' }
@@ -102,6 +97,20 @@ try {
         $makeArgs += 'RED808_STARTUP_STRESS_REPORT=1'
         $makeArgs += "RED808_STARTUP_STRESS_SECONDS=$StressSeconds"
     }
+
+    # Make does not track command-line macro changes. Always clean dedicated
+    # diagnostic/demo profiles so a previous main.o cannot silently be reused.
+    $profileBuild = $DemoBells -or $BootProgressDiag -or $ShowcaseDemo -or $StressReport
+    if($Clean -or $profileBuild) {
+        $cleanArgs = @('clean')
+        if($BuildDir) { $cleanArgs += "BUILD_DIR=$BuildDir" }
+        if($profileBuild) {
+            Write-Host 'Limpiando objetos del perfil para aplicar sus macros...' -ForegroundColor Yellow
+        }
+        & $makeCmd.Source @cleanArgs
+        if($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+
     & $makeCmd.Source @makeArgs
     exit $LASTEXITCODE
 }

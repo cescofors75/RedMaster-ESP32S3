@@ -262,7 +262,7 @@ if(-not $appFlashOk) {
 }
 Write-Host 'Firmware OK' -ForegroundColor Green
 
-# ── Flashear WAV samples blob (QSPI @ 0x90080000) ──
+# ── Flashear WAV samples blob (QSPI @ 0x900C0000) ──
 if($SkipSamples) {
     Write-Host 'SkipSamples activo: no se flashean WAV samples' -ForegroundColor Yellow
     'RESULT=SAMPLES_FLASH_SKIPPED' | Tee-Object -FilePath $log -Append

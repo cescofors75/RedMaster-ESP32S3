@@ -4,6 +4,7 @@
  */
 
 #include "WebInterface.h"
+#include "P4UsbLink.h"
 #include "SPIMaster.h"
 #include "Sequencer.h"
 #include "PatternBank.h"
@@ -3089,10 +3090,7 @@ bool WebInterface::shouldSendUdpStateSync(const char* cmd) const {
          strcmp(cmd, "sdGetStatus") == 0;
 }
 
-void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
-  if (!initialized || ip == IPAddress(0, 0, 0, 0) || port == 0) return;
-
-  PsramJsonDocument doc(4096);
+void WebInterface::populateStateSyncDocument(JsonDocument& doc) {
   SdStatusResponse sdStat = {};
   bool sdOk = spiMaster.getCachedSdStatus(sdStat);
   uint32_t sdLoadedMask = sdOk ? sdStat.samplesLoaded : 0;
@@ -3174,6 +3172,13 @@ void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
     const char* name = (localName && localName[0]) ? localName : daisyName;
     sample["name"] = (name && name[0]) ? name : "";
   }
+}
+
+void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
+  if (!initialized || ip == IPAddress(0, 0, 0, 0) || port == 0) return;
+
+  PsramJsonDocument doc(4096);
+  populateStateSyncDocument(doc);
 
   if (!_stateBuf) _stateBuf = (char*)ps_malloc(kStateBufSize);
   if (!_stateBuf) return;
@@ -3190,12 +3195,24 @@ void WebInterface::sendUdpStateSync(IPAddress ip, uint16_t port) {
   sendMelodySyncTo(ip, port);
 }
 
+void WebInterface::sendUsbStateSync() {
+  if (!p4UsbLink.connected()) return;
+  PsramJsonDocument doc(4096);
+  populateStateSyncDocument(doc);
+  if (!_stateBuf) _stateBuf = (char*)ps_malloc(kStateBufSize);
+  if (!_stateBuf || !jsonBufLock()) return;
+  size_t len = serializeJson(doc, _stateBuf, kStateBufSize);
+  if (len > 0 && len < kStateBufSize) p4UsbLink.sendJson(_stateBuf, len);
+  jsonBufUnlock();
+  sendUsbMelodySync();
+}
+
 void WebInterface::broadcastUdpStateSync() {
-  if (udpClients.empty()) return;
   for (auto& entry : udpClients) {
     sendUdpStateSync(entry.second.ip, entry.second.port);
     yield();
   }
+  sendUsbStateSync();
 }
 
 void WebInterface::sendUdpJsonTo(IPAddress ip, uint16_t port, const JsonDocument& doc) {
@@ -3208,8 +3225,15 @@ void WebInterface::sendUdpJsonTo(IPAddress ip, uint16_t port, const JsonDocument
   udp.endPacket();
 }
 
+static void sendP4UsbJson(const JsonDocument& doc) {
+  if (!p4UsbLink.connected()) return;
+  char buf[1024];
+  size_t len = serializeJson(doc, buf, sizeof(buf));
+  if (len > 0 && len < sizeof(buf)) p4UsbLink.sendJson(buf, len);
+}
+
 void WebInterface::broadcastUdpMasterFx(const char* param, bool value) {
-  if (udpClients.empty() || !param || !param[0]) return;
+  if (!param || !param[0]) return;
   StaticJsonDocument<128> doc;
   doc["type"] = "masterFx";
   doc["param"] = param;
@@ -3218,10 +3242,11 @@ void WebInterface::broadcastUdpMasterFx(const char* param, bool value) {
     sendUdpJsonTo(entry.second.ip, entry.second.port, doc);
     yield();
   }
+  sendP4UsbJson(doc);
 }
 
 void WebInterface::broadcastUdpMasterFx(const char* param, float value) {
-  if (udpClients.empty() || !param || !param[0]) return;
+  if (!param || !param[0]) return;
   StaticJsonDocument<128> doc;
   doc["type"] = "masterFx";
   doc["param"] = param;
@@ -3230,10 +3255,11 @@ void WebInterface::broadcastUdpMasterFx(const char* param, float value) {
     sendUdpJsonTo(entry.second.ip, entry.second.port, doc);
     yield();
   }
+  sendP4UsbJson(doc);
 }
 
 void WebInterface::broadcastUdpTrackVolume(int track, int volume) {
-  if (udpClients.empty() || track < 0 || track >= 16) return;
+  if (track < 0 || track >= 16) return;
   StaticJsonDocument<128> doc;
   doc["type"] = "trackVolumeSet";
   doc["track"] = track;
@@ -3243,12 +3269,12 @@ void WebInterface::broadcastUdpTrackVolume(int track, int volume) {
     sendUdpJsonTo(entry.second.ip, entry.second.port, doc);
     yield();
   }
+  sendP4UsbJson(doc);
 }
 
 void WebInterface::broadcastUdpSongPattern(int pattern, int songLength) {
   if (pattern < 0 || pattern >= MAX_PATTERNS) return;
   const uint32_t revision = bumpPatternRevision();
-  if (udpClients.empty()) return;
   StaticJsonDocument<192> doc;
   doc["type"] = "songPattern";
   doc["pattern"] = pattern;
@@ -3259,6 +3285,7 @@ void WebInterface::broadcastUdpSongPattern(int pattern, int songLength) {
     sendUdpJsonTo(entry.second.ip, entry.second.port, doc);
     yield();
   }
+  sendP4UsbJson(doc);
   broadcastUdpPatternSync(pattern, revision);
 }
 
@@ -3298,8 +3325,34 @@ void WebInterface::sendMelodySyncTo(IPAddress ip, uint16_t port) {
   udp.endPacket();
 }
 
+void WebInterface::sendUsbMelodySync() {
+  if (!p4UsbLink.connected()) return;
+  char buf[800];
+  int n = snprintf(buf, sizeof(buf),
+                   "{\"cmd\":\"melody_sync\",\"engine\":%u,\"octave\":%u,\"rec\":%d,\"step\":%u,\"pad\":%u,\"grid\":[",
+                   (unsigned)melodyEngine, (unsigned)melodyOctave,
+                   melodyRecActive ? 1 : 0, (unsigned)melodyStep,
+                   (unsigned)melodyPad);
+  if (n <= 0 || n >= (int)sizeof(buf)) return;
+  for (int c = 0; c < 16; c++) {
+    if (n + 2 >= (int)sizeof(buf)) return;
+    if (c) buf[n++] = ',';
+    buf[n++] = '[';
+    for (int r = 0; r < 12; r++) {
+      if (n + 2 >= (int)sizeof(buf)) return;
+      if (r) buf[n++] = ',';
+      buf[n++] = melodyGrid[c][r] ? '1' : '0';
+    }
+    if (n + 1 >= (int)sizeof(buf)) return;
+    buf[n++] = ']';
+  }
+  if (n + 2 >= (int)sizeof(buf)) return;
+  buf[n++] = ']';
+  buf[n++] = '}';
+  p4UsbLink.sendJson(buf, (size_t)n);
+}
+
 void WebInterface::broadcastMelodySync() {
-  if (udpClients.empty()) return;
   static unsigned long lastLog = 0;
   unsigned long nowMs = millis();
   if (nowMs - lastLog > 5000) {
@@ -3312,6 +3365,7 @@ void WebInterface::broadcastMelodySync() {
     sendMelodySyncTo(entry.second.ip, entry.second.port);
     yield();
   }
+  sendUsbMelodySync();
 }
 
 /* v2.6 — Push the active pattern (drum steps + selected index) to every
@@ -3351,13 +3405,41 @@ void WebInterface::sendUdpPatternRows(IPAddress ip, uint16_t port, int patternNu
   }
 }
 
+void WebInterface::sendUsbPatternRows(int patternNum, uint32_t revision) {
+  if (!p4UsbLink.connected()) return;
+  if (patternNum < 0 || patternNum >= MAX_PATTERNS) return;
+  if (revision == 0) revision = currentPatternRevision();
+  const bool active = patternNum == sequencer.getPerformancePattern();
+  int stepCount = constrain(sequencer.getPatternLength(), 16, STEPS_PER_PATTERN);
+  for (int t = 0; t < MAX_TRACKS; t++) {
+    char rowHex[17];
+    int nibbles = (stepCount + 3) / 4;
+    for (int nib = 0; nib < nibbles; nib++) {
+      uint8_t value = 0;
+      for (int bit = 0; bit < 4; bit++) {
+        int step = nib * 4 + bit;
+        if (step < stepCount && sequencer.getStep(patternNum, t, step)) value |= (1U << bit);
+      }
+      rowHex[nib] = (value < 10) ? ('0' + value) : ('A' + value - 10);
+    }
+    rowHex[nibbles] = '\0';
+    char buf[208];
+    int len = snprintf(buf, sizeof(buf),
+      "{\"cmd\":\"pattern_row\",\"pattern\":%d,\"track\":%d,\"stepCount\":%d,"
+      "\"active\":%s,\"patternEpoch\":%lu,\"patternRevision\":%lu,\"row\":\"%s\"}",
+      patternNum, t, stepCount, active ? "true" : "false",
+      (unsigned long)patternEpoch(), (unsigned long)revision, rowHex);
+    if (len > 0 && len < (int)sizeof(buf)) p4UsbLink.sendJson(buf, (size_t)len);
+  }
+}
+
 void WebInterface::broadcastUdpPatternSync(int patternNum, uint32_t revision) {
-  if (udpClients.empty()) return;
   if (revision == 0) revision = currentPatternRevision();
   for (auto& entry : udpClients) {
     sendUdpPatternRows(entry.second.ip, entry.second.port, patternNum, revision);
     yield();
   }
+  sendUsbPatternRows(patternNum, revision);
 }
 
 void WebInterface::sendSequencerStateToClient(AsyncWebSocketClient* client) {
@@ -3560,6 +3642,7 @@ void WebInterface::update() {
     pos["patternRevision"] = currentPatternRevision();
     for (auto& entry : udpClients)
       sendUdpJsonTo(entry.second.ip, entry.second.port, pos);
+    sendP4UsbJson(pos);
     static int lastDaisyUdpPattern = -1;
     if (daisyPattern != lastDaisyUdpPattern) {
       lastDaisyUdpPattern = daisyPattern;
@@ -3656,14 +3739,16 @@ void WebInterface::update() {
   }
 
   static unsigned long lastUdpStateSync = 0;
-  if (!pageLoading && !udpClients.empty() && now - lastUdpStateSync >= 2000) {
+  if (!pageLoading && (!udpClients.empty() || p4UsbLink.connected()) &&
+      now - lastUdpStateSync >= 2000) {
     lastUdpStateSync = now;
     broadcastUdpStateSync();
   }
 
   // v2.9 — periodic melody_sync so newly-joined slaves and any missed packet recover
   static unsigned long lastUdpMelodySync = 0;
-  if (!pageLoading && !udpClients.empty() && now - lastUdpMelodySync >= 3000) {
+  if (!pageLoading && (!udpClients.empty() || p4UsbLink.connected()) &&
+      now - lastUdpMelodySync >= 3000) {
     lastUdpMelodySync = now;
     broadcastMelodySync();
   }
@@ -5963,6 +6048,12 @@ void WebInterface::processCommand(const JsonDocument& doc, bool* handled) {
     serializeJson(responseDoc, output);
     if (ws) ws->textAll(output);
   }
+  else if (cmd == "unloadDaisy") {
+    int pad = doc["pad"] | -1;
+    if (pad < 0 || pad >= MAX_SAMPLES) return;
+    spiMaster.unloadSample(pad);
+    broadcastUploadComplete(pad, true, "Daisy sample unloaded");
+  }
   else if (cmd == "get_pattern") {
     int patternNum = doc.containsKey("pattern") ? doc["pattern"].as<int>() : sequencer.getCurrentPattern();
     
@@ -6835,3 +6926,110 @@ void WebInterface::broadcastMIDIDeviceStatus(bool connected, const MIDIDeviceInf
 }
 
 #include "web/WebUploadPipeline.inc"
+
+void WebInterface::handleUsbJson(const char* json, size_t len) {
+  if (!json || len == 0 || len > Red808Usb::MAX_JSON_PAYLOAD) return;
+  if (ESP.getFreeHeap() < 20000) return;
+
+  PsramJsonDocument doc(4096);
+  DeserializationError error = deserializeJson(doc, json, len);
+  if (error) return;
+
+  const char* cmd = doc["cmd"] | "";
+  bool handled = false;
+  processCommand(doc, &handled);
+
+  if (strcmp(cmd, "get_pattern") == 0 || strcmp(cmd, "getPattern") == 0) {
+    int pattern = sequencer.getPerformancePattern();
+    if (!doc["pattern"].isNull()) pattern = doc["pattern"].as<int>();
+    else if (!doc["index"].isNull()) pattern = doc["index"].as<int>();
+    sendUsbPatternRows(constrain(pattern, 0, MAX_PATTERNS - 1));
+  }
+  if (shouldSendUdpStateSync(cmd)) sendUsbStateSync();
+}
+
+uint8_t WebInterface::beginUsbDaisyUpload(uint8_t pad, const char* filename,
+                                          uint32_t totalSize) {
+  if (s_daisyUpload.receiving &&
+      (uint32_t)(millis() - s_daisyUpload.lastProgressMs) >
+          kUploadReceiveTimeoutMs) {
+    if (s_daisyUploadFile) s_daisyUploadFile.close();
+    LittleFS.remove(kDaisyUploadTempPath);
+    s_daisyUpload = DaisyUploadStreamState{};
+  }
+  if (s_daisyUpload.receiving || s_daisyUpload.active) {
+    return Red808Usb::ACK_BUSY;
+  }
+  if (pad >= MAX_SAMPLES || !filename || !filename[0] || totalSize == 0 ||
+      totalSize > 8U * 1024U * 1024U) {
+    return Red808Usb::ACK_INVALID;
+  }
+  String name(filename);
+  if (!name.endsWith(".wav") && !name.endsWith(".WAV")) {
+    return Red808Usb::ACK_INVALID;
+  }
+
+  if (s_daisyUploadFile) s_daisyUploadFile.close();
+  LittleFS.remove(kDaisyUploadTempPath);
+  const size_t totalBytes = LittleFS.totalBytes();
+  const size_t usedBytes = LittleFS.usedBytes();
+  const size_t freeBytes = totalBytes > usedBytes ? totalBytes - usedBytes : 0;
+  if (freeBytes < (size_t)totalSize + 8192U) return Red808Usb::ACK_WRITE_ERROR;
+
+  s_daisyUpload = DaisyUploadStreamState{};
+  s_daisyUpload.receiving = true;
+  s_daisyUpload.owner = nullptr;  // nullptr distinguishes native USB from HTTP
+  s_daisyUpload.pad = pad;
+  s_daisyUpload.totalSize = totalSize;
+  s_daisyUpload.lastProgressMs = millis();
+  strlcpy(s_daisyUpload.filename, filename, sizeof(s_daisyUpload.filename));
+  s_daisyUploadFile = LittleFS.open(kDaisyUploadTempPath, "w");
+  if (!s_daisyUploadFile) {
+    s_daisyUpload = DaisyUploadStreamState{};
+    return Red808Usb::ACK_WRITE_ERROR;
+  }
+  return Red808Usb::ACK_OK;
+}
+
+uint8_t WebInterface::writeUsbDaisyUpload(const uint8_t* data, size_t len) {
+  DaisyUploadStreamState& st = s_daisyUpload;
+  if (!st.receiving || st.owner != nullptr || !s_daisyUploadFile) {
+    return Red808Usb::ACK_INVALID;
+  }
+  if (!data || len == 0 || st.bytesWritten > st.totalSize ||
+      len > st.totalSize - st.bytesWritten) {
+    return Red808Usb::ACK_INVALID;
+  }
+  size_t written = s_daisyUploadFile.write(data, len);
+  if (written != len) {
+    daisyUploadError("Failed writing USB upload");
+    return Red808Usb::ACK_WRITE_ERROR;
+  }
+  st.bytesWritten += written;
+  st.lastProgressMs = millis();
+  return Red808Usb::ACK_OK;
+}
+
+uint8_t WebInterface::endUsbDaisyUpload() {
+  DaisyUploadStreamState& st = s_daisyUpload;
+  if (!st.receiving || st.owner != nullptr) return Red808Usb::ACK_INVALID;
+  if (s_daisyUploadFile) s_daisyUploadFile.close();
+  st.receiving = false;
+  if (st.error || st.bytesWritten == 0 || st.bytesWritten != st.totalSize) {
+    const int failedPad = st.pad;
+    LittleFS.remove(kDaisyUploadTempPath);
+    s_daisyUpload = DaisyUploadStreamState{};
+    broadcastUploadComplete(failedPad, false, "USB upload truncated");
+    return Red808Usb::ACK_WRITE_ERROR;
+  }
+  st.active = true;
+  st.startedMs = millis();
+  st.lastProgressMs = st.startedMs;
+  return Red808Usb::ACK_OK;
+}
+
+void WebInterface::abortUsbDaisyUpload() {
+  if (s_daisyUploadFile) s_daisyUploadFile.close();
+  LittleFS.remove(kDaisyUploadTempPath);
+  s_daisyUpload = DaisyUploadStreamState{};
+}
