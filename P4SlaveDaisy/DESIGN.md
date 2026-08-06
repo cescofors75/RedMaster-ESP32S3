@@ -36,27 +36,38 @@ Numbers use fixed-width containers and right alignment so telemetry updates do n
 - 24 px outer safe area; 8 px base spacing unit.
 - Header: 64 px.
 - Signal route: upper 190 px, four fixed stations joined by 2 px rails.
-- Macro field: three equal lanes separated by open space and one-pixel rules, never three floating cards.
+- Wave field: one uninterrupted 976 px source surface. The min/max envelope,
+  aperture window and Focus needle share the same coordinate system; compact
+  Character, Intensity and Material values sit above it.
 - Footer: stereo meters at left and chord identity at right.
 - Radius 12 px for state chips; macro tracks and meters use 4 px or square ends.
 
 ## Controls and State
 
-Version 1 is a trustworthy display, not a remote controller. Touch is initialized for future use but no surface pretends to edit Daisy values.
+Touch has one deliberately narrow authority: direct manipulation of Focus on
+the waveform. The gesture uses the full 118 px-high target and responds on
+press/drag; all other audio parameters remain on Daisy Pod.
 
 - `BUSCANDO`: Slate route, animated restrained scan marker.
 - `CONECTADO`: Signal route and moving packet marker.
-- `SEÑAL PERDIDA`: last values remain visible but dim; status turns Alert and names the recovery (“REVISAR USB-C”).
+- `SEÑAL PERDIDA`: last values remain visible but dim; status turns Alert and
+  names the active recovery (“RECUPERANDO USB-C”). Focus touch is disabled
+  until valid telemetry returns.
 - `CAPTURANDO`: Capture station fills from left to right.
 - `FREEZE`: Capture station locks in warm Capture color.
 - `BYPASS`: route remains visible, output segment becomes Mist and header names BYPASS.
 - `LIMIT`: only the limiter station becomes Alert; no full-screen alarm.
 
 Motion consists of one packet marker travelling through the signal path. Numeric values update without entrance animations.
+The waveform itself does not scroll or pulse: new min/max chunks replace it as
+a stable instrument surface. Touch moves the Focus needle immediately, with
+the telemetry echo confirming the final position.
 
 ## Performance Rules
 
 - UI model updates at 20 Hz; LVGL render runs at the physical 60 Hz ceiling.
+- Waveform data is reduced to 96 min/max columns on Daisy and drawn as 96
+  vertical strokes; no full audio buffer is copied to P4.
 - Dirty-region, direct-mode double buffering and VSYNC synchronization remain enabled.
 - USB parsing and UI rendering never run on Daisy and can never enter its audio callback.
 - Repeated telemetry values do not trigger unnecessary LVGL property writes.

@@ -13,6 +13,7 @@
 #include "config.h"
 
 #include <Arduino.h>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -28,14 +29,6 @@ constexpr uint32_t kMist    = 0x86A8B0;
 constexpr uint32_t kSignal  = 0x42CDBD;
 constexpr uint32_t kCapture = 0xF2A84A;
 constexpr uint32_t kAlert   = 0xEF675F;
-
-struct MacroLane
-{
-    lv_obj_t* value;
-    lv_obj_t* qualifier;
-    lv_obj_t* fill;
-    lv_coord_t track_width;
-};
 
 struct Dashboard
 {
@@ -58,9 +51,13 @@ struct Dashboard
     lv_obj_t* voices_value;
     lv_obj_t* limiter_value;
     lv_obj_t* route_message;
-    MacroLane character;
-    MacroLane intensity;
-    MacroLane focus;
+    lv_obj_t* waveform;
+    lv_obj_t* waveform_source;
+    lv_obj_t* waveform_hint;
+    lv_obj_t* character_value;
+    lv_obj_t* intensity_value;
+    lv_obj_t* focus_value;
+    lv_obj_t* material_value;
     lv_obj_t* input_fill;
     lv_obj_t* output_fill;
     lv_obj_t* input_value;
@@ -68,11 +65,51 @@ struct Dashboard
     lv_obj_t* chord_value;
     lv_obj_t* chord_index;
     lv_obj_t* diagnostics;
+    lv_obj_t* source_buttons[7];
     lv_obj_t* telemetry_objects[32];
     uint8_t   telemetry_object_count;
+    int8_t    waveform_min[raydrone_usb::kWaveformBinCount];
+    int8_t    waveform_max[raydrone_usb::kWaveformBinCount];
+    uint16_t  focus_milli;
+    uint16_t  character_milli;
+    uint16_t  waveform_revision;
+    float     source_seconds;
+    bool      waveform_valid;
+    bool      default_source;
+    bool      live_stream;
+    uint16_t  live_fill_milli;
+    uint32_t  audio_sample_rate_hz;
+    bool      touch_enabled;
+    bool      command_enabled;
 };
 
 Dashboard ui_ = {};
+std::atomic<uint16_t> pending_focus_milli_{500};
+std::atomic<bool> pending_focus_dirty_{false};
+std::atomic<uint8_t> pending_command_id_{0};
+std::atomic<uint16_t> pending_command_value_{0};
+std::atomic<bool> pending_command_dirty_{false};
+
+struct SourceAction
+{
+    raydrone_usb::CommandId id;
+    uint16_t value;
+};
+
+constexpr SourceAction kSourceActions[] = {
+    {raydrone_usb::CommandId::SetSource,
+     static_cast<uint16_t>(raydrone_usb::SourceCommand::Default)},
+    {raydrone_usb::CommandId::SetSource,
+     static_cast<uint16_t>(raydrone_usb::SourceCommand::Live)},
+    {raydrone_usb::CommandId::SetSource,
+     static_cast<uint16_t>(raydrone_usb::SourceCommand::Freeze)},
+    {raydrone_usb::CommandId::SetSource,
+     static_cast<uint16_t>(raydrone_usb::SourceCommand::Memory)},
+    {raydrone_usb::CommandId::SetSource,
+     static_cast<uint16_t>(raydrone_usb::SourceCommand::SdNext)},
+    {raydrone_usb::CommandId::SaveSampler, 3u},
+    {raydrone_usb::CommandId::SetSampleRate, 0u},
+};
 
 lv_color_t Color(uint32_t rgb)
 {
@@ -150,6 +187,40 @@ void SetNode(lv_obj_t* node, uint32_t color)
     SetBgColor(node, color);
 }
 
+void SourceButtonEvent(lv_event_t* event)
+{
+    if(lv_event_get_code(event) != LV_EVENT_CLICKED || !ui_.command_enabled)
+        return;
+
+    const size_t index = reinterpret_cast<uintptr_t>(
+        lv_event_get_user_data(event));
+    if(index >= sizeof(kSourceActions) / sizeof(kSourceActions[0]))
+        return;
+
+    const uint16_t value
+        = kSourceActions[index].id == raydrone_usb::CommandId::SetSampleRate
+              ? (ui_.audio_sample_rate_hz >= 96000u ? 48u : 96u)
+              : kSourceActions[index].value;
+    pending_command_id_.store(
+        static_cast<uint8_t>(kSourceActions[index].id),
+        std::memory_order_relaxed);
+    pending_command_value_.store(value,
+                                 std::memory_order_relaxed);
+    pending_command_dirty_.store(true, std::memory_order_release);
+}
+
+lv_obj_t* ActionButton(lv_obj_t* parent, const char* text, lv_coord_t x,
+                       lv_coord_t width, size_t index)
+{
+    lv_obj_t* button = Box(parent, x, 404, width, 28, kSlate, 7);
+    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(button, SourceButtonEvent, LV_EVENT_CLICKED,
+                        reinterpret_cast<void*>(index));
+    lv_obj_t* label = Label(button, text, 0, 0, &lv_font_montserrat_12, kPaper);
+    lv_obj_center(label);
+    return button;
+}
+
 lv_obj_t* TrackTelemetry(lv_obj_t* object)
 {
     if(ui_.telemetry_object_count
@@ -173,21 +244,6 @@ void MarkerX(void* object, int32_t value)
     lv_obj_set_x(static_cast<lv_obj_t*>(object), static_cast<lv_coord_t>(value));
 }
 
-MacroLane CreateMacroLane(lv_obj_t* parent, const char* name,
-                          lv_coord_t x, uint32_t accent)
-{
-    Label(parent, name, x, 274, &lv_font_montserrat_14, kMist);
-    MacroLane lane = {};
-    lane.value = TrackTelemetry(
-        Label(parent, "0%", x, 304, &lv_font_montserrat_40, kPaper));
-    lane.qualifier = TrackTelemetry(
-        Label(parent, "--", x + 4, 359, &lv_font_montserrat_14, kMist));
-    Box(parent, x, 397, 280, 6, kSlate, 3);
-    lane.fill = TrackTelemetry(Box(parent, x, 397, 0, 6, accent, 3));
-    lane.track_width = 280;
-    return lane;
-}
-
 const char* ChordName(uint8_t index)
 {
     static const char* const names[] = {
@@ -197,25 +253,155 @@ const char* ChordName(uint8_t index)
     return index < sizeof(names) / sizeof(names[0]) ? names[index] : "UNKNOWN";
 }
 
-const char* CharacterWord(uint16_t value)
+const char* MaterialName(uint8_t index)
 {
-    return value < 250 ? "TONAL / CERRADO"
-           : value < 600 ? "APERTURA MEDIA"
-                         : "ABIERTO / DIFUSO";
+    static const char* const names[] = {
+        "VACIO", "METAL", "MADERA", "CRISTAL", "AGUA", "PLASMA",
+    };
+    return index < sizeof(names) / sizeof(names[0]) ? names[index] : "VACIO";
 }
 
-const char* IntensityWord(uint16_t value)
+void DrawWaveform(lv_draw_ctx_t* draw_context, lv_obj_t* object)
 {
-    return value < 250 ? "BAJA DENSIDAD"
-           : value < 700 ? "NUBE ACTIVA"
-                         : "CAMPO DENSO";
+    lv_area_t area;
+    lv_obj_get_coords(object, &area);
+    const lv_coord_t left = area.x1 + 8;
+    const lv_coord_t right = area.x2 - 8;
+    const lv_coord_t top = area.y1 + 8;
+    const lv_coord_t bottom = area.y2 - 8;
+    const lv_coord_t middle = (top + bottom) / 2;
+    const lv_coord_t amplitude = (bottom - top) / 2;
+    const lv_coord_t width = right - left;
+    lv_coord_t visible_width = width;
+    if(ui_.live_stream && ui_.live_fill_milli < 1000u)
+    {
+        visible_width = static_cast<lv_coord_t>(
+            (static_cast<uint32_t>(width) * ui_.live_fill_milli) / 1000u);
+        if(visible_width < 2)
+            visible_width = 2;
+    }
+
+    const lv_coord_t focus_x = left + static_cast<lv_coord_t>(
+        (static_cast<uint32_t>(ui_.focus_milli) * visible_width) / 1000u);
+    const float character = static_cast<float>(ui_.character_milli) * 0.001f;
+    const float aperture_seconds = 0.02f + character * character * 0.60f;
+    const float aperture_fraction = ui_.source_seconds > 0.001f
+                                        ? aperture_seconds / ui_.source_seconds
+                                        : 0.02f;
+    lv_coord_t half_window = static_cast<lv_coord_t>(
+        aperture_fraction * static_cast<float>(visible_width) * 0.5f);
+    if(half_window < 5)
+        half_window = 5;
+
+    lv_area_t focus_area = {
+        static_cast<lv_coord_t>(focus_x - half_window), top,
+        static_cast<lv_coord_t>(focus_x + half_window), bottom,
+    };
+    if(focus_area.x1 < left)
+        focus_area.x1 = left;
+    if(focus_area.x2 > left + visible_width)
+        focus_area.x2 = left + visible_width;
+    lv_draw_rect_dsc_t focus_fill;
+    lv_draw_rect_dsc_init(&focus_fill);
+    focus_fill.bg_color = Color(kCapture);
+    focus_fill.bg_opa = LV_OPA_20;
+    focus_fill.radius = 4;
+    lv_draw_rect(draw_context, &focus_fill, &focus_area);
+
+    lv_draw_line_dsc_t baseline;
+    lv_draw_line_dsc_init(&baseline);
+    baseline.color = Color(kSlate);
+    baseline.width = 1;
+    lv_point_t base_start = {left, middle};
+    lv_point_t base_end = {right, middle};
+    lv_draw_line(draw_context, &baseline, &base_start, &base_end);
+
+    lv_draw_line_dsc_t wave;
+    lv_draw_line_dsc_init(&wave);
+    wave.color = Color(ui_.default_source ? kSignal : kCapture);
+    wave.width = 2;
+    wave.opa = ui_.waveform_valid ? LV_OPA_80 : LV_OPA_20;
+    for(size_t i = 0; i < raydrone_usb::kWaveformBinCount; ++i)
+    {
+        const lv_coord_t x = left + static_cast<lv_coord_t>(
+            (i * static_cast<size_t>(visible_width))
+            / (raydrone_usb::kWaveformBinCount - 1u));
+        const lv_coord_t y_min = middle - static_cast<lv_coord_t>(
+            (static_cast<int32_t>(ui_.waveform_min[i]) * amplitude) / 127);
+        const lv_coord_t y_max = middle - static_cast<lv_coord_t>(
+            (static_cast<int32_t>(ui_.waveform_max[i]) * amplitude) / 127);
+        lv_point_t p1 = {x, y_max};
+        lv_point_t p2 = {x, y_min};
+        lv_draw_line(draw_context, &wave, &p1, &p2);
+    }
+
+    if(ui_.live_stream)
+    {
+        lv_draw_line_dsc_t head;
+        lv_draw_line_dsc_init(&head);
+        head.color = Color(kSignal);
+        head.width = 2;
+        head.opa = LV_OPA_80;
+        const lv_coord_t head_x = left + visible_width;
+        lv_point_t head_top = {head_x, top};
+        lv_point_t head_bottom = {head_x, bottom};
+        lv_draw_line(draw_context, &head, &head_top, &head_bottom);
+    }
+
+    lv_draw_line_dsc_t needle;
+    lv_draw_line_dsc_init(&needle);
+    needle.color = Color(kCapture);
+    needle.width = 2;
+    lv_point_t needle_top = {focus_x, top};
+    lv_point_t needle_bottom = {focus_x, bottom};
+    lv_draw_line(draw_context, &needle, &needle_top, &needle_bottom);
+
+    lv_area_t handle = {static_cast<lv_coord_t>(focus_x - 4), top,
+                        static_cast<lv_coord_t>(focus_x + 4),
+                        static_cast<lv_coord_t>(top + 8)};
+    lv_draw_rect_dsc_t handle_style;
+    lv_draw_rect_dsc_init(&handle_style);
+    handle_style.bg_color = Color(kCapture);
+    handle_style.bg_opa = LV_OPA_COVER;
+    handle_style.radius = 4;
+    lv_draw_rect(draw_context, &handle_style, &handle);
 }
 
-const char* FocusWord(uint16_t value)
+void WaveformEvent(lv_event_t* event)
 {
-    return value < 200 ? "INICIO CAPTURA"
-           : value > 800 ? "FINAL CAPTURA"
-                         : "DENTRO CAPTURA";
+    const lv_event_code_t code = lv_event_get_code(event);
+    lv_obj_t* object = lv_event_get_target(event);
+    if(code == LV_EVENT_DRAW_MAIN)
+    {
+        DrawWaveform(lv_event_get_draw_ctx(event), object);
+        return;
+    }
+    if((code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING)
+       || !ui_.touch_enabled)
+        return;
+
+    lv_point_t point;
+    lv_indev_get_point(lv_indev_get_act(), &point);
+    lv_area_t area;
+    lv_obj_get_coords(object, &area);
+    const lv_coord_t left = area.x1 + 8;
+    const lv_coord_t full_right = area.x2 - 8;
+    lv_coord_t right = full_right;
+    if(ui_.live_stream && ui_.live_fill_milli < 1000u)
+    {
+        right = left + static_cast<lv_coord_t>(
+            (static_cast<uint32_t>(full_right - left) * ui_.live_fill_milli)
+            / 1000u);
+        if(right <= left)
+            right = left + 1;
+    }
+    lv_coord_t x = point.x < left ? left : (point.x > right ? right : point.x);
+    const uint16_t focus = static_cast<uint16_t>(
+        (static_cast<uint32_t>(x - left) * 1000u) / (right - left));
+    ui_.focus_milli = focus;
+    pending_focus_milli_.store(focus, std::memory_order_relaxed);
+    pending_focus_dirty_.store(true, std::memory_order_release);
+    lv_obj_invalidate(object);
 }
 } // namespace
 
@@ -285,11 +471,35 @@ void dashboard_create()
                               24, 205, &lv_font_montserrat_14, kMist);
 
     Box(ui_.root, 0, 246, 1024, 188, kField);
-    Box(ui_.root, 341, 270, 1, 137, kSlate);
-    Box(ui_.root, 682, 270, 1, 137, kSlate);
-    ui_.character = CreateMacroLane(ui_.root, "CHARACTER", 24, kSignal);
-    ui_.intensity = CreateMacroLane(ui_.root, "INTENSITY", 365, kCapture);
-    ui_.focus     = CreateMacroLane(ui_.root, "FOCUS", 706, kSignal);
+    Label(ui_.root, "FORMA DE ONDA", 24, 258, &lv_font_montserrat_12, kMist);
+    ui_.waveform_source = TrackTelemetry(
+        Label(ui_.root, "ESPERANDO FUENTE", 145, 257,
+              &lv_font_montserrat_14, kSignal));
+    Label(ui_.root, "MATERIAL", 370, 258, &lv_font_montserrat_12, kMist);
+    ui_.material_value = TrackTelemetry(
+        Label(ui_.root, "VACIO", 438, 257, &lv_font_montserrat_14, kPaper));
+    Label(ui_.root, "CHAR", 575, 258, &lv_font_montserrat_12, kMist);
+    ui_.character_value = TrackTelemetry(
+        Label(ui_.root, "0%", 620, 257, &lv_font_montserrat_14, kPaper));
+    Label(ui_.root, "INT", 710, 258, &lv_font_montserrat_12, kMist);
+    ui_.intensity_value = TrackTelemetry(
+        Label(ui_.root, "0%", 744, 257, &lv_font_montserrat_14, kPaper));
+    Label(ui_.root, "FOCUS", 835, 258, &lv_font_montserrat_12, kMist);
+    ui_.focus_value = TrackTelemetry(
+        Label(ui_.root, "50%", 894, 257, &lv_font_montserrat_14, kCapture));
+
+    ui_.waveform = TrackTelemetry(Box(ui_.root, 24, 282, 976, 118, kAbyss, 8));
+    lv_obj_add_flag(ui_.waveform, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(ui_.waveform, WaveformEvent, LV_EVENT_ALL, nullptr);
+    ui_.waveform_hint = Label(ui_.root, "FOCUS TACTIL", 24, 410,
+                              &lv_font_montserrat_12, kMist);
+    ui_.source_buttons[0] = ActionButton(ui_.root, "DEFAULT", 484, 78, 0);
+    ui_.source_buttons[1] = ActionButton(ui_.root, "LIVE", 568, 58, 1);
+    ui_.source_buttons[2] = ActionButton(ui_.root, "FREEZE", 632, 72, 2);
+    ui_.source_buttons[3] = ActionButton(ui_.root, "MEM", 710, 62, 3);
+    ui_.source_buttons[4] = ActionButton(ui_.root, "SD NEXT", 778, 68, 4);
+    ui_.source_buttons[5] = ActionButton(ui_.root, "SAVE", 852, 66, 5);
+    ui_.source_buttons[6] = ActionButton(ui_.root, "48K", 924, 76, 6);
 
     Label(ui_.root, "INPUT", 24, 464, &lv_font_montserrat_12, kMist);
     Box(ui_.root, 82, 470, 420, 6, kSlate, 3);
@@ -338,7 +548,7 @@ void dashboard_update(const RayDroneModel& model)
         case RayDroneLinkState::Stale:
             link_color = kAlert;
             link_text = "SENAL PERDIDA";
-            route_text = "REVISAR USB-C / ULTIMOS VALORES CONSERVADOS";
+            route_text = "RECUPERANDO USB-C / ULTIMOS VALORES CONSERVADOS";
             marker_visible = false;
             break;
     }
@@ -370,6 +580,12 @@ void dashboard_update(const RayDroneModel& model)
 
     if(!model.has_status)
     {
+        ui_.touch_enabled = false;
+        ui_.command_enabled = false;
+        for(lv_obj_t* button : ui_.source_buttons)
+            SetBgColor(button, kSlate);
+        SetText(ui_.waveform_source, "ESPERANDO FUENTE");
+        SetText(ui_.waveform_hint, "LA ONDA APARECERA AL RECIBIR RAYDRONE");
         SetText(ui_.diagnostics,
                 model.link_state == RayDroneLinkState::WaitingForTelemetry
                     ? "DISPOSITIVO USB DETECTADO / ESPERANDO RAYDRONE"
@@ -384,31 +600,118 @@ void dashboard_update(const RayDroneModel& model)
     const bool bypassed = (status.flags & raydrone_usb::Bypassed) != 0;
     const bool limiting = (status.flags & raydrone_usb::Limiting) != 0;
     const bool default_source = (status.flags & raydrone_usb::DefaultSample) != 0;
+    const bool live_stream = (status.flags & raydrone_usb::LiveStream) != 0;
+    const bool memory_source = (status.flags & raydrone_usb::MemorySample) != 0;
+    const bool sd_source = (status.flags & raydrone_usb::SdSample) != 0;
+    const bool storage_busy = (status.flags & raydrone_usb::StorageBusy) != 0;
+    const bool sd_mounted = (status.flags & raydrone_usb::SdMounted) != 0;
     const bool shimmer = (status.flags & raydrone_usb::ShimmerScene) != 0;
+    const uint8_t material = status.reserved < 6u ? status.reserved : 0u;
 
     char text[96];
-    const float seconds = status.sample_rate_hz != 0
+    const float seconds = status.source_sample_rate_hz != 0
                               ? static_cast<float>(status.recorded_samples)
-                                    / static_cast<float>(status.sample_rate_hz)
+                                    / static_cast<float>(status.source_sample_rate_hz)
                               : 0.0f;
     snprintf(text, sizeof(text), "%.1f s", static_cast<double>(seconds));
     SetText(ui_.capture_value, text);
 
-    const char* capture_state = default_source ? "DEFAULT.MP3"
-                                : captured ? "CONGELADO"
-                                : committing ? "CONFIRMANDO"
-                                : recording ? "CAPTURANDO"
-                                            : "LLENO";
-    SetText(ui_.capture_state, capture_state);
-    SetTextColor(ui_.capture_state, captured || recording ? kCapture : kMist);
-    SetNode(ui_.capture_node, captured || recording ? kCapture : kSlate);
+    bool waveform_changed = false;
+    if(model.has_waveform
+       && (ui_.waveform_revision != model.waveform_revision
+           || memcmp(ui_.waveform_min, model.waveform_min,
+                     sizeof(ui_.waveform_min)) != 0
+           || memcmp(ui_.waveform_max, model.waveform_max,
+                     sizeof(ui_.waveform_max)) != 0))
+    {
+        memcpy(ui_.waveform_min, model.waveform_min, sizeof(ui_.waveform_min));
+        memcpy(ui_.waveform_max, model.waveform_max, sizeof(ui_.waveform_max));
+        ui_.waveform_revision = model.waveform_revision;
+        waveform_changed = true;
+    }
     const uint16_t capture_milli
         = status.capacity_samples == 0
               ? 0
               : static_cast<uint16_t>((static_cast<uint64_t>(status.recorded_samples)
                                         * 1000u)
                                        / status.capacity_samples);
+    if(ui_.focus_milli != status.focus_milli
+       || ui_.character_milli != status.character_milli
+       || ui_.default_source != default_source
+       || ui_.live_stream != live_stream
+       || ui_.live_fill_milli != capture_milli
+       || fabsf(ui_.source_seconds - seconds) > 0.02f)
+        waveform_changed = true;
+    ui_.focus_milli = status.focus_milli;
+    ui_.character_milli = status.character_milli;
+    ui_.default_source = default_source;
+    ui_.live_stream = live_stream;
+    ui_.live_fill_milli = capture_milli > 1000u ? 1000u : capture_milli;
+    ui_.audio_sample_rate_hz = status.audio_sample_rate_hz;
+    ui_.source_seconds = seconds;
+    ui_.waveform_valid = model.has_waveform;
+    ui_.command_enabled = model.link_state == RayDroneLinkState::Live;
+    ui_.touch_enabled = model.link_state == RayDroneLinkState::Live
+                        && model.has_waveform
+                        && (captured || (live_stream && seconds > 0.55f));
+    if(waveform_changed)
+        lv_obj_invalidate(ui_.waveform);
+
+    const char* source_name = default_source ? "DEFAULT.MP3"
+                              : memory_source ? "MEMORIA DAISY"
+                              : sd_source ? "SAMPLER SD"
+                              : live_stream ? "LINE IN / LIVE"
+                              : captured ? "FREEZE LIVE"
+                                         : "LINE IN";
+    SetText(ui_.waveform_source, source_name);
+    SetTextColor(ui_.waveform_source, default_source ? kSignal : kCapture);
+    SetText(ui_.waveform_hint,
+            storage_busy ? "MEMORIA / SD EN PROCESO"
+            : ui_.touch_enabled ? "FOCUS TACTIL / ARRASTRA"
+            : model.link_state == RayDroneLinkState::Stale
+                ? "FOCUS BLOQUEADO / RECUPERANDO USB-C"
+            : live_stream ? "LLENANDO BUFFER LIVE"
+                          : "RECIBIENDO FORMA DE ONDA");
+    SetText(ui_.material_value, MaterialName(material));
+
+    const char* capture_state = storage_busy ? "GUARDANDO"
+                                : default_source ? "DEFAULT.MP3"
+                                : memory_source ? "FLASH"
+                                : sd_source ? "MICROSD"
+                                : live_stream ? "LIVE"
+                                : captured ? "CONGELADO"
+                                : committing ? "CONFIRMANDO"
+                                : recording ? "CAPTURANDO"
+                                            : "LISTO";
+    SetText(ui_.capture_state, capture_state);
+    SetTextColor(ui_.capture_state, captured || recording ? kCapture : kMist);
+    SetNode(ui_.capture_node, captured || recording ? kCapture : kSlate);
     SetFill(ui_.capture_fill, capture_milli, 252);
+
+    const bool active_buttons[] = {
+        default_source,
+        live_stream,
+        captured && !default_source && !memory_source && !sd_source,
+        memory_source,
+        sd_source,
+        storage_busy,
+        true,
+    };
+    for(size_t i = 0; i < sizeof(active_buttons) / sizeof(active_buttons[0]); ++i)
+    {
+        uint32_t color = active_buttons[i] ? (i == 5 ? kCapture : kSignal)
+                                           : kSlate;
+        if(i == 4 && !sd_mounted)
+            color = kField;
+        if(i == 6 && status.audio_sample_rate_hz >= 96000u)
+            color = kCapture;
+        SetBgColor(ui_.source_buttons[i], color);
+        if(ui_.command_enabled)
+            lv_obj_clear_flag(ui_.source_buttons[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_t* rate_label = lv_obj_get_child(ui_.source_buttons[6], 0);
+    SetText(rate_label,
+            status.audio_sample_rate_hz >= 96000u ? "96K ULTRA" : "48K");
 
     snprintf(text, sizeof(text), "%u VOCES", status.active_voices);
     SetText(ui_.voices_value, text);
@@ -428,19 +731,11 @@ void dashboard_update(const RayDroneModel& model)
                    : bypassed ? kMist : link_color);
 
     snprintf(text, sizeof(text), "%u%%", status.character_milli / 10u);
-    SetText(ui_.character.value, text);
-    SetText(ui_.character.qualifier, CharacterWord(status.character_milli));
-    SetFill(ui_.character.fill, status.character_milli, ui_.character.track_width);
-
+    SetText(ui_.character_value, text);
     snprintf(text, sizeof(text), "%u%%", status.intensity_milli / 10u);
-    SetText(ui_.intensity.value, text);
-    SetText(ui_.intensity.qualifier, IntensityWord(status.intensity_milli));
-    SetFill(ui_.intensity.fill, status.intensity_milli, ui_.intensity.track_width);
-
+    SetText(ui_.intensity_value, text);
     snprintf(text, sizeof(text), "%u%%", status.focus_milli / 10u);
-    SetText(ui_.focus.value, text);
-    SetText(ui_.focus.qualifier, FocusWord(status.focus_milli));
-    SetFill(ui_.focus.fill, status.focus_milli, ui_.focus.track_width);
+    SetText(ui_.focus_value, text);
 
     SetFill(ui_.input_fill, status.input_level_milli, 420);
     SetFill(ui_.output_fill, status.output_level_milli, 420);
@@ -455,29 +750,53 @@ void dashboard_update(const RayDroneModel& model)
     SetText(ui_.chord_index, text);
 
     SetText(ui_.mode_text,
-            bypassed ? "BYPASS"
-                     : shimmer ? "SHIMMER" : "DRONE");
+            storage_busy ? "STORAGE"
+            : bypassed ? "BYPASS"
+                       : shimmer ? "SHIMMER" : "DRONE");
     SetTextColor(ui_.mode_text, bypassed ? kMist : captured ? kCapture : kSignal);
 
     if(model.link_state == RayDroneLinkState::Live)
     {
-        snprintf(text, sizeof(text), "RUTA %s / %s",
-                 default_source ? "DEFAULT.MP3" : "CAPTURA LIVE",
-                 shimmer ? "SHIMMER" : "DRONE");
+        snprintf(text, sizeof(text), "RUTA %s / %s / %s",
+                 source_name,
+                 shimmer ? "SHIMMER" : "DRONE",
+                 MaterialName(material));
         SetText(ui_.route_message, text);
     }
 
     if(model.link_state == RayDroneLinkState::Live)
-        snprintf(text, sizeof(text), "%s / %s / USB 20 HZ",
-                 default_source ? "DEFAULT.MP3" : "CAPTURA LIVE",
-                 shimmer ? "SHIMMER" : "DRONE");
+        snprintf(text, sizeof(text), "%s / %s / %luK / CPU %u%% / SD %s",
+                 source_name, shimmer ? "SHIMMER" : "DRONE",
+                 static_cast<unsigned long>(status.audio_sample_rate_hz / 1000u),
+                 status.cpu_load_milli / 10u,
+                 sd_mounted ? "OK" : "NO");
     else if(model.link_state == RayDroneLinkState::Stale)
         snprintf(text, sizeof(text),
-                 "SIN DATOS %lums / PERDIDOS %lu / CRC %lu",
+                 "AUTORECUPERACION / SIN DATOS %lums / PERDIDOS %lu / CRC %lu",
                  static_cast<unsigned long>(model.telemetry_age_ms),
                  static_cast<unsigned long>(model.dropped_packets),
                  static_cast<unsigned long>(model.invalid_packets));
     else
         snprintf(text, sizeof(text), "HOST USB ACTIVO / ESPERANDO DAISY");
     SetText(ui_.diagnostics, text);
+}
+
+bool dashboard_take_focus_command(uint16_t* focus_milli)
+{
+    if(focus_milli == nullptr
+       || !pending_focus_dirty_.exchange(false, std::memory_order_acq_rel))
+        return false;
+    *focus_milli = pending_focus_milli_.load(std::memory_order_relaxed);
+    return true;
+}
+
+bool dashboard_take_command(raydrone_usb::CommandId* id, uint16_t* value)
+{
+    if(id == nullptr || value == nullptr
+       || !pending_command_dirty_.exchange(false, std::memory_order_acq_rel))
+        return false;
+    *id = static_cast<raydrone_usb::CommandId>(
+        pending_command_id_.load(std::memory_order_relaxed));
+    *value = pending_command_value_.load(std::memory_order_relaxed);
+    return true;
 }

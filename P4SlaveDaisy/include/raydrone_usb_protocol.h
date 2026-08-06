@@ -4,8 +4,9 @@
 //
 // USB CDC is a byte stream, so packets are explicitly framed and protected
 // with CRC-16/CCITT-FALSE. All multi-byte values are little endian. The
-// packet stays below one full-speed USB max packet (64 bytes), which keeps
-// the 20 Hz telemetry path cheap on both processors.
+// status/command packets stay below one full-speed USB max packet. A waveform
+// chunk occupies exactly one 64-byte packet, avoiding transport fragmentation
+// while keeping the audio callback completely outside the USB path.
 
 #include <cstddef>
 #include <cstdint>
@@ -14,19 +15,47 @@ namespace raydrone_usb
 {
 constexpr uint8_t  kMagic0          = 'R';
 constexpr uint8_t  kMagic1          = 'D';
-constexpr uint8_t  kProtocolVersion = 1;
+constexpr uint8_t  kProtocolVersion = 2;
 constexpr size_t   kHeaderSize      = 10;
 constexpr size_t   kCrcSize         = 2;
-constexpr size_t   kStatusPayloadSize = 32;
+constexpr size_t   kStatusPayloadSize = 40;
 constexpr size_t   kStatusPacketSize  = kHeaderSize + kStatusPayloadSize + kCrcSize;
+constexpr size_t   kCommandPayloadSize = 4;
+constexpr size_t   kCommandPacketSize  = kHeaderSize + kCommandPayloadSize + kCrcSize;
+constexpr size_t   kWaveformBinCount = 96;
+constexpr size_t   kWaveformBinsPerPacket = 24;
+constexpr size_t   kWaveformPayloadSize = 4 + kWaveformBinsPerPacket * 2;
+constexpr size_t   kWaveformPacketSize = kHeaderSize + kWaveformPayloadSize + kCrcSize;
 constexpr size_t   kMaxPayloadSize    = 64;
 constexpr size_t   kMaxPacketSize     = kHeaderSize + kMaxPayloadSize + kCrcSize;
+
+static_assert(kWaveformPacketSize == 64,
+              "Waveform chunks must fit one full-speed USB packet");
 
 enum class PacketType : uint8_t
 {
     Status  = 0x02,
+    Waveform = 0x03,
     Command = 0x10,
     Ack     = 0x11,
+};
+
+enum class CommandId : uint8_t
+{
+    SetFocus = 0x01,
+    Sync     = 0x02,
+    SetSource = 0x03,
+    SaveSampler = 0x04,
+    SetSampleRate = 0x05,
+};
+
+enum class SourceCommand : uint16_t
+{
+    Default = 0,
+    Live = 1,
+    Freeze = 2,
+    Memory = 3,
+    SdNext = 4,
 };
 
 enum StatusFlag : uint16_t
@@ -38,6 +67,11 @@ enum StatusFlag : uint16_t
     Limiting = 1u << 4,
     DefaultSample = 1u << 5,
     ShimmerScene = 1u << 6,
+    LiveStream = 1u << 7,
+    MemorySample = 1u << 8,
+    SdSample = 1u << 9,
+    StorageBusy = 1u << 10,
+    SdMounted = 1u << 11,
 };
 
 struct Status
@@ -55,7 +89,23 @@ struct Status
     uint16_t active_voices;
     uint8_t  chord_index;
     uint8_t  reserved;
-    uint16_t sample_rate_hz;
+    uint32_t source_sample_rate_hz;
+    uint32_t audio_sample_rate_hz;
+    uint16_t cpu_load_milli;
+};
+
+struct Command
+{
+    CommandId id;
+    uint16_t  value_milli;
+};
+
+struct WaveformChunk
+{
+    uint16_t revision;
+    uint8_t  start_bin;
+    int8_t   minimum[kWaveformBinsPerPacket];
+    int8_t   maximum[kWaveformBinsPerPacket];
 };
 
 inline void PutU16(uint8_t* dst, uint16_t value)
@@ -129,7 +179,9 @@ inline size_t EncodeStatus(const Status& status,
     PutU16(payload + 26, status.active_voices);
     payload[28] = status.chord_index;
     payload[29] = status.reserved;
-    PutU16(payload + 30, status.sample_rate_hz);
+    PutU32(payload + 30, status.source_sample_rate_hz);
+    PutU32(payload + 34, status.audio_sample_rate_hz);
+    PutU16(payload + 38, status.cpu_load_milli);
 
     PutU16(output + kHeaderSize + kStatusPayloadSize,
            Crc16(output, kHeaderSize + kStatusPayloadSize));
@@ -161,7 +213,118 @@ inline bool DecodeStatus(const uint8_t* packet, size_t length, Status& status)
     status.active_voices      = GetU16(payload + 26);
     status.chord_index        = payload[28];
     status.reserved           = payload[29];
-    status.sample_rate_hz     = GetU16(payload + 30);
+    status.source_sample_rate_hz = GetU32(payload + 30);
+    status.audio_sample_rate_hz = GetU32(payload + 34);
+    status.cpu_load_milli     = GetU16(payload + 38);
+    return true;
+}
+
+inline size_t EncodeCommand(const Command& command,
+                            uint32_t       sequence,
+                            uint8_t*       output,
+                            size_t         output_capacity)
+{
+    if(output == nullptr || output_capacity < kCommandPacketSize)
+        return 0;
+
+    output[0] = kMagic0;
+    output[1] = kMagic1;
+    output[2] = kProtocolVersion;
+    output[3] = static_cast<uint8_t>(PacketType::Command);
+    PutU16(output + 4, static_cast<uint16_t>(kCommandPayloadSize));
+    PutU32(output + 6, sequence);
+    output[kHeaderSize + 0] = static_cast<uint8_t>(command.id);
+    output[kHeaderSize + 1] = 0;
+    PutU16(output + kHeaderSize + 2, command.value_milli);
+    PutU16(output + kHeaderSize + kCommandPayloadSize,
+           Crc16(output, kHeaderSize + kCommandPayloadSize));
+    return kCommandPacketSize;
+}
+
+inline bool DecodeCommand(const uint8_t* packet, size_t length, Command& command)
+{
+    if(packet == nullptr || length != kCommandPacketSize
+       || packet[0] != kMagic0 || packet[1] != kMagic1
+       || packet[2] != kProtocolVersion
+       || packet[3] != static_cast<uint8_t>(PacketType::Command)
+       || GetU16(packet + 4) != kCommandPayloadSize
+       || GetU16(packet + kHeaderSize + kCommandPayloadSize)
+              != Crc16(packet, kHeaderSize + kCommandPayloadSize))
+        return false;
+
+    const uint8_t id = packet[kHeaderSize];
+    if(id != static_cast<uint8_t>(CommandId::SetFocus)
+       && id != static_cast<uint8_t>(CommandId::Sync)
+       && id != static_cast<uint8_t>(CommandId::SetSource)
+       && id != static_cast<uint8_t>(CommandId::SaveSampler)
+       && id != static_cast<uint8_t>(CommandId::SetSampleRate))
+        return false;
+    command.id = static_cast<CommandId>(id);
+    command.value_milli = GetU16(packet + kHeaderSize + 2);
+    return true;
+}
+
+inline size_t EncodeWaveformChunk(uint16_t      revision,
+                                  uint8_t       start_bin,
+                                  const int8_t* minimum,
+                                  const int8_t* maximum,
+                                  uint32_t      sequence,
+                                  uint8_t*      output,
+                                  size_t        output_capacity)
+{
+    if(output == nullptr || minimum == nullptr || maximum == nullptr
+       || output_capacity < kWaveformPacketSize
+       || static_cast<size_t>(start_bin) + kWaveformBinsPerPacket
+              > kWaveformBinCount)
+        return 0;
+
+    output[0] = kMagic0;
+    output[1] = kMagic1;
+    output[2] = kProtocolVersion;
+    output[3] = static_cast<uint8_t>(PacketType::Waveform);
+    PutU16(output + 4, static_cast<uint16_t>(kWaveformPayloadSize));
+    PutU32(output + 6, sequence);
+
+    uint8_t* payload = output + kHeaderSize;
+    PutU16(payload + 0, revision);
+    payload[2] = start_bin;
+    payload[3] = static_cast<uint8_t>(kWaveformBinsPerPacket);
+    for(size_t i = 0; i < kWaveformBinsPerPacket; ++i)
+    {
+        payload[4 + i * 2] = static_cast<uint8_t>(minimum[i]);
+        payload[5 + i * 2] = static_cast<uint8_t>(maximum[i]);
+    }
+
+    PutU16(output + kHeaderSize + kWaveformPayloadSize,
+           Crc16(output, kHeaderSize + kWaveformPayloadSize));
+    return kWaveformPacketSize;
+}
+
+inline bool DecodeWaveformChunk(const uint8_t* packet,
+                                size_t         length,
+                                WaveformChunk& chunk)
+{
+    if(packet == nullptr || length != kWaveformPacketSize
+       || packet[0] != kMagic0 || packet[1] != kMagic1
+       || packet[2] != kProtocolVersion
+       || packet[3] != static_cast<uint8_t>(PacketType::Waveform)
+       || GetU16(packet + 4) != kWaveformPayloadSize
+       || GetU16(packet + kHeaderSize + kWaveformPayloadSize)
+              != Crc16(packet, kHeaderSize + kWaveformPayloadSize))
+        return false;
+
+    const uint8_t* payload = packet + kHeaderSize;
+    chunk.revision  = GetU16(payload + 0);
+    chunk.start_bin = payload[2];
+    if(payload[3] != kWaveformBinsPerPacket
+       || static_cast<size_t>(chunk.start_bin) + kWaveformBinsPerPacket
+              > kWaveformBinCount)
+        return false;
+    for(size_t i = 0; i < kWaveformBinsPerPacket; ++i)
+    {
+        chunk.minimum[i] = static_cast<int8_t>(payload[4 + i * 2]);
+        chunk.maximum[i] = static_cast<int8_t>(payload[5 + i * 2]);
+    }
     return true;
 }
 

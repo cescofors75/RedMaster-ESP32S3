@@ -25,6 +25,10 @@ int usb_cdc_read(void);
 // Send a framed command to Daisy via USB CDC (reserved for future controls)
 size_t usb_cdc_write(const uint8_t* data, size_t len);
 
+// Request a non-blocking close/reopen cycle when the CDC handle remains
+// enumerated but telemetry has stopped. Safe to call from loop().
+void usb_cdc_request_reconnect(void);
+
 // Get diagnostic string for USB CDC state (for UART-DBG)
 // Returns: "init=X conn=X dev=X open=X disc=X last_err=X"
 const char* usb_cdc_status_str(void);

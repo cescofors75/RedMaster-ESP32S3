@@ -60,6 +60,13 @@ void setup()
 
 void loop()
 {
+    uint16_t focus_milli = 0;
+    if(dashboard_take_focus_command(&focus_milli))
+        link_.SetFocus(focus_milli);
+    raydrone_usb::CommandId command_id = raydrone_usb::CommandId::Sync;
+    uint16_t command_value = 0;
+    if(dashboard_take_command(&command_id, &command_value))
+        link_.RequestCommand(command_id, command_value);
     link_.Process();
 
     const uint32_t now = millis();

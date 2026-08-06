@@ -46,6 +46,9 @@ static std::atomic<int> s_dev_detect_count{0};
 static std::atomic<int> s_last_open_err{0};
 static std::atomic<int> s_last_dtr_err{0};
 static std::atomic<uint32_t> s_rx_drop_count{0};
+static std::atomic<uint32_t> s_recovery_count{0};
+static std::atomic<bool> s_reconnect_requested{false};
+static std::atomic<bool> s_disconnect_cleanup_pending{false};
 static char s_status_buf[128] = "not-init";
 
 // =============================================================================
@@ -78,16 +81,28 @@ static void on_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *user_
             snprintf(buf, sizeof(buf), "[USB-CDC] DISCONNECTED (#%d) at %lums\n",
                      disconnect_count, millis());
             P4_LOG_PRINT(buf);
-            // Acquire TX mutex to synchronize with any in-progress usb_cdc_write().
+            // Cortar primero los nuevos envios. Este callback pertenece al task
+            // interno del driver: no debe bloquear esperando al TX ni liberar un
+            // mutex que no haya adquirido (eso provocaba asserts/reinicios).
+            s_usb_connected = false;
+            s_reconnect_requested.store(false, std::memory_order_release);
+
             // IMPORTANT: Do NOT call cdc_acm_host_close() from within this callback.
             // Calling it here causes re-entry into the CDC driver (which is still
             // processing this event) and triggers an assertion/crash in the USB host
             // library. The driver auto-invalidates the handle after the callback returns.
             // usb_cdc_process() will call cdc_acm_host_open() to reconnect.
-            if (s_cdc_tx_mutex) xSemaphoreTake(s_cdc_tx_mutex, pdMS_TO_TICKS(50));
-            s_cdc_dev = NULL;
-            s_usb_connected = false;
-            if (s_cdc_tx_mutex) xSemaphoreGive(s_cdc_tx_mutex);
+            if (!s_cdc_tx_mutex) {
+                s_cdc_dev = NULL;
+            } else if (xSemaphoreTake(s_cdc_tx_mutex, 0) == pdTRUE) {
+                s_cdc_dev = NULL;
+                xSemaphoreGive(s_cdc_tx_mutex);
+            } else {
+                // El TX como maximo retiene el mutex 50 ms. loop() terminara
+                // la limpieza cuando pueda tomarlo, fuera del callback CDC.
+                s_disconnect_cleanup_pending.store(true,
+                                                    std::memory_order_release);
+            }
             }
             break;
         case CDC_ACM_HOST_ERROR:
@@ -256,7 +271,13 @@ void usb_cdc_init(void) {
 
 // Helper: finalize connection after successful open
 static void finalize_connection(const char* method, bool assert_dtr) {
-    s_usb_connected = true;
+    portENTER_CRITICAL(&s_usb_rx_mux);
+    usbRxHead = 0;
+    usbRxTail = 0;
+    portEXIT_CRITICAL(&s_usb_rx_mux);
+    if (s_tx_queue) xQueueReset(s_tx_queue);
+    s_reconnect_requested.store(false, std::memory_order_release);
+    s_disconnect_cleanup_pending.store(false, std::memory_order_release);
     int connect_count = s_connect_count.fetch_add(1, std::memory_order_relaxed) + 1;
 
     char buf[128];
@@ -288,6 +309,9 @@ static void finalize_connection(const char* method, bool assert_dtr) {
 
     // Update status buffer
     snprintf(s_status_buf, sizeof(s_status_buf), "OK via %s", method);
+    // Publicar la conexion solo cuando DTR y LineCoding han terminado. Asi el
+    // task TX nunca usa el handle mientras aun se esta configurando.
+    s_usb_connected = true;
 }
 
 // =============================================================================
@@ -295,6 +319,56 @@ static void finalize_connection(const char* method, bool assert_dtr) {
 // =============================================================================
 void usb_cdc_process(void) {
     if (!s_usb_init_ok) return;
+
+    // Final diferido de una desconexion fisica. El driver ya invalido el
+    // dispositivo; aqui solo retiramos nuestro puntero bajo el mutex.
+    if (s_disconnect_cleanup_pending.load(std::memory_order_acquire)) {
+        if (!s_cdc_tx_mutex
+            || xSemaphoreTake(s_cdc_tx_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            s_cdc_dev = NULL;
+            if (s_cdc_tx_mutex) xSemaphoreGive(s_cdc_tx_mutex);
+            s_disconnect_cleanup_pending.store(false,
+                                                std::memory_order_release);
+            portENTER_CRITICAL(&s_usb_rx_mux);
+            usbRxHead = 0;
+            usbRxTail = 0;
+            portEXIT_CRITICAL(&s_usb_rx_mux);
+            if (s_tx_queue) xQueueReset(s_tx_queue);
+        } else {
+            return;
+        }
+    }
+
+    if (s_reconnect_requested.load(std::memory_order_acquire)) {
+        cdc_acm_dev_hdl_t handle = NULL;
+        if (s_cdc_tx_mutex
+            && xSemaphoreTake(s_cdc_tx_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            handle = s_cdc_dev;
+            s_cdc_dev = NULL;
+            s_usb_connected = false;
+            xSemaphoreGive(s_cdc_tx_mutex);
+        }
+        if (handle) {
+            const uint32_t recovery
+                = s_recovery_count.fetch_add(1, std::memory_order_relaxed) + 1u;
+            P4_LOG_PRINTF("[USB-CDC] Soft recovery #%lu: closing stale CDC handle\n",
+                          (unsigned long)recovery);
+            const esp_err_t close_err = cdc_acm_host_close(handle);
+            P4_LOG_PRINTF("[USB-CDC] Soft close: 0x%x (%s)\n",
+                          close_err, esp_err_to_name(close_err));
+            portENTER_CRITICAL(&s_usb_rx_mux);
+            usbRxHead = 0;
+            usbRxTail = 0;
+            portEXIT_CRITICAL(&s_usb_rx_mux);
+            if (s_tx_queue) xQueueReset(s_tx_queue);
+            s_last_open_attempt = millis();
+            s_reconnect_requested.store(false, std::memory_order_release);
+            return;
+        }
+        if (!s_usb_connected)
+            s_reconnect_requested.store(false, std::memory_order_release);
+    }
+
     if (s_usb_connected) return;  // already connected, nothing to do
 
     unsigned long now = millis();
@@ -399,15 +473,21 @@ size_t usb_cdc_write(const uint8_t* data, size_t len) {
     return (xQueueSend(s_tx_queue, &pkt, 0) == pdTRUE) ? len : 0;
 }
 
+void usb_cdc_request_reconnect(void) {
+    if (s_usb_connected)
+        s_reconnect_requested.store(true, std::memory_order_release);
+}
+
 const char* usb_cdc_status_str(void) {
     // Update status buffer with current counters
     snprintf(s_status_buf, sizeof(s_status_buf),
-             "init=%d det=%d conn=%d/%d att=%d dtr=0x%x drop=%lu",
+             "init=%d det=%d conn=%d/%d att=%d rec=%lu dtr=0x%x drop=%lu",
              (int)s_usb_init_ok,
              s_dev_detect_count.load(std::memory_order_relaxed),
              s_connect_count.load(std::memory_order_relaxed),
              s_disconnect_count.load(std::memory_order_relaxed),
              s_open_attempts,
+             (unsigned long)s_recovery_count.load(std::memory_order_relaxed),
              s_last_dtr_err.load(std::memory_order_relaxed),
              (unsigned long)s_rx_drop_count.load(std::memory_order_relaxed));
     return s_status_buf;

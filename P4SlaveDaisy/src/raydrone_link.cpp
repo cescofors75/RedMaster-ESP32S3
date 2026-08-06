@@ -12,6 +12,12 @@ void RayDroneLink::Init()
     usb_cdc_init();
 }
 
+void RayDroneLink::SetFocus(uint16_t focus_milli)
+{
+    pending_focus_milli_ = focus_milli > 1000u ? 1000u : focus_milli;
+    focus_pending_ = true;
+}
+
 void RayDroneLink::Process()
 {
     usb_cdc_process();
@@ -29,6 +35,8 @@ void RayDroneLink::Process()
     const uint32_t now = millis();
     model_.telemetry_age_ms
         = model_.has_status ? now - last_status_ms_ : 0xffffffffu;
+    model_.waveform_age_ms
+        = model_.has_waveform ? now - last_waveform_ms_ : 0xffffffffu;
 
     if(!usb_cdc_connected())
         model_.link_state = model_.has_status ? RayDroneLinkState::Stale
@@ -39,6 +47,42 @@ void RayDroneLink::Process()
         model_.link_state = RayDroneLinkState::Stale;
     else
         model_.link_state = RayDroneLinkState::Live;
+
+    if(usb_cdc_connected() && focus_pending_
+       && static_cast<int32_t>(now - next_focus_send_ms_) >= 0)
+    {
+        if(SendCommand(raydrone_usb::CommandId::SetFocus,
+                       pending_focus_milli_))
+            focus_pending_ = false;
+        next_focus_send_ms_ = now + 30u;
+    }
+
+    if(usb_cdc_connected() && command_pending_)
+    {
+        if(SendCommand(pending_command_id_, pending_command_value_))
+            command_pending_ = false;
+    }
+
+    if(usb_cdc_connected()
+       && static_cast<int32_t>(now - next_heartbeat_ms_) >= 0)
+    {
+        SendCommand(raydrone_usb::CommandId::Sync, 0);
+        // No inundar la cola cuando Daisy esta ocupada: un heartbeat por
+        // segundo basta para pedir una respuesta inmediata.
+        next_heartbeat_ms_ = now + 1000u;
+    }
+
+    // Un pico DSP puede retrasar telemetria sin que el cable se haya perdido.
+    // Damos margen antes de cerrar el handle para no convertir una pausa breve
+    // en una carrera de close/open con el driver CDC.
+    if(usb_cdc_connected() && model_.has_status
+       && model_.telemetry_age_ms > 8000u
+       && static_cast<int32_t>(now - next_recovery_ms_) >= 0)
+    {
+        usb_cdc_request_reconnect();
+        next_recovery_ms_ = now + 10000u;
+        packet_size_ = 0;
+    }
 }
 
 void RayDroneLink::Feed(uint8_t byte)
@@ -92,6 +136,9 @@ void RayDroneLink::ConsumePacket(size_t packet_size)
 
     if(packet_[3] == static_cast<uint8_t>(raydrone_usb::PacketType::Status))
         AcceptStatus(packet_, packet_size);
+    else if(packet_[3]
+            == static_cast<uint8_t>(raydrone_usb::PacketType::Waveform))
+        AcceptWaveform(packet_, packet_size);
     packet_size_ = 0;
 }
 
@@ -117,6 +164,98 @@ void RayDroneLink::AcceptStatus(const uint8_t* packet, size_t packet_size)
     ++model_.received_packets;
     model_.has_status = true;
     last_status_ms_   = millis();
+}
+
+void RayDroneLink::AcceptWaveform(const uint8_t* packet, size_t packet_size)
+{
+    raydrone_usb::WaveformChunk chunk = {};
+    if(!raydrone_usb::DecodeWaveformChunk(packet, packet_size, chunk))
+    {
+        ++model_.invalid_packets;
+        return;
+    }
+
+    // LIVE cambia mientras llegan los cuatro chunks. Publicamos cada cuarto de
+    // onda inmediatamente: el barrido completo tarda 200 ms y una pequeña
+    // discontinuidad visual es preferible a esperar una revision estable que
+    // nunca existe en un ring continuo.
+    const bool live_stream = model_.has_status
+        && (model_.status.flags & raydrone_usb::StatusFlag::LiveStream) != 0;
+    if(live_stream)
+    {
+        for(size_t i = 0; i < raydrone_usb::kWaveformBinsPerPacket; ++i)
+        {
+            const size_t destination = chunk.start_bin + i;
+            model_.waveform_min[destination] = chunk.minimum[i];
+            model_.waveform_max[destination] = chunk.maximum[i];
+        }
+        model_.waveform_revision = chunk.revision;
+        model_.has_waveform = true;
+        last_waveform_ms_ = millis();
+        pending_wave_mask_ = 0;
+        return;
+    }
+
+    if(chunk.revision != pending_wave_revision_)
+    {
+        pending_wave_revision_ = chunk.revision;
+        pending_wave_mask_ = 0;
+    }
+    if(chunk.start_bin % raydrone_usb::kWaveformBinsPerPacket != 0u)
+    {
+        ++model_.invalid_packets;
+        return;
+    }
+    const size_t chunk_index
+        = chunk.start_bin / raydrone_usb::kWaveformBinsPerPacket;
+    constexpr size_t chunk_count = raydrone_usb::kWaveformBinCount
+                                   / raydrone_usb::kWaveformBinsPerPacket;
+    if(chunk_index >= chunk_count)
+    {
+        ++model_.invalid_packets;
+        return;
+    }
+    for(size_t i = 0; i < raydrone_usb::kWaveformBinsPerPacket; ++i)
+    {
+        const size_t destination = chunk.start_bin + i;
+        pending_wave_min_[destination] = chunk.minimum[i];
+        pending_wave_max_[destination] = chunk.maximum[i];
+    }
+    pending_wave_mask_ |= static_cast<uint8_t>(1u << chunk_index);
+
+    constexpr uint8_t complete_mask = static_cast<uint8_t>(
+        (1u << (raydrone_usb::kWaveformBinCount
+                / raydrone_usb::kWaveformBinsPerPacket))
+        - 1u);
+    if(pending_wave_mask_ == complete_mask)
+    {
+        memcpy(model_.waveform_min, pending_wave_min_, sizeof(model_.waveform_min));
+        memcpy(model_.waveform_max, pending_wave_max_, sizeof(model_.waveform_max));
+        model_.waveform_revision = pending_wave_revision_;
+        model_.has_waveform = true;
+        last_waveform_ms_ = millis();
+        pending_wave_mask_ = 0;
+    }
+}
+
+bool RayDroneLink::SendCommand(raydrone_usb::CommandId id, uint16_t value_milli)
+{
+    uint8_t packet[raydrone_usb::kCommandPacketSize];
+    const raydrone_usb::Command command = {id, value_milli};
+    const size_t packet_size = raydrone_usb::EncodeCommand(
+        command, command_sequence_ + 1u, packet, sizeof(packet));
+    if(packet_size == 0 || usb_cdc_write(packet, packet_size) != packet_size)
+        return false;
+    ++command_sequence_;
+    return true;
+}
+
+void RayDroneLink::RequestCommand(raydrone_usb::CommandId id,
+                                  uint16_t value_milli)
+{
+    pending_command_id_ = id;
+    pending_command_value_ = value_milli;
+    command_pending_ = true;
 }
 
 void RayDroneLink::Resync()

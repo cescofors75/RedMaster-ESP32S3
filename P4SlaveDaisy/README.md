@@ -6,16 +6,17 @@ JD9165BA) y GT911.
 
 El proyecto compila de forma independiente con PlatformIO. La P4 actúa como
 host USB CDC; Daisy Seed actúa como dispositivo y publica el estado del audio
-a 20 Hz. La primera versión es deliberadamente de solo lectura: el táctil está
-inicializado, pero ningún elemento finge modificar parámetros que todavía son
-autoridad de los controles físicos de Daisy Pod.
+a 20 Hz. La forma de onda central representa el sampler o el ring `LINE IN`
+continuo; tocar o arrastrar sobre ella mueve el **Focus** real de RayDrone. La
+pantalla también selecciona LIVE/Freeze, memoria persistente, samplers SD y
+los perfiles de audio **48K PERFORMANCE / 96K ULTRA**.
 
 ## Estado verificado
 
 - Build `esp32p4`: **correcto** con pioarduino/Arduino-ESP32 3.3.7 y LVGL
   8.3.11.
-- RAM interna: **30.648 bytes / 327.680 bytes (9,4 %)**.
-- Flash de aplicación: **766.996 bytes / 6.553.600 bytes (11,7 %)**.
+- RAM interna: **31.320 bytes / 327.680 bytes (9,6 %)**.
+- Flash de aplicación: **703.266 bytes / 6.553.600 bytes (10,7 %)**.
 - Driver `usb_host_cdc_acm` 2.4.0 incluido localmente para que no dependa de
   archivos ocultos de BlueSlaveP4.
 - Falta la prueba eléctrica extremo a extremo en las dos placas reales.
@@ -26,19 +27,29 @@ autoridad de los controles físicos de Daisy Pod.
 flowchart LR
     A["Audio + controles\nDaisy Pod"] --> B["RayDrone DSP\ncallback 48 samples"]
     B --> C["Mailbox sin mutex\nfuera del audio"]
-    C --> D["USB CDC device\n44 B / 20 Hz"]
-    D --> E["USB-C data cable"]
-    E --> F["ESP32-P4 host\nCRC + reconexión"]
-    F --> G["LVGL 1024x600\nSignal Spine"]
+    C --> D["USB CDC device\nestado + onda / 20 Hz"]
+    D --> E["USB-C bidireccional"]
+    E --> F["ESP32-P4 host\nCRC + autorrecuperación"]
+    F --> G["LVGL 1024x600\nonda táctil"]
+    G -->|"Focus + fuente + heartbeat"| E
+    E --> D
 ```
 
-El paquete contiene secuencia, flags, muestras grabadas/capacidad, Character,
+El paquete de estado v2 de 52 bytes contiene secuencia, flags, muestras grabadas/capacidad, Character,
 Intensity, Focus, ganancia del limitador, niveles de entrada/salida, voces,
-acorde, sample rate, fuente (`DEFAULT.MP3`/captura live) y escena
+acorde, material, sample rate de la fuente, sample rate del motor, carga CPU,
+fuente (`DEFAULT`, `LIVE`, `FREEZE`, memoria o SD) y escena
 (`DRONE`/`SHIMMER`). Tiene magic `RD`, versión, longitud y
-CRC-16/CCITT-FALSE.
+CRC-16/CCITT-FALSE. La envolvente de 96 columnas viaja como cuatro paquetes de
+64 bytes; en LIVE se actualiza un cuarto cada 50 ms y el barrido completo tarda
+unos 200 ms. Los comandos táctiles ocupan 16 bytes.
 Si USB está ocupado, Daisy descarta ese refresco visual; nunca espera desde el
 callback de audio.
+
+P4 envía `SYNC` cada segundo. Si el handle CDC sigue enumerado pero no recibe
+telemetría durante 8 s, cierra y reabre solo la función CDC; no reinicia la
+pantalla y conserva los últimos valores mientras recupera el enlace. Una pausa
+breve del DSP no dispara esa recuperación.
 
 ## Cableado USB-C
 
@@ -67,8 +78,8 @@ cd C:\Users\cesco\Documents\Arduino\XboxBLE\DaisyPod_Aurora_repo\raydrone
 .\flash.ps1
 ```
 
-El perfil `build.ps1 -Direct` es un firmware de recuperación sin USB: ya ocupa
-el 93,60 % de la flash interna y la pila CDC no cabe de forma segura.
+El perfil `build.ps1 -Direct` es un firmware de recuperación fijo a 48 kHz,
+sin USB ni storage. El selector solo existe en el firmware normal.
 
 ## Compilar y cargar P4
 
@@ -91,11 +102,22 @@ C:\Users\cesco\.platformio\penv\Scripts\platformio.exe device monitor -b 115200 
 - `USB LISTO / SIN DATOS`: Daisy aparece como `0483:5740`, pero aún no llegó
   ningún paquete válido; comprueba que has flasheado el firmware normal.
 - `CONECTADO`: ruta turquesa en movimiento y valores actualizados.
-- `SENAL PERDIDA`: el cable se retiró después de recibir datos o la telemetría
-  lleva más de 750 ms parada; los últimos valores quedan atenuados y la UI pide
-  revisar USB-C.
+- `SENAL PERDIDA`: el cable se retiró o la telemetría lleva más de 750 ms
+  parada; los últimos valores quedan atenuados y comienza la recuperación CDC.
 - `DEFAULT.MP3`, `CAPTURA LIVE`, `DRONE`, `SHIMMER`, `BYPASS` y `LIMIT` se
   muestran solo cuando Daisy publica esos estados reales.
+- La onda turquesa corresponde al sampler por defecto; la ámbar, a Line In.
+  El needle ámbar y su ventana siguen el Focus y Character reales.
+- En LIVE, la onda y el cabezal turquesa avanzan casi en tiempo real. Focus solo
+  recorre la parte válida y segura del ring de 12 segundos.
+- **DEFAULT** recupera el sampler original; **LIVE** activa la entrada continua;
+  **FREEZE** congela y guarda; **MEM** recarga la copia QSPI; **SD NEXT** avanza
+  por `RAYDRONE/*.wav`; **SAVE** vuelve a guardar el sampler actual.
+- El séptimo botón muestra `48K` en turquesa o `96K ULTRA` en ámbar. Al tocarlo
+  cambia el motor y guarda la preferencia para el próximo encendido. El pie
+  muestra también `CPU xx%`; Daisy adapta la densidad si se acerca al límite.
+- `VACIO`, `METAL`, `MADERA`, `CRISTAL`, `AGUA` y `PLASMA` muestran el material
+  elegido con el encoder de Daisy Pod.
 
 ## Estructura
 
