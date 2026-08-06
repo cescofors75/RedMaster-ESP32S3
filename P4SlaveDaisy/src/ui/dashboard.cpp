@@ -383,6 +383,8 @@ void dashboard_update(const RayDroneModel& model)
     const bool committing = (status.flags & raydrone_usb::Committing) != 0;
     const bool bypassed = (status.flags & raydrone_usb::Bypassed) != 0;
     const bool limiting = (status.flags & raydrone_usb::Limiting) != 0;
+    const bool default_source = (status.flags & raydrone_usb::DefaultSample) != 0;
+    const bool shimmer = (status.flags & raydrone_usb::ShimmerScene) != 0;
 
     char text[96];
     const float seconds = status.sample_rate_hz != 0
@@ -392,7 +394,8 @@ void dashboard_update(const RayDroneModel& model)
     snprintf(text, sizeof(text), "%.1f s", static_cast<double>(seconds));
     SetText(ui_.capture_value, text);
 
-    const char* capture_state = captured ? "CONGELADO"
+    const char* capture_state = default_source ? "DEFAULT.MP3"
+                                : captured ? "CONGELADO"
                                 : committing ? "CONFIRMANDO"
                                 : recording ? "CAPTURANDO"
                                             : "LLENO";
@@ -452,11 +455,22 @@ void dashboard_update(const RayDroneModel& model)
     SetText(ui_.chord_index, text);
 
     SetText(ui_.mode_text,
-            bypassed ? "BYPASS" : captured ? "FREEZE" : "ENTRADA ACTIVA");
+            bypassed ? "BYPASS"
+                     : shimmer ? "SHIMMER" : "DRONE");
     SetTextColor(ui_.mode_text, bypassed ? kMist : captured ? kCapture : kSignal);
 
     if(model.link_state == RayDroneLinkState::Live)
-        snprintf(text, sizeof(text), "ENLACE USB ESTABLE / TELEMETRIA 20 HZ");
+    {
+        snprintf(text, sizeof(text), "RUTA %s / %s",
+                 default_source ? "DEFAULT.MP3" : "CAPTURA LIVE",
+                 shimmer ? "SHIMMER" : "DRONE");
+        SetText(ui_.route_message, text);
+    }
+
+    if(model.link_state == RayDroneLinkState::Live)
+        snprintf(text, sizeof(text), "%s / %s / USB 20 HZ",
+                 default_source ? "DEFAULT.MP3" : "CAPTURA LIVE",
+                 shimmer ? "SHIMMER" : "DRONE");
     else if(model.link_state == RayDroneLinkState::Stale)
         snprintf(text, sizeof(text),
                  "SIN DATOS %lums / PERDIDOS %lu / CRC %lu",

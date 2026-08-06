@@ -15,7 +15,7 @@ autoridad de los controles físicos de Daisy Pod.
 - Build `esp32p4`: **correcto** con pioarduino/Arduino-ESP32 3.3.7 y LVGL
   8.3.11.
 - RAM interna: **30.648 bytes / 327.680 bytes (9,4 %)**.
-- Flash de aplicación: **766.820 bytes / 6.553.600 bytes (11,7 %)**.
+- Flash de aplicación: **766.996 bytes / 6.553.600 bytes (11,7 %)**.
 - Driver `usb_host_cdc_acm` 2.4.0 incluido localmente para que no dependa de
   archivos ocultos de BlueSlaveP4.
 - Falta la prueba eléctrica extremo a extremo en las dos placas reales.
@@ -34,7 +34,9 @@ flowchart LR
 
 El paquete contiene secuencia, flags, muestras grabadas/capacidad, Character,
 Intensity, Focus, ganancia del limitador, niveles de entrada/salida, voces,
-acorde y sample rate. Tiene magic `RD`, versión, longitud y CRC-16/CCITT-FALSE.
+acorde, sample rate, fuente (`DEFAULT.MP3`/captura live) y escena
+(`DRONE`/`SHIMMER`). Tiene magic `RD`, versión, longitud y
+CRC-16/CCITT-FALSE.
 Si USB está ocupado, Daisy descarta ese refresco visual; nunca espera desde el
 callback de audio.
 
@@ -92,8 +94,8 @@ C:\Users\cesco\.platformio\penv\Scripts\platformio.exe device monitor -b 115200 
 - `SENAL PERDIDA`: el cable se retiró después de recibir datos o la telemetría
   lleva más de 750 ms parada; los últimos valores quedan atenuados y la UI pide
   revisar USB-C.
-- `FREEZE`, `BYPASS` y `LIMIT` se muestran solo cuando Daisy publica esos
-  estados reales.
+- `DEFAULT.MP3`, `CAPTURA LIVE`, `DRONE`, `SHIMMER`, `BYPASS` y `LIMIT` se
+  muestran solo cuando Daisy publica esos estados reales.
 
 ## Estructura
 

@@ -36,6 +36,8 @@ enum StatusFlag : uint16_t
     Committing = 1u << 2,
     Bypassed = 1u << 3,
     Limiting = 1u << 4,
+    DefaultSample = 1u << 5,
+    ShimmerScene = 1u << 6,
 };
 
 struct Status
