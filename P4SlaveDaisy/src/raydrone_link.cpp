@@ -23,7 +23,8 @@ void RayDroneLink::Process()
     usb_cdc_process();
 
     // Bound each loop pass so malformed or noisy input cannot monopolize the
-    // Arduino task. At 20 Hz a valid packet is only 44 bytes.
+    // Arduino task. Status v3 (58 bytes) and waveform (64 bytes) each fit in
+    // one full-speed USB packet.
     uint16_t budget = 512;
     while(budget-- != 0 && usb_cdc_available() > 0)
     {

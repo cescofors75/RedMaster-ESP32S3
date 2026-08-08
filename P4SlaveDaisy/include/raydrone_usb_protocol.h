@@ -15,10 +15,10 @@ namespace raydrone_usb
 {
 constexpr uint8_t  kMagic0          = 'R';
 constexpr uint8_t  kMagic1          = 'D';
-constexpr uint8_t  kProtocolVersion = 2;
+constexpr uint8_t  kProtocolVersion = 3;
 constexpr size_t   kHeaderSize      = 10;
 constexpr size_t   kCrcSize         = 2;
-constexpr size_t   kStatusPayloadSize = 40;
+constexpr size_t   kStatusPayloadSize = 46;
 constexpr size_t   kStatusPacketSize  = kHeaderSize + kStatusPayloadSize + kCrcSize;
 constexpr size_t   kCommandPayloadSize = 4;
 constexpr size_t   kCommandPacketSize  = kHeaderSize + kCommandPayloadSize + kCrcSize;
@@ -47,7 +47,63 @@ enum class CommandId : uint8_t
     SetSource = 0x03,
     SaveSampler = 0x04,
     SetSampleRate = 0x05,
+    SetChord = 0x06,
+    SetRays = 0x07,
+    SetMotion = 0x08,
 };
+
+enum class MotionMode : uint8_t
+{
+    Off = 0,
+    SlowRandom,
+    SmoothRandom,
+    SampleHold,
+    Brownian,
+    Qmc,
+};
+
+enum class MotionDestination : uint8_t
+{
+    Focus = 0,
+    Spread,
+    Density,
+    Space,
+};
+
+constexpr uint8_t kMotionDepthStepMax = 31;
+constexpr uint8_t kMotionSpeedStepMax = 63;
+
+inline uint16_t PackMotion(MotionMode mode,
+                           MotionDestination destination,
+                           uint8_t depth_step,
+                           uint8_t speed_step)
+{
+    return static_cast<uint16_t>(static_cast<uint8_t>(mode) & 0x07u)
+           | static_cast<uint16_t>(
+                 (static_cast<uint8_t>(destination) & 0x03u) << 3)
+           | static_cast<uint16_t>((depth_step & 0x1fu) << 5)
+           | static_cast<uint16_t>((speed_step & 0x3fu) << 10);
+}
+
+inline MotionMode MotionModeFromPacked(uint16_t packed)
+{
+    return static_cast<MotionMode>(packed & 0x07u);
+}
+
+inline MotionDestination MotionDestinationFromPacked(uint16_t packed)
+{
+    return static_cast<MotionDestination>((packed >> 3) & 0x03u);
+}
+
+inline uint8_t MotionDepthFromPacked(uint16_t packed)
+{
+    return static_cast<uint8_t>((packed >> 5) & 0x1fu);
+}
+
+inline uint8_t MotionSpeedFromPacked(uint16_t packed)
+{
+    return static_cast<uint8_t>((packed >> 10) & 0x3fu);
+}
 
 enum class SourceCommand : uint16_t
 {
@@ -72,6 +128,9 @@ enum StatusFlag : uint16_t
     SdSample = 1u << 9,
     StorageBusy = 1u << 10,
     SdMounted = 1u << 11,
+    ChordControl = 1u << 12,
+    MotionControl = 1u << 13,
+    RaysControl = 1u << 14,
 };
 
 struct Status
@@ -92,6 +151,12 @@ struct Status
     uint32_t source_sample_rate_hz;
     uint32_t audio_sample_rate_hz;
     uint16_t cpu_load_milli;
+    uint8_t  ray_target;
+    uint8_t  motion_mode;
+    uint8_t  motion_destination;
+    uint8_t  motion_depth_step;
+    uint8_t  motion_speed_step;
+    uint8_t  reserved_v3;
 };
 
 struct Command
@@ -182,6 +247,12 @@ inline size_t EncodeStatus(const Status& status,
     PutU32(payload + 30, status.source_sample_rate_hz);
     PutU32(payload + 34, status.audio_sample_rate_hz);
     PutU16(payload + 38, status.cpu_load_milli);
+    payload[40] = status.ray_target;
+    payload[41] = status.motion_mode;
+    payload[42] = status.motion_destination;
+    payload[43] = status.motion_depth_step;
+    payload[44] = status.motion_speed_step;
+    payload[45] = status.reserved_v3;
 
     PutU16(output + kHeaderSize + kStatusPayloadSize,
            Crc16(output, kHeaderSize + kStatusPayloadSize));
@@ -216,6 +287,12 @@ inline bool DecodeStatus(const uint8_t* packet, size_t length, Status& status)
     status.source_sample_rate_hz = GetU32(payload + 30);
     status.audio_sample_rate_hz = GetU32(payload + 34);
     status.cpu_load_milli     = GetU16(payload + 38);
+    status.ray_target         = payload[40];
+    status.motion_mode        = payload[41];
+    status.motion_destination = payload[42];
+    status.motion_depth_step  = payload[43];
+    status.motion_speed_step  = payload[44];
+    status.reserved_v3        = payload[45];
     return true;
 }
 
@@ -257,7 +334,10 @@ inline bool DecodeCommand(const uint8_t* packet, size_t length, Command& command
        && id != static_cast<uint8_t>(CommandId::Sync)
        && id != static_cast<uint8_t>(CommandId::SetSource)
        && id != static_cast<uint8_t>(CommandId::SaveSampler)
-       && id != static_cast<uint8_t>(CommandId::SetSampleRate))
+       && id != static_cast<uint8_t>(CommandId::SetSampleRate)
+       && id != static_cast<uint8_t>(CommandId::SetChord)
+       && id != static_cast<uint8_t>(CommandId::SetRays)
+       && id != static_cast<uint8_t>(CommandId::SetMotion))
         return false;
     command.id = static_cast<CommandId>(id);
     command.value_milli = GetU16(packet + kHeaderSize + 2);

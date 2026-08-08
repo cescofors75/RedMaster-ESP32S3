@@ -8,15 +8,16 @@ El proyecto compila de forma independiente con PlatformIO. La P4 actúa como
 host USB CDC; Daisy Seed actúa como dispositivo y publica el estado del audio
 a 20 Hz. La forma de onda central representa el sampler o el ring `LINE IN`
 continuo; tocar o arrastrar sobre ella mueve el **Focus** real de RayDrone. La
-pantalla también selecciona LIVE/Freeze, memoria persistente, samplers SD y
-los perfiles de audio **48K PERFORMANCE / 96K ULTRA**.
+pantalla también selecciona LIVE/Freeze, memoria persistente, samplers SD, los
+diez acordes/voicings, **RAYS / MOTION** y los perfiles de audio
+**48K PERFORMANCE / 96K ULTRA**.
 
 ## Estado verificado
 
 - Build `esp32p4`: **correcto** con pioarduino/Arduino-ESP32 3.3.7 y LVGL
   8.3.11.
-- RAM interna: **31.320 bytes / 327.680 bytes (9,6 %)**.
-- Flash de aplicación: **703.266 bytes / 6.553.600 bytes (10,7 %)**.
+- RAM interna: **31.536 bytes / 327.680 bytes (9,6 %)**.
+- Flash de aplicación: **713.046 bytes / 6.553.600 bytes (10,9 %)**.
 - Driver `usb_host_cdc_acm` 2.4.0 incluido localmente para que no dependa de
   archivos ocultos de BlueSlaveP4.
 - Falta la prueba eléctrica extremo a extremo en las dos placas reales.
@@ -31,13 +32,14 @@ flowchart LR
     D --> E["USB-C bidireccional"]
     E --> F["ESP32-P4 host\nCRC + autorrecuperación"]
     F --> G["LVGL 1024x600\nonda táctil"]
-    G -->|"Focus + fuente + heartbeat"| E
+    G -->|"Focus + fuente + acorde + RAYS/MOTION + heartbeat"| E
     E --> D
 ```
 
-El paquete de estado v2 de 52 bytes contiene secuencia, flags, muestras grabadas/capacidad, Character,
+El paquete de estado v3 de 58 bytes contiene secuencia, flags, muestras grabadas/capacidad, Character,
 Intensity, Focus, ganancia del limitador, niveles de entrada/salida, voces,
-acorde, material, sample rate de la fuente, sample rate del motor, carga CPU,
+acorde, material, RAYS, modo/destino/profundidad/velocidad de MOTION,
+sample rate de la fuente, sample rate del motor, carga CPU,
 fuente (`DEFAULT`, `LIVE`, `FREEZE`, memoria o SD) y escena
 (`DRONE`/`SHIMMER`). Tiene magic `RD`, versión, longitud y
 CRC-16/CCITT-FALSE. La envolvente de 96 columnas viaja como cuatro paquetes de
@@ -89,6 +91,11 @@ C:\Users\cesco\.platformio\penv\Scripts\platformio.exe run -e esp32p4
 C:\Users\cesco\.platformio\penv\Scripts\platformio.exe run -e esp32p4 -t upload
 ```
 
+Desde VS Code, la tarea **RayDrone: Actualizar Daisy + P4** compila y flashea
+primero RayDrone en Daisy y después carga P4SlaveDaisy. Es la opción recomendada
+cuando cambia el protocolo: sigue en el terminal la indicación RESET/BOOT de
+Daisy cuando aparezca.
+
 `platformio.ini` usa `COM21`, igual que BlueSlaveP4. Cámbialo si Windows asigna
 otro puerto. Para monitor serie:
 
@@ -102,6 +109,8 @@ C:\Users\cesco\.platformio\penv\Scripts\platformio.exe device monitor -b 115200 
 - `USB LISTO / SIN DATOS`: Daisy aparece como `0483:5740`, pero aún no llegó
   ningún paquete válido; comprueba que has flasheado el firmware normal.
 - `CONECTADO`: ruta turquesa en movimiento y valores actualizados.
+- `ACTUALIZA DAISY`: la conexión funciona, pero Daisy aún ejecuta un firmware
+  anterior que no anuncia todos los controles táctiles.
 - `SENAL PERDIDA`: el cable se retiró o la telemetría lleva más de 750 ms
   parada; los últimos valores quedan atenuados y comienza la recuperación CDC.
 - `DEFAULT.MP3`, `CAPTURA LIVE`, `DRONE`, `SHIMMER`, `BYPASS` y `LIMIT` se
@@ -113,6 +122,16 @@ C:\Users\cesco\.platformio\penv\Scripts\platformio.exe device monitor -b 115200 
 - **DEFAULT** recupera el sampler original; **LIVE** activa la entrada continua;
   **FREEZE** congela y guarda; **MEM** recarga la copia QSPI; **SD NEXT** avanza
   por `RAYDRONE/*.wav`; **SAVE** vuelve a guardar el sampler actual.
+- Tocar **ACORDE** abre diez botones grandes; la selección se aplica en Daisy y
+  el bloque principal conserva siempre el voicing confirmado por telemetría.
+  El botón elegido queda ámbar mientras P4 reintenta; el panel solo se cierra
+  cuando Daisy devuelve el nuevo acorde. Si no responde, aparece
+  `SIN CONFIRMAR` y permite reintentar.
+- Tocar **CAMPO DE GRANOS** abre RAYS/MOTION. RAYS ofrece 24, 28, 32, 40 y 48
+  voces objetivo. MOTION ofrece OFF, SLOW, SMOOTH, S&H, BROWNIAN y QMC sobre
+  FOCUS, SPREAD, DENSITY o SPACE, con sliders AMOUNT/SPEED. La modulación se
+  genera una vez por bloque dentro de Daisy; P4 solo envía configuración y
+  espera la confirmación telemétrica.
 - El séptimo botón muestra `48K` en turquesa o `96K ULTRA` en ámbar. Al tocarlo
   cambia el motor y guarda la preferencia para el próximo encendido. El pie
   muestra también `CPU xx%`; Daisy adapta la densidad si se acerca al límite.

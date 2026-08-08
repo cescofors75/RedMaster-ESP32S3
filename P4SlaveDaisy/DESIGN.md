@@ -39,20 +39,25 @@ Numbers use fixed-width containers and right alignment so telemetry updates do n
 - Wave field: one uninterrupted 976 px source surface. The min/max envelope,
   aperture window and Focus needle share the same coordinate system; compact
   Character, Intensity and Material values sit above it.
-- Footer: stereo meters at left and chord identity at right.
+- Footer: stereo meters at left and a large tactile chord summary at right.
 - Radius 12 px for state chips; macro tracks and meters use 4 px or square ends.
 
 ## Controls and State
 
-Touch has one deliberately narrow authority: direct manipulation of Focus on
-the waveform. The gesture uses the full 118 px-high target and responds on
-press/drag; all other audio parameters remain on Daisy Pod.
+Touch has two deliberate modes. Focus is manipulated directly on the waveform;
+the gesture uses the full 118 px-high target and responds on press/drag.
+Discrete operations use explicit buttons. Tapping the chord summary opens a
+focused 5 × 2 selector whose ten 176 × 76 px targets show the confirmed voicing.
+Tapping the grain station opens one full-width operating plane: five RAYS
+targets, six MOTION modes, four destinations and two long touch sliders. Pending
+changes use Capture, confirmed state uses Signal and an unconfirmed command uses
+Alert. Source and sample-rate actions remain in their compact command strip.
 
 - `BUSCANDO`: Slate route, animated restrained scan marker.
 - `CONECTADO`: Signal route and moving packet marker.
 - `SEÑAL PERDIDA`: last values remain visible but dim; status turns Alert and
-  names the active recovery (“RECUPERANDO USB-C”). Focus touch is disabled
-  until valid telemetry returns.
+  names the active recovery (“RECUPERANDO USB-C”). Focus and command touch are
+  disabled until valid telemetry returns; open chord or motion selectors close.
 - `CAPTURANDO`: Capture station fills from left to right.
 - `FREEZE`: Capture station locks in warm Capture color.
 - `BYPASS`: route remains visible, output segment becomes Mist and header names BYPASS.

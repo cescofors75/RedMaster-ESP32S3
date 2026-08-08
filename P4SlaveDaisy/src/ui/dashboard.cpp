@@ -2,10 +2,10 @@
 // rechaza el mosaico de tarjetas KPI porque oculta dónde está el sonido.
 // OWN-WORLD: escenario azul-negro, riel mineral, señal turquesa, captura
 // ámbar y alerta coral; estaciones fijas, campos abiertos y números estables.
-// STORY: localizar el enlace, reconocer captura/Freeze y leer macros, acorde,
-// niveles y carga en menos de un segundo.
+// STORY: localizar el enlace, reconocer captura/Freeze y leer macros, RAYS,
+// MOTION, acorde, niveles y carga en menos de un segundo.
 // FIRST VIEWPORT: cabecera de conexión, espina de señal dominante, tres lanes
-// macro y pie con estéreo/voicing; todo cabe en 1024x600 sin navegación.
+// macro y pie con estéreo/voicing; RAYS/MOTION abre un plano operativo único.
 // FORM: estructura propia #6, staging visible-transit, seed f24ba3f3.
 
 #include "dashboard.h"
@@ -29,6 +29,12 @@ constexpr uint32_t kMist    = 0x86A8B0;
 constexpr uint32_t kSignal  = 0x42CDBD;
 constexpr uint32_t kCapture = 0xF2A84A;
 constexpr uint32_t kAlert   = 0xEF675F;
+constexpr size_t   kChordCount = 10;
+constexpr size_t   kRayChoiceCount = 5;
+constexpr size_t   kMotionModeCount = 6;
+constexpr size_t   kMotionDestinationCount = 4;
+
+constexpr uint8_t kRayChoices[kRayChoiceCount] = {24, 28, 32, 40, 48};
 
 struct Dashboard
 {
@@ -49,6 +55,8 @@ struct Dashboard
     lv_obj_t* capture_state;
     lv_obj_t* capture_fill;
     lv_obj_t* voices_value;
+    lv_obj_t* motion_touch;
+    lv_obj_t* motion_summary;
     lv_obj_t* limiter_value;
     lv_obj_t* route_message;
     lv_obj_t* waveform;
@@ -62,8 +70,24 @@ struct Dashboard
     lv_obj_t* output_fill;
     lv_obj_t* input_value;
     lv_obj_t* output_value;
+    lv_obj_t* chord_touch;
     lv_obj_t* chord_value;
     lv_obj_t* chord_index;
+    lv_obj_t* chord_hint;
+    lv_obj_t* chord_overlay;
+    lv_obj_t* chord_panel;
+    lv_obj_t* chord_panel_state;
+    lv_obj_t* chord_buttons[kChordCount];
+    lv_obj_t* motion_overlay;
+    lv_obj_t* motion_panel;
+    lv_obj_t* motion_panel_state;
+    lv_obj_t* ray_buttons[kRayChoiceCount];
+    lv_obj_t* motion_mode_buttons[kMotionModeCount];
+    lv_obj_t* motion_destination_buttons[kMotionDestinationCount];
+    lv_obj_t* motion_depth_slider;
+    lv_obj_t* motion_speed_slider;
+    lv_obj_t* motion_depth_value;
+    lv_obj_t* motion_speed_value;
     lv_obj_t* diagnostics;
     lv_obj_t* source_buttons[7];
     lv_obj_t* telemetry_objects[32];
@@ -77,10 +101,35 @@ struct Dashboard
     bool      waveform_valid;
     bool      default_source;
     bool      live_stream;
+    uint8_t   active_chord;
+    uint8_t   requested_chord;
+    uint8_t   active_ray_target;
+    uint8_t   requested_ray_target;
+    uint16_t  active_motion_packed;
+    uint16_t  requested_motion_packed;
     uint16_t  live_fill_milli;
     uint32_t  audio_sample_rate_hz;
+    uint32_t  chord_retry_ms;
+    uint32_t  chord_timeout_ms;
+    uint32_t  chord_confirm_until_ms;
+    uint32_t  rays_retry_ms;
+    uint32_t  rays_timeout_ms;
+    uint32_t  rays_confirm_until_ms;
+    uint32_t  motion_retry_ms;
+    uint32_t  motion_timeout_ms;
+    uint32_t  motion_confirm_until_ms;
     bool      touch_enabled;
     bool      command_enabled;
+    bool      chord_command_enabled;
+    bool      rays_command_enabled;
+    bool      motion_command_enabled;
+    bool      chord_pending;
+    bool      chord_failed;
+    bool      rays_pending;
+    bool      rays_failed;
+    bool      motion_pending;
+    bool      motion_failed;
+    bool      motion_dragging;
 };
 
 Dashboard ui_ = {};
@@ -89,6 +138,34 @@ std::atomic<bool> pending_focus_dirty_{false};
 std::atomic<uint8_t> pending_command_id_{0};
 std::atomic<uint16_t> pending_command_value_{0};
 std::atomic<bool> pending_command_dirty_{false};
+
+void QueueCommand(raydrone_usb::CommandId id, uint16_t value)
+{
+    pending_command_id_.store(static_cast<uint8_t>(id),
+                              std::memory_order_relaxed);
+    pending_command_value_.store(value, std::memory_order_relaxed);
+    pending_command_dirty_.store(true, std::memory_order_release);
+}
+
+void SetChordPanelVisible(bool visible)
+{
+    if(ui_.chord_overlay == nullptr)
+        return;
+    if(visible)
+        lv_obj_clear_flag(ui_.chord_overlay, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_add_flag(ui_.chord_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+void SetMotionPanelVisible(bool visible)
+{
+    if(ui_.motion_overlay == nullptr)
+        return;
+    if(visible)
+        lv_obj_clear_flag(ui_.motion_overlay, LV_OBJ_FLAG_HIDDEN);
+    else
+        lv_obj_add_flag(ui_.motion_overlay, LV_OBJ_FLAG_HIDDEN);
+}
 
 struct SourceAction
 {
@@ -187,6 +264,59 @@ void SetNode(lv_obj_t* node, uint32_t color)
     SetBgColor(node, color);
 }
 
+const char* MotionModeName(uint8_t index)
+{
+    static const char* const names[] = {
+        "OFF", "SLOW", "SMOOTH", "S&H", "BROWNIAN", "QMC",
+    };
+    return index < kMotionModeCount ? names[index] : "OFF";
+}
+
+const char* MotionDestinationName(uint8_t index)
+{
+    static const char* const names[] = {
+        "FOCUS", "SPREAD", "DENSITY", "SPACE",
+    };
+    return index < kMotionDestinationCount ? names[index] : "FOCUS";
+}
+
+void UpdateMotionValueLabels()
+{
+    char text[16];
+    const uint8_t depth = raydrone_usb::MotionDepthFromPacked(
+        ui_.requested_motion_packed);
+    const uint8_t speed = raydrone_usb::MotionSpeedFromPacked(
+        ui_.requested_motion_packed);
+    snprintf(text, sizeof(text), "%u%%",
+             static_cast<unsigned>((depth * 100u + 15u) / 31u));
+    SetText(ui_.motion_depth_value, text);
+    snprintf(text, sizeof(text), "%u%%",
+             static_cast<unsigned>((speed * 100u + 31u) / 63u));
+    SetText(ui_.motion_speed_value, text);
+}
+
+void QueueRays(uint8_t rays)
+{
+    const uint32_t now = millis();
+    ui_.requested_ray_target = rays;
+    ui_.rays_pending = true;
+    ui_.rays_failed = false;
+    ui_.rays_retry_ms = now + 250u;
+    ui_.rays_timeout_ms = now + 1800u;
+    QueueCommand(raydrone_usb::CommandId::SetRays, rays);
+}
+
+void QueueMotion()
+{
+    const uint32_t now = millis();
+    ui_.motion_pending = true;
+    ui_.motion_failed = false;
+    ui_.motion_retry_ms = now + 250u;
+    ui_.motion_timeout_ms = now + 1800u;
+    QueueCommand(raydrone_usb::CommandId::SetMotion,
+                 ui_.requested_motion_packed);
+}
+
 void SourceButtonEvent(lv_event_t* event)
 {
     if(lv_event_get_code(event) != LV_EVENT_CLICKED || !ui_.command_enabled)
@@ -201,24 +331,214 @@ void SourceButtonEvent(lv_event_t* event)
         = kSourceActions[index].id == raydrone_usb::CommandId::SetSampleRate
               ? (ui_.audio_sample_rate_hz >= 96000u ? 48u : 96u)
               : kSourceActions[index].value;
-    pending_command_id_.store(
-        static_cast<uint8_t>(kSourceActions[index].id),
-        std::memory_order_relaxed);
-    pending_command_value_.store(value,
-                                 std::memory_order_relaxed);
-    pending_command_dirty_.store(true, std::memory_order_release);
+    QueueCommand(kSourceActions[index].id, value);
+}
+
+void ChordSummaryEvent(lv_event_t* event)
+{
+    if(lv_event_get_code(event) == LV_EVENT_CLICKED
+       && ui_.chord_command_enabled)
+        SetChordPanelVisible(true);
+}
+
+void ChordCloseEvent(lv_event_t* event)
+{
+    if(lv_event_get_code(event) == LV_EVENT_CLICKED)
+        SetChordPanelVisible(false);
+}
+
+void ChordButtonEvent(lv_event_t* event)
+{
+    if(lv_event_get_code(event) != LV_EVENT_CLICKED
+       || !ui_.chord_command_enabled)
+        return;
+
+    const size_t index = reinterpret_cast<uintptr_t>(
+        lv_event_get_user_data(event));
+    if(index >= kChordCount)
+        return;
+
+    const uint32_t now = millis();
+    ui_.requested_chord = static_cast<uint8_t>(index);
+    ui_.chord_pending = true;
+    ui_.chord_failed = false;
+    ui_.chord_retry_ms = now + 250u;
+    ui_.chord_timeout_ms = now + 1800u;
+    QueueCommand(raydrone_usb::CommandId::SetChord,
+                 static_cast<uint16_t>(index));
+    SetText(ui_.chord_hint, "ENVIANDO...");
+    SetText(ui_.chord_panel_state,
+            "ENVIANDO A DAISY / ESPERANDO TELEMETRIA");
+}
+
+void MotionSummaryEvent(lv_event_t* event)
+{
+    if(lv_event_get_code(event) == LV_EVENT_CLICKED
+       && (ui_.rays_command_enabled || ui_.motion_command_enabled))
+        SetMotionPanelVisible(true);
+}
+
+void MotionCloseEvent(lv_event_t* event)
+{
+    if(lv_event_get_code(event) == LV_EVENT_CLICKED)
+        SetMotionPanelVisible(false);
+}
+
+void RayButtonEvent(lv_event_t* event)
+{
+    if(lv_event_get_code(event) != LV_EVENT_CLICKED
+       || !ui_.rays_command_enabled)
+        return;
+    const size_t index = reinterpret_cast<uintptr_t>(
+        lv_event_get_user_data(event));
+    if(index < kRayChoiceCount)
+        QueueRays(kRayChoices[index]);
+}
+
+void MotionModeEvent(lv_event_t* event)
+{
+    if(lv_event_get_code(event) != LV_EVENT_CLICKED
+       || !ui_.motion_command_enabled)
+        return;
+    const size_t index = reinterpret_cast<uintptr_t>(
+        lv_event_get_user_data(event));
+    if(index >= kMotionModeCount)
+        return;
+    ui_.requested_motion_packed = raydrone_usb::PackMotion(
+        static_cast<raydrone_usb::MotionMode>(index),
+        raydrone_usb::MotionDestinationFromPacked(ui_.requested_motion_packed),
+        raydrone_usb::MotionDepthFromPacked(ui_.requested_motion_packed),
+        raydrone_usb::MotionSpeedFromPacked(ui_.requested_motion_packed));
+    QueueMotion();
+}
+
+void MotionDestinationEvent(lv_event_t* event)
+{
+    if(lv_event_get_code(event) != LV_EVENT_CLICKED
+       || !ui_.motion_command_enabled)
+        return;
+    const size_t index = reinterpret_cast<uintptr_t>(
+        lv_event_get_user_data(event));
+    if(index >= kMotionDestinationCount)
+        return;
+    ui_.requested_motion_packed = raydrone_usb::PackMotion(
+        raydrone_usb::MotionModeFromPacked(ui_.requested_motion_packed),
+        static_cast<raydrone_usb::MotionDestination>(index),
+        raydrone_usb::MotionDepthFromPacked(ui_.requested_motion_packed),
+        raydrone_usb::MotionSpeedFromPacked(ui_.requested_motion_packed));
+    QueueMotion();
+}
+
+void MotionSliderEvent(lv_event_t* event)
+{
+    const lv_event_code_t code = lv_event_get_code(event);
+    if(code == LV_EVENT_PRESS_LOST)
+    {
+        ui_.motion_dragging = false;
+        return;
+    }
+    if(code == LV_EVENT_RELEASED)
+        ui_.motion_dragging = false;
+    if(!ui_.motion_command_enabled)
+        return;
+    if(code == LV_EVENT_PRESSED)
+    {
+        ui_.motion_dragging = true;
+        return;
+    }
+    if(code != LV_EVENT_VALUE_CHANGED && code != LV_EVENT_RELEASED)
+        return;
+    const bool speed = reinterpret_cast<uintptr_t>(
+        lv_event_get_user_data(event)) != 0u;
+    const uint8_t value = static_cast<uint8_t>(
+        lv_slider_get_value(lv_event_get_target(event)));
+    const uint8_t depth = speed
+                              ? raydrone_usb::MotionDepthFromPacked(
+                                    ui_.requested_motion_packed)
+                              : value;
+    const uint8_t speed_step = speed
+                                   ? value
+                                   : raydrone_usb::MotionSpeedFromPacked(
+                                         ui_.requested_motion_packed);
+    ui_.requested_motion_packed = raydrone_usb::PackMotion(
+        raydrone_usb::MotionModeFromPacked(ui_.requested_motion_packed),
+        raydrone_usb::MotionDestinationFromPacked(ui_.requested_motion_packed),
+        depth, speed_step);
+    UpdateMotionValueLabels();
+    if(code == LV_EVENT_RELEASED)
+    {
+        QueueMotion();
+    }
 }
 
 lv_obj_t* ActionButton(lv_obj_t* parent, const char* text, lv_coord_t x,
                        lv_coord_t width, size_t index)
 {
-    lv_obj_t* button = Box(parent, x, 404, width, 28, kSlate, 7);
+    lv_obj_t* button = Box(parent, x, 402, width, 44, kSlate, 7);
     lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(button, 2);
     lv_obj_add_event_cb(button, SourceButtonEvent, LV_EVENT_CLICKED,
                         reinterpret_cast<void*>(index));
     lv_obj_t* label = Label(button, text, 0, 0, &lv_font_montserrat_12, kPaper);
     lv_obj_center(label);
     return button;
+}
+
+lv_obj_t* ChordButton(lv_obj_t* parent, const char* text, lv_coord_t x,
+                      lv_coord_t y, size_t index)
+{
+    lv_obj_t* button = Box(parent, x, y, 176, 76, kSlate, 12);
+    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(button, Color(kCapture), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(button, ChordButtonEvent, LV_EVENT_CLICKED,
+                        reinterpret_cast<void*>(index));
+    lv_obj_t* label = Label(button, text, 8, 0, &lv_font_montserrat_14, kPaper);
+    lv_obj_set_width(label, 160);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(label);
+    return button;
+}
+
+lv_obj_t* ControlButton(lv_obj_t* parent, const char* text,
+                        lv_coord_t x, lv_coord_t y,
+                        lv_coord_t width, lv_coord_t height,
+                        lv_event_cb_t callback, size_t index)
+{
+    lv_obj_t* button = Box(parent, x, y, width, height, kSlate, 12);
+    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(button, Color(kCapture), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED,
+                        reinterpret_cast<void*>(index));
+    lv_obj_t* label = Label(button, text, 6, 0,
+                            &lv_font_montserrat_14, kPaper);
+    lv_obj_set_width(label, width - 12);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(label);
+    return button;
+}
+
+lv_obj_t* MotionSlider(lv_obj_t* parent, lv_coord_t x, bool speed)
+{
+    lv_obj_t* slider = lv_slider_create(parent);
+    MakePlain(slider);
+    lv_obj_set_pos(slider, x, 426);
+    lv_obj_set_size(slider, 430, 28);
+    lv_obj_set_ext_click_area(slider, 10);
+    lv_slider_set_range(slider, 0, speed ? 63 : 31);
+    lv_obj_set_style_bg_color(slider, Color(kSlate), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(slider, 7, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slider, Color(kSignal), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(slider, 7, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider, Color(kPaper), LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_KNOB);
+    lv_obj_set_style_width(slider, 22, LV_PART_KNOB);
+    lv_obj_set_style_height(slider, 48, LV_PART_KNOB);
+    lv_obj_set_style_radius(slider, 8, LV_PART_KNOB);
+    lv_obj_add_event_cb(slider, MotionSliderEvent, LV_EVENT_ALL,
+                        reinterpret_cast<void*>(speed ? 1u : 0u));
+    return slider;
 }
 
 lv_obj_t* TrackTelemetry(lv_obj_t* object)
@@ -251,6 +571,15 @@ const char* ChordName(uint8_t index)
         "QUINTAS", "SUS2", "PENTATONICA", "ESCALA MAYOR", "ESCALA MENOR",
     };
     return index < sizeof(names) / sizeof(names[0]) ? names[index] : "UNKNOWN";
+}
+
+const char* ChordButtonName(uint8_t index)
+{
+    static const char* const names[] = {
+        "UNISONO", "OCTAVAS", "POWER", "MAYOR", "MENOR",
+        "QUINTAS", "SUS2", "PENTATONICA", "ESCALA\nMAYOR", "ESCALA\nMENOR",
+    };
+    return index < sizeof(names) / sizeof(names[0]) ? names[index] : "";
 }
 
 const char* MaterialName(uint8_t index)
@@ -408,6 +737,10 @@ void WaveformEvent(lv_event_t* event)
 void dashboard_create()
 {
     ui_.telemetry_object_count = 0;
+    ui_.requested_ray_target = 32;
+    ui_.requested_motion_packed = raydrone_usb::PackMotion(
+        raydrone_usb::MotionMode::Off,
+        raydrone_usb::MotionDestination::Focus, 18, 12);
     ui_.root = lv_scr_act();
     lv_obj_remove_style_all(ui_.root);
     lv_obj_clear_flag(ui_.root, LV_OBJ_FLAG_SCROLLABLE);
@@ -448,9 +781,18 @@ void dashboard_create()
     ui_.capture_fill = TrackTelemetry(
         Box(ui_.root, 258, 175, 0, 7, kCapture, 3));
 
-    Label(ui_.root, "CAMPO DE GRANOS", 600, 91, &lv_font_montserrat_12, kMist);
+    ui_.motion_touch = Box(ui_.root, 574, 76, 230, 64, kField, 12);
+    lv_obj_add_flag(ui_.motion_touch, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(ui_.motion_touch, Color(kSlate), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(ui_.motion_touch, MotionSummaryEvent,
+                        LV_EVENT_CLICKED, nullptr);
+    Label(ui_.motion_touch, "CAMPO DE GRANOS", 12, 7,
+          &lv_font_montserrat_12, kMist);
+    ui_.motion_summary = Label(ui_.motion_touch, "R32 / OFF", 135, 8,
+                               &lv_font_montserrat_12, kSignal);
     ui_.voices_value = TrackTelemetry(
-        Label(ui_.root, "0 VOCES", 600, 111, &lv_font_montserrat_20, kPaper));
+        Label(ui_.motion_touch, "0 VOCES", 12, 31,
+              &lv_font_montserrat_20, kPaper));
 
     Label(ui_.root, "LIMITADOR", 842, 91, &lv_font_montserrat_12, kMist);
     ui_.limiter_value = TrackTelemetry(
@@ -512,16 +854,112 @@ void dashboard_create()
     ui_.output_value = TrackTelemetry(
         Label(ui_.root, "0%", 514, 494, &lv_font_montserrat_14, kPaper));
 
-    Box(ui_.root, 584, 456, 1, 86, kSlate);
-    Label(ui_.root, "ACORDE", 620, 459, &lv_font_montserrat_12, kMist);
+    ui_.chord_touch = Box(ui_.root, 604, 452, 396, 90, kField, 12);
+    lv_obj_add_flag(ui_.chord_touch, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(ui_.chord_touch, Color(kSlate), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(ui_.chord_touch, ChordSummaryEvent, LV_EVENT_CLICKED,
+                        nullptr);
+    Label(ui_.chord_touch, "ACORDE", 16, 9, &lv_font_montserrat_12, kMist);
+    ui_.chord_hint = Label(ui_.chord_touch, "TOCA / ELEGIR", 275, 9,
+                           &lv_font_montserrat_12, kSignal);
     ui_.chord_value = TrackTelemetry(
-        Label(ui_.root, "UNISONO", 620, 480, &lv_font_montserrat_32, kPaper));
+        Label(ui_.chord_touch, "UNISONO", 16, 38,
+              &lv_font_montserrat_22, kPaper));
     ui_.chord_index = TrackTelemetry(
-        Label(ui_.root, "01 / 10", 920, 495, &lv_font_montserrat_12, kMist));
+        Label(ui_.chord_touch, "01 / 10", 320, 55,
+              &lv_font_montserrat_12, kMist));
 
     Box(ui_.root, 24, 555, 976, 1, kSlate);
     ui_.diagnostics = Label(ui_.root, "HOST USB ACTIVO / ESPERANDO DAISY",
                             24, 568, &lv_font_montserrat_12, kMist);
+
+    ui_.chord_overlay = Box(ui_.root, 0, 0, 1024, 600, kAbyss);
+    lv_obj_set_style_bg_opa(ui_.chord_overlay, LV_OPA_90, 0);
+    lv_obj_add_flag(ui_.chord_overlay, LV_OBJ_FLAG_CLICKABLE);
+    ui_.chord_panel = Box(ui_.chord_overlay, 24, 208, 976, 300, kField, 14);
+    Label(ui_.chord_panel, "ESCOGE ACORDE", 24, 20,
+          &lv_font_montserrat_20, kPaper);
+    ui_.chord_panel_state = Label(
+        ui_.chord_panel, "CONTROL TACTIL / DAISY CONFIRMA POR USB-C", 238, 25,
+        &lv_font_montserrat_12, kMist);
+    lv_obj_t* close = Box(ui_.chord_panel, 904, 14, 48, 48, kSlate, 12);
+    lv_obj_add_flag(close, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(close, Color(kCapture), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(close, ChordCloseEvent, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* close_label = Label(close, "X", 0, 0,
+                                  &lv_font_montserrat_20, kPaper);
+    lv_obj_center(close_label);
+    for(size_t i = 0; i < kChordCount; ++i)
+    {
+        const lv_coord_t column = static_cast<lv_coord_t>(i % 5u);
+        const lv_coord_t row = static_cast<lv_coord_t>(i / 5u);
+        ui_.chord_buttons[i] = ChordButton(
+            ui_.chord_panel, ChordButtonName(static_cast<uint8_t>(i)),
+            24 + column * 188, 76 + row * 92, i);
+    }
+    SetChordPanelVisible(false);
+
+    ui_.motion_overlay = Box(ui_.root, 0, 0, 1024, 600, kAbyss);
+    lv_obj_set_style_bg_opa(ui_.motion_overlay, LV_OPA_90, 0);
+    lv_obj_add_flag(ui_.motion_overlay, LV_OBJ_FLAG_CLICKABLE);
+    ui_.motion_panel = Box(ui_.motion_overlay, 24, 60, 976, 480, kField, 14);
+    Label(ui_.motion_panel, "RAYS / MOTION", 24, 20,
+          &lv_font_montserrat_20, kPaper);
+    ui_.motion_panel_state = Label(
+        ui_.motion_panel, "DAISY GENERA EL MOVIMIENTO / USB-C SOLO CONFIGURA",
+        214, 25, &lv_font_montserrat_12, kMist);
+    lv_obj_t* motion_close = Box(ui_.motion_panel, 904, 14, 48, 48,
+                                 kSlate, 12);
+    lv_obj_add_flag(motion_close, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(motion_close, Color(kCapture), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(motion_close, MotionCloseEvent,
+                        LV_EVENT_CLICKED, nullptr);
+    lv_obj_t* motion_close_label = Label(motion_close, "X", 0, 0,
+                                         &lv_font_montserrat_20, kPaper);
+    lv_obj_center(motion_close_label);
+
+    Label(ui_.motion_panel, "RAYS", 24, 78,
+          &lv_font_montserrat_12, kMist);
+    for(size_t i = 0; i < kRayChoiceCount; ++i)
+    {
+        char rays[8];
+        snprintf(rays, sizeof(rays), "%u", kRayChoices[i]);
+        ui_.ray_buttons[i] = ControlButton(
+            ui_.motion_panel, rays, 24 + static_cast<lv_coord_t>(i) * 186,
+            102, 176, 58, RayButtonEvent, i);
+    }
+
+    Label(ui_.motion_panel, "MODO", 24, 188,
+          &lv_font_montserrat_12, kMist);
+    for(size_t i = 0; i < kMotionModeCount; ++i)
+        ui_.motion_mode_buttons[i] = ControlButton(
+            ui_.motion_panel, MotionModeName(static_cast<uint8_t>(i)),
+            24 + static_cast<lv_coord_t>(i) * 154, 212, 144, 58,
+            MotionModeEvent, i);
+
+    Label(ui_.motion_panel, "DESTINO", 24, 296,
+          &lv_font_montserrat_12, kMist);
+    for(size_t i = 0; i < kMotionDestinationCount; ++i)
+        ui_.motion_destination_buttons[i] = ControlButton(
+            ui_.motion_panel,
+            MotionDestinationName(static_cast<uint8_t>(i)),
+            24 + static_cast<lv_coord_t>(i) * 230, 320, 218, 58,
+            MotionDestinationEvent, i);
+
+    Label(ui_.motion_panel, "AMOUNT", 24, 398,
+          &lv_font_montserrat_12, kMist);
+    ui_.motion_depth_value = Label(ui_.motion_panel, "58%", 410, 398,
+                                   &lv_font_montserrat_12, kSignal);
+    Label(ui_.motion_panel, "SPEED", 500, 398,
+          &lv_font_montserrat_12, kMist);
+    ui_.motion_speed_value = Label(ui_.motion_panel, "19%", 886, 398,
+                                   &lv_font_montserrat_12, kSignal);
+    ui_.motion_depth_slider = MotionSlider(ui_.motion_panel, 24, false);
+    ui_.motion_speed_slider = MotionSlider(ui_.motion_panel, 500, true);
+    lv_slider_set_value(ui_.motion_depth_slider, 18, LV_ANIM_OFF);
+    lv_slider_set_value(ui_.motion_speed_slider, 12, LV_ANIM_OFF);
+    UpdateMotionValueLabels();
+    SetMotionPanelVisible(false);
 }
 
 void dashboard_update(const RayDroneModel& model)
@@ -582,6 +1020,35 @@ void dashboard_update(const RayDroneModel& model)
     {
         ui_.touch_enabled = false;
         ui_.command_enabled = false;
+        ui_.chord_command_enabled = false;
+        ui_.rays_command_enabled = false;
+        ui_.motion_command_enabled = false;
+        ui_.chord_pending = false;
+        ui_.chord_failed = false;
+        ui_.rays_pending = false;
+        ui_.rays_failed = false;
+        ui_.motion_pending = false;
+        ui_.motion_failed = false;
+        ui_.motion_dragging = false;
+        SetChordPanelVisible(false);
+        SetMotionPanelVisible(false);
+        SetBgColor(ui_.chord_touch, kField);
+        SetBgColor(ui_.motion_touch, kField);
+        SetText(ui_.motion_summary, "R-- / OFF");
+        SetTextColor(ui_.motion_summary, kMist);
+        SetText(ui_.chord_hint, "SIN DAISY");
+        SetTextColor(ui_.chord_hint, kMist);
+        for(lv_obj_t* button : ui_.chord_buttons)
+        {
+            SetBgColor(button, kField);
+            SetTextColor(lv_obj_get_child(button, 0), kMist);
+        }
+        for(lv_obj_t* button : ui_.ray_buttons)
+            SetBgColor(button, kField);
+        for(lv_obj_t* button : ui_.motion_mode_buttons)
+            SetBgColor(button, kField);
+        for(lv_obj_t* button : ui_.motion_destination_buttons)
+            SetBgColor(button, kField);
         for(lv_obj_t* button : ui_.source_buttons)
             SetBgColor(button, kSlate);
         SetText(ui_.waveform_source, "ESPERANDO FUENTE");
@@ -605,6 +1072,9 @@ void dashboard_update(const RayDroneModel& model)
     const bool sd_source = (status.flags & raydrone_usb::SdSample) != 0;
     const bool storage_busy = (status.flags & raydrone_usb::StorageBusy) != 0;
     const bool sd_mounted = (status.flags & raydrone_usb::SdMounted) != 0;
+    const bool chord_capable = (status.flags & raydrone_usb::ChordControl) != 0;
+    const bool rays_capable = (status.flags & raydrone_usb::RaysControl) != 0;
+    const bool motion_capable = (status.flags & raydrone_usb::MotionControl) != 0;
     const bool shimmer = (status.flags & raydrone_usb::ShimmerScene) != 0;
     const uint8_t material = status.reserved < 6u ? status.reserved : 0u;
 
@@ -651,9 +1121,273 @@ void dashboard_update(const RayDroneModel& model)
     ui_.source_seconds = seconds;
     ui_.waveform_valid = model.has_waveform;
     ui_.command_enabled = model.link_state == RayDroneLinkState::Live;
+    ui_.chord_command_enabled = ui_.command_enabled && chord_capable;
+    ui_.rays_command_enabled = ui_.command_enabled && rays_capable;
+    ui_.motion_command_enabled = ui_.command_enabled && motion_capable;
+    ui_.active_chord = status.chord_index;
+    ui_.active_ray_target = status.ray_target;
+    ui_.active_motion_packed = raydrone_usb::PackMotion(
+        static_cast<raydrone_usb::MotionMode>(status.motion_mode),
+        static_cast<raydrone_usb::MotionDestination>(status.motion_destination),
+        status.motion_depth_step, status.motion_speed_step);
     ui_.touch_enabled = model.link_state == RayDroneLinkState::Live
                         && model.has_waveform
                         && (captured || (live_stream && seconds > 0.55f));
+    const uint32_t now = millis();
+    bool command_queued = false;
+    if(!ui_.chord_command_enabled)
+    {
+        ui_.chord_pending = false;
+        ui_.chord_failed = false;
+        SetChordPanelVisible(false);
+    }
+    else if(ui_.chord_pending)
+    {
+        if(ui_.active_chord == ui_.requested_chord)
+        {
+            ui_.chord_pending = false;
+            ui_.chord_failed = false;
+            ui_.chord_confirm_until_ms = now + 700u;
+            SetChordPanelVisible(false);
+        }
+        else if(static_cast<int32_t>(now - ui_.chord_timeout_ms) >= 0)
+        {
+            ui_.chord_pending = false;
+            ui_.chord_failed = true;
+        }
+        else if(static_cast<int32_t>(now - ui_.chord_retry_ms) >= 0)
+        {
+            QueueCommand(raydrone_usb::CommandId::SetChord,
+                         ui_.requested_chord);
+            ui_.chord_retry_ms = now + 250u;
+            command_queued = true;
+        }
+    }
+
+    if(!ui_.rays_command_enabled)
+    {
+        ui_.rays_pending = false;
+        ui_.rays_failed = false;
+    }
+    else if((ui_.rays_pending || ui_.rays_failed)
+            && ui_.active_ray_target == ui_.requested_ray_target)
+    {
+        ui_.rays_pending = false;
+        ui_.rays_failed = false;
+        ui_.rays_confirm_until_ms = now + 700u;
+    }
+    else if(ui_.rays_pending)
+    {
+        if(static_cast<int32_t>(now - ui_.rays_timeout_ms) >= 0)
+        {
+            ui_.rays_pending = false;
+            ui_.rays_failed = true;
+        }
+        else if(!command_queued
+                && static_cast<int32_t>(now - ui_.rays_retry_ms) >= 0)
+        {
+            QueueCommand(raydrone_usb::CommandId::SetRays,
+                         ui_.requested_ray_target);
+            ui_.rays_retry_ms = now + 250u;
+            command_queued = true;
+        }
+    }
+
+    if(!ui_.motion_command_enabled)
+    {
+        ui_.motion_pending = false;
+        ui_.motion_failed = false;
+        ui_.motion_dragging = false;
+    }
+    else if((ui_.motion_pending || ui_.motion_failed)
+            && ui_.active_motion_packed == ui_.requested_motion_packed)
+    {
+        ui_.motion_pending = false;
+        ui_.motion_failed = false;
+        ui_.motion_confirm_until_ms = now + 700u;
+    }
+    else if(ui_.motion_pending)
+    {
+        if(static_cast<int32_t>(now - ui_.motion_timeout_ms) >= 0)
+        {
+            ui_.motion_pending = false;
+            ui_.motion_failed = true;
+        }
+        else if(!command_queued
+                && static_cast<int32_t>(now - ui_.motion_retry_ms) >= 0)
+        {
+            QueueCommand(raydrone_usb::CommandId::SetMotion,
+                         ui_.requested_motion_packed);
+            ui_.motion_retry_ms = now + 250u;
+        }
+    }
+
+    if(!ui_.rays_pending && !ui_.rays_failed)
+        ui_.requested_ray_target = ui_.active_ray_target;
+    if(!ui_.motion_pending && !ui_.motion_failed && !ui_.motion_dragging)
+    {
+        ui_.requested_motion_packed = ui_.active_motion_packed;
+        const int32_t depth = raydrone_usb::MotionDepthFromPacked(
+            ui_.requested_motion_packed);
+        const int32_t speed = raydrone_usb::MotionSpeedFromPacked(
+            ui_.requested_motion_packed);
+        if(lv_slider_get_value(ui_.motion_depth_slider) != depth)
+            lv_slider_set_value(ui_.motion_depth_slider, depth, LV_ANIM_OFF);
+        if(lv_slider_get_value(ui_.motion_speed_slider) != speed)
+            lv_slider_set_value(ui_.motion_speed_slider, speed, LV_ANIM_OFF);
+        UpdateMotionValueLabels();
+    }
+
+    const bool chord_confirmed
+        = !ui_.chord_pending && !ui_.chord_failed
+          && static_cast<int32_t>(ui_.chord_confirm_until_ms - now) > 0;
+    SetBgColor(ui_.chord_touch,
+               ui_.chord_command_enabled ? kField : kAbyss);
+    SetText(ui_.chord_hint,
+            !ui_.command_enabled ? "SIN CONEXION"
+            : !chord_capable ? "ACTUALIZA DAISY"
+            : ui_.chord_pending ? "ENVIANDO..."
+            : ui_.chord_failed ? "SIN CONFIRMAR"
+            : chord_confirmed ? "CONFIRMADO"
+                              : "TOCA / ELEGIR");
+    SetTextColor(ui_.chord_hint,
+                 ui_.chord_failed ? kAlert
+                 : ui_.chord_command_enabled ? kSignal : kMist);
+    SetText(ui_.chord_panel_state,
+            ui_.chord_pending
+                ? "ENVIANDO A DAISY / ESPERANDO TELEMETRIA"
+            : ui_.chord_failed
+                ? "DAISY NO CONFIRMO / REINTENTA"
+                : "CONTROL TACTIL / DAISY CONFIRMA POR USB-C");
+    SetTextColor(ui_.chord_panel_state,
+                 ui_.chord_failed ? kAlert : kMist);
+    for(size_t i = 0; i < kChordCount; ++i)
+    {
+        const bool active = i == ui_.active_chord;
+        const bool requested = i == ui_.requested_chord;
+        SetBgColor(ui_.chord_buttons[i],
+                   !ui_.chord_command_enabled ? kField
+                   : ui_.chord_pending && requested ? kCapture
+                   : ui_.chord_failed && requested ? kAlert
+                   : active ? kSignal : kSlate);
+        SetTextColor(lv_obj_get_child(ui_.chord_buttons[i], 0),
+                     ui_.chord_command_enabled
+                             && (active || (ui_.chord_pending && requested))
+                         ? kAbyss
+                     : ui_.chord_command_enabled ? kPaper : kMist);
+    }
+
+    if(!ui_.rays_command_enabled && !ui_.motion_command_enabled)
+        SetMotionPanelVisible(false);
+
+    const bool rays_confirmed
+        = !ui_.rays_pending && !ui_.rays_failed
+          && static_cast<int32_t>(ui_.rays_confirm_until_ms - now) > 0;
+    const bool motion_confirmed
+        = !ui_.motion_pending && !ui_.motion_failed
+          && static_cast<int32_t>(ui_.motion_confirm_until_ms - now) > 0;
+    const uint8_t shown_rays = ui_.rays_pending
+                                   ? ui_.requested_ray_target
+                                   : ui_.active_ray_target;
+    const uint16_t shown_motion = ui_.motion_pending || ui_.motion_dragging
+                                      ? ui_.requested_motion_packed
+                                      : ui_.active_motion_packed;
+    snprintf(text, sizeof(text), "R%u / %s", shown_rays,
+             MotionModeName(static_cast<uint8_t>(
+                 raydrone_usb::MotionModeFromPacked(shown_motion))));
+    SetText(ui_.motion_summary, text);
+    SetBgColor(ui_.motion_touch,
+               ui_.rays_command_enabled || ui_.motion_command_enabled
+                   ? kField : kAbyss);
+    SetTextColor(ui_.motion_summary,
+                 ui_.rays_failed || ui_.motion_failed ? kAlert
+                 : ui_.rays_pending || ui_.motion_pending || ui_.motion_dragging
+                     ? kCapture
+                 : rays_confirmed || motion_confirmed ? kPaper
+                                                      : kSignal);
+
+    SetText(ui_.motion_panel_state,
+            ui_.motion_dragging ? "AJUSTANDO MOTION / SUELTA PARA ENVIAR"
+            : ui_.rays_pending ? "ENVIANDO RAYS / ESPERANDO TELEMETRIA"
+            : ui_.motion_pending ? "ENVIANDO MOTION / ESPERANDO TELEMETRIA"
+            : ui_.rays_failed ? "RAYS SIN CONFIRMAR / TOCA PARA REINTENTAR"
+            : ui_.motion_failed ? "MOTION SIN CONFIRMAR / TOCA PARA REINTENTAR"
+            : rays_confirmed || motion_confirmed
+                ? "CONFIRMADO POR DAISY"
+                : "DAISY GENERA EL MOVIMIENTO / USB-C SOLO CONFIGURA");
+    SetTextColor(ui_.motion_panel_state,
+                 ui_.rays_failed || ui_.motion_failed ? kAlert
+                 : ui_.rays_pending || ui_.motion_pending || ui_.motion_dragging
+                     ? kCapture
+                                                          : kMist);
+
+    for(size_t i = 0; i < kRayChoiceCount; ++i)
+    {
+        const bool active = kRayChoices[i] == ui_.active_ray_target;
+        const bool requested = kRayChoices[i] == ui_.requested_ray_target;
+        SetBgColor(ui_.ray_buttons[i],
+                   !ui_.rays_command_enabled ? kField
+                   : ui_.rays_pending && requested ? kCapture
+                   : ui_.rays_failed && requested ? kAlert
+                   : active ? kSignal : kSlate);
+        SetTextColor(lv_obj_get_child(ui_.ray_buttons[i], 0),
+                     ui_.rays_command_enabled
+                             && (active || (ui_.rays_pending && requested))
+                         ? kAbyss
+                     : ui_.rays_command_enabled ? kPaper : kMist);
+    }
+
+    const uint8_t active_mode = static_cast<uint8_t>(
+        raydrone_usb::MotionModeFromPacked(ui_.active_motion_packed));
+    const uint8_t requested_mode = static_cast<uint8_t>(
+        raydrone_usb::MotionModeFromPacked(ui_.requested_motion_packed));
+    for(size_t i = 0; i < kMotionModeCount; ++i)
+    {
+        const bool active = i == active_mode;
+        const bool requested = i == requested_mode;
+        SetBgColor(ui_.motion_mode_buttons[i],
+                   !ui_.motion_command_enabled ? kField
+                   : ui_.motion_pending && requested ? kCapture
+                   : ui_.motion_failed && requested ? kAlert
+                   : active ? kSignal : kSlate);
+        SetTextColor(lv_obj_get_child(ui_.motion_mode_buttons[i], 0),
+                     ui_.motion_command_enabled
+                             && (active || (ui_.motion_pending && requested))
+                         ? kAbyss
+                     : ui_.motion_command_enabled ? kPaper : kMist);
+    }
+
+    const uint8_t active_destination = static_cast<uint8_t>(
+        raydrone_usb::MotionDestinationFromPacked(ui_.active_motion_packed));
+    const uint8_t requested_destination = static_cast<uint8_t>(
+        raydrone_usb::MotionDestinationFromPacked(
+            ui_.requested_motion_packed));
+    for(size_t i = 0; i < kMotionDestinationCount; ++i)
+    {
+        const bool active = i == active_destination;
+        const bool requested = i == requested_destination;
+        SetBgColor(ui_.motion_destination_buttons[i],
+                   !ui_.motion_command_enabled ? kField
+                   : ui_.motion_pending && requested ? kCapture
+                   : ui_.motion_failed && requested ? kAlert
+                   : active ? kSignal : kSlate);
+        SetTextColor(lv_obj_get_child(ui_.motion_destination_buttons[i], 0),
+                     ui_.motion_command_enabled
+                             && (active || (ui_.motion_pending && requested))
+                         ? kAbyss
+                     : ui_.motion_command_enabled ? kPaper : kMist);
+    }
+    const uint32_t motion_control_color
+        = !ui_.motion_command_enabled ? kMist
+          : ui_.motion_failed ? kAlert
+          : ui_.motion_pending || ui_.motion_dragging ? kCapture
+                                                     : kSignal;
+    lv_obj_set_style_bg_color(ui_.motion_depth_slider,
+        Color(motion_control_color), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(ui_.motion_speed_slider,
+        Color(motion_control_color), LV_PART_INDICATOR);
+    SetTextColor(ui_.motion_depth_value, motion_control_color);
+    SetTextColor(ui_.motion_speed_value, motion_control_color);
     if(waveform_changed)
         lv_obj_invalidate(ui_.waveform);
 
@@ -764,10 +1498,18 @@ void dashboard_update(const RayDroneModel& model)
         SetText(ui_.route_message, text);
     }
 
-    if(model.link_state == RayDroneLinkState::Live)
-        snprintf(text, sizeof(text), "%s / %s / %luK / CPU %u%% / SD %s",
+    if(model.link_state == RayDroneLinkState::Live
+       && (!chord_capable || !rays_capable || !motion_capable))
+        snprintf(text, sizeof(text),
+                 "ACTUALIZA FIRMWARE DAISY / PROTOCOLO DE CONTROL INCOMPLETO");
+    else if(model.link_state == RayDroneLinkState::Live)
+        snprintf(text, sizeof(text),
+                 "%s / %s / %luK / R%u %s>%s / CPU %u%% / SD %s",
                  source_name, shimmer ? "SHIMMER" : "DRONE",
                  static_cast<unsigned long>(status.audio_sample_rate_hz / 1000u),
+                 status.ray_target,
+                 MotionModeName(status.motion_mode),
+                 MotionDestinationName(status.motion_destination),
                  status.cpu_load_milli / 10u,
                  sd_mounted ? "OK" : "NO");
     else if(model.link_state == RayDroneLinkState::Stale)
