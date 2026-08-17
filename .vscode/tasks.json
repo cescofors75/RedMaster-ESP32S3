@@ -267,6 +267,41 @@
 			"group": "build"
 		},
 		{
+			"label": "RayDrone: Build Daisy",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/DaisyPod_Aurora_repo/raydrone/build.ps1"
+			],
+			"problemMatcher": [],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "RayDrone: Build Daisy (Clean)",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/DaisyPod_Aurora_repo/raydrone/build.ps1",
+				"-Clean"
+			],
+			"problemMatcher": [],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
 			"label": "RayDrone: Flash Daisy",
 			"type": "shell",
 			"command": "pwsh.exe",
@@ -275,6 +310,8 @@
 				"-ExecutionPolicy", "Bypass",
 				"-File", "${workspaceFolder}/DaisyPod_Aurora_repo/raydrone/flash.ps1"
 			],
+			"dependsOn": "RayDrone: Build Daisy",
+			"dependsOrder": "sequence",
 			"problemMatcher": [],
 			"group": "build",
 			"presentation": {
@@ -310,7 +347,7 @@
 				"-File", "${workspaceFolder}/.vscode/upload_device.ps1",
 				"-Device", "p4",
 				"-Target", "upload",
-				"-ProjectDir", "${workspaceFolder}/P4SlaveDaisy",
+				"-ProjectDir", "${workspaceFolder}/DaisyPod_Aurora_repo/p4",
 				"-Environment", "esp32p4"
 			],
 			"problemMatcher": [],
