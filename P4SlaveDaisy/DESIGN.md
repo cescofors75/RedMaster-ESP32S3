@@ -48,8 +48,9 @@ Touch has two deliberate modes. Focus is manipulated directly on the waveform;
 the gesture uses the full 118 px-high target and responds on press/drag.
 Discrete operations use explicit buttons. Tapping the chord summary opens a
 focused 5 × 2 selector whose ten 176 × 76 px targets show the confirmed voicing.
-Tapping the grain station opens one full-width operating plane: five RAYS
-targets, six MOTION modes, four destinations and two long touch sliders. Pending
+The persistent `RAYS / MOTION >` control in the header opens one full-width
+operating plane: five RAYS targets, six MOTION modes, four destinations and
+three touch sliders for Amount, Speed and Master Out. Pending
 changes use Capture, confirmed state uses Signal and an unconfirmed command uses
 Alert. Source and sample-rate actions remain in their compact command strip.
 

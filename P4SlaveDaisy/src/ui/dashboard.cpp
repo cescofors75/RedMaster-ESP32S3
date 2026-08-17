@@ -86,8 +86,10 @@ struct Dashboard
     lv_obj_t* motion_destination_buttons[kMotionDestinationCount];
     lv_obj_t* motion_depth_slider;
     lv_obj_t* motion_speed_slider;
+    lv_obj_t* output_gain_slider;
     lv_obj_t* motion_depth_value;
     lv_obj_t* motion_speed_value;
+    lv_obj_t* output_gain_value;
     lv_obj_t* diagnostics;
     lv_obj_t* source_buttons[7];
     lv_obj_t* telemetry_objects[32];
@@ -107,6 +109,8 @@ struct Dashboard
     uint8_t   requested_ray_target;
     uint16_t  active_motion_packed;
     uint16_t  requested_motion_packed;
+    uint16_t  active_output_gain_milli;
+    uint16_t  requested_output_gain_milli;
     uint16_t  live_fill_milli;
     uint32_t  audio_sample_rate_hz;
     uint32_t  chord_retry_ms;
@@ -118,11 +122,15 @@ struct Dashboard
     uint32_t  motion_retry_ms;
     uint32_t  motion_timeout_ms;
     uint32_t  motion_confirm_until_ms;
+    uint32_t  output_gain_retry_ms;
+    uint32_t  output_gain_timeout_ms;
+    uint32_t  output_gain_confirm_until_ms;
     bool      touch_enabled;
     bool      command_enabled;
     bool      chord_command_enabled;
     bool      rays_command_enabled;
     bool      motion_command_enabled;
+    bool      output_gain_command_enabled;
     bool      chord_pending;
     bool      chord_failed;
     bool      rays_pending;
@@ -130,6 +138,9 @@ struct Dashboard
     bool      motion_pending;
     bool      motion_failed;
     bool      motion_dragging;
+    bool      output_gain_pending;
+    bool      output_gain_failed;
+    bool      output_gain_dragging;
 };
 
 Dashboard ui_ = {};
@@ -290,9 +301,18 @@ void UpdateMotionValueLabels()
     snprintf(text, sizeof(text), "%u%%",
              static_cast<unsigned>((depth * 100u + 15u) / 31u));
     SetText(ui_.motion_depth_value, text);
-    snprintf(text, sizeof(text), "%u%%",
-             static_cast<unsigned>((speed * 100u + 31u) / 63u));
+    const float rate_hz = 0.03f + 1.97f * static_cast<float>(speed) / 63.0f;
+    snprintf(text, sizeof(text), "%.2f HZ", static_cast<double>(rate_hz));
     SetText(ui_.motion_speed_value, text);
+}
+
+void UpdateOutputGainLabel()
+{
+    char text[16];
+    snprintf(text, sizeof(text), "%u%%",
+             static_cast<unsigned>((ui_.requested_output_gain_milli + 5u)
+                                   / 10u));
+    SetText(ui_.output_gain_value, text);
 }
 
 void QueueRays(uint8_t rays)
@@ -315,6 +335,17 @@ void QueueMotion()
     ui_.motion_timeout_ms = now + 1800u;
     QueueCommand(raydrone_usb::CommandId::SetMotion,
                  ui_.requested_motion_packed);
+}
+
+void QueueOutputGain()
+{
+    const uint32_t now = millis();
+    ui_.output_gain_pending = true;
+    ui_.output_gain_failed = false;
+    ui_.output_gain_retry_ms = now + 250u;
+    ui_.output_gain_timeout_ms = now + 1800u;
+    QueueCommand(raydrone_usb::CommandId::SetOutputVolume,
+                 ui_.requested_output_gain_milli);
 }
 
 void SourceButtonEvent(lv_event_t* event)
@@ -374,7 +405,8 @@ void ChordButtonEvent(lv_event_t* event)
 void MotionSummaryEvent(lv_event_t* event)
 {
     if(lv_event_get_code(event) == LV_EVENT_CLICKED
-       && (ui_.rays_command_enabled || ui_.motion_command_enabled))
+       && (ui_.rays_command_enabled || ui_.motion_command_enabled
+           || ui_.output_gain_command_enabled))
         SetMotionPanelVisible(true);
 }
 
@@ -471,6 +503,33 @@ void MotionSliderEvent(lv_event_t* event)
     }
 }
 
+void OutputGainSliderEvent(lv_event_t* event)
+{
+    const lv_event_code_t code = lv_event_get_code(event);
+    if(code == LV_EVENT_PRESS_LOST)
+    {
+        ui_.output_gain_dragging = false;
+        return;
+    }
+    if(code == LV_EVENT_RELEASED)
+        ui_.output_gain_dragging = false;
+    if(!ui_.output_gain_command_enabled)
+        return;
+    if(code == LV_EVENT_PRESSED)
+    {
+        ui_.output_gain_dragging = true;
+        return;
+    }
+    if(code != LV_EVENT_VALUE_CHANGED && code != LV_EVENT_RELEASED)
+        return;
+
+    ui_.requested_output_gain_milli = static_cast<uint16_t>(
+        lv_slider_get_value(lv_event_get_target(event)) * 10u);
+    UpdateOutputGainLabel();
+    if(code == LV_EVENT_RELEASED)
+        QueueOutputGain();
+}
+
 lv_obj_t* ActionButton(lv_obj_t* parent, const char* text, lv_coord_t x,
                        lv_coord_t width, size_t index)
 {
@@ -517,14 +576,16 @@ lv_obj_t* ControlButton(lv_obj_t* parent, const char* text,
     return button;
 }
 
-lv_obj_t* MotionSlider(lv_obj_t* parent, lv_coord_t x, bool speed)
+lv_obj_t* PanelSlider(lv_obj_t* parent, lv_coord_t x, lv_coord_t width,
+                      int32_t maximum, lv_event_cb_t callback,
+                      uintptr_t user_data)
 {
     lv_obj_t* slider = lv_slider_create(parent);
     MakePlain(slider);
     lv_obj_set_pos(slider, x, 426);
-    lv_obj_set_size(slider, 430, 28);
+    lv_obj_set_size(slider, width, 28);
     lv_obj_set_ext_click_area(slider, 10);
-    lv_slider_set_range(slider, 0, speed ? 63 : 31);
+    lv_slider_set_range(slider, 0, maximum);
     lv_obj_set_style_bg_color(slider, Color(kSlate), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(slider, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(slider, 7, LV_PART_MAIN);
@@ -536,8 +597,8 @@ lv_obj_t* MotionSlider(lv_obj_t* parent, lv_coord_t x, bool speed)
     lv_obj_set_style_width(slider, 22, LV_PART_KNOB);
     lv_obj_set_style_height(slider, 48, LV_PART_KNOB);
     lv_obj_set_style_radius(slider, 8, LV_PART_KNOB);
-    lv_obj_add_event_cb(slider, MotionSliderEvent, LV_EVENT_ALL,
-                        reinterpret_cast<void*>(speed ? 1u : 0u));
+    lv_obj_add_event_cb(slider, callback, LV_EVENT_ALL,
+                        reinterpret_cast<void*>(user_data));
     return slider;
 }
 
@@ -741,6 +802,7 @@ void dashboard_create()
     ui_.requested_motion_packed = raydrone_usb::PackMotion(
         raydrone_usb::MotionMode::Off,
         raydrone_usb::MotionDestination::Focus, 18, 12);
+    ui_.requested_output_gain_milli = 1000;
     ui_.root = lv_scr_act();
     lv_obj_remove_style_all(ui_.root);
     lv_obj_clear_flag(ui_.root, LV_OBJ_FLAG_SCROLLABLE);
@@ -750,8 +812,20 @@ void dashboard_create()
     Label(ui_.root, "RAYDRONE", 24, 18, &lv_font_montserrat_22, kPaper);
     Label(ui_.root, "P4 VISUAL / USB-C", 182, 23,
           &lv_font_montserrat_12, kMist);
-    ui_.mode_text = Label(ui_.root, "", 648, 22,
+    ui_.mode_text = Label(ui_.root, "", 370, 22,
                           &lv_font_montserrat_14, kCapture);
+
+    ui_.motion_touch = Box(ui_.root, 474, 14, 284, 34, kSlate, 12);
+    lv_obj_add_flag(ui_.motion_touch, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(ui_.motion_touch, Color(kCapture), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(ui_.motion_touch, MotionSummaryEvent,
+                        LV_EVENT_CLICKED, nullptr);
+    Label(ui_.motion_touch, "RAYS / MOTION  >", 12, 8,
+          &lv_font_montserrat_14, kPaper);
+    ui_.motion_summary = Label(ui_.motion_touch, "R32 / OFF", 150, 8,
+                               &lv_font_montserrat_14, kSignal);
+    lv_obj_set_width(ui_.motion_summary, 122);
+    lv_obj_set_style_text_align(ui_.motion_summary, LV_TEXT_ALIGN_RIGHT, 0);
 
     ui_.link_chip = Box(ui_.root, 782, 14, 218, 34, kField, 12);
     ui_.link_dot  = Box(ui_.link_chip, 12, 12, 10, 10, kSlate, 5);
@@ -781,17 +855,10 @@ void dashboard_create()
     ui_.capture_fill = TrackTelemetry(
         Box(ui_.root, 258, 175, 0, 7, kCapture, 3));
 
-    ui_.motion_touch = Box(ui_.root, 574, 76, 230, 64, kField, 12);
-    lv_obj_add_flag(ui_.motion_touch, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(ui_.motion_touch, Color(kSlate), LV_STATE_PRESSED);
-    lv_obj_add_event_cb(ui_.motion_touch, MotionSummaryEvent,
-                        LV_EVENT_CLICKED, nullptr);
-    Label(ui_.motion_touch, "CAMPO DE GRANOS", 12, 7,
+    Label(ui_.root, "CAMPO DE GRANOS", 574, 91,
           &lv_font_montserrat_12, kMist);
-    ui_.motion_summary = Label(ui_.motion_touch, "R32 / OFF", 135, 8,
-                               &lv_font_montserrat_12, kSignal);
     ui_.voices_value = TrackTelemetry(
-        Label(ui_.motion_touch, "0 VOCES", 12, 31,
+        Label(ui_.root, "0 VOCES", 574, 111,
               &lv_font_montserrat_20, kPaper));
 
     Label(ui_.root, "LIMITADOR", 842, 91, &lv_font_montserrat_12, kMist);
@@ -948,17 +1015,27 @@ void dashboard_create()
 
     Label(ui_.motion_panel, "AMOUNT", 24, 398,
           &lv_font_montserrat_12, kMist);
-    ui_.motion_depth_value = Label(ui_.motion_panel, "58%", 410, 398,
+    ui_.motion_depth_value = Label(ui_.motion_panel, "58%", 250, 398,
                                    &lv_font_montserrat_12, kSignal);
-    Label(ui_.motion_panel, "SPEED", 500, 398,
+    Label(ui_.motion_panel, "SPEED", 345, 398,
           &lv_font_montserrat_12, kMist);
-    ui_.motion_speed_value = Label(ui_.motion_panel, "19%", 886, 398,
+    ui_.motion_speed_value = Label(ui_.motion_panel, "0.41 HZ", 565, 398,
                                    &lv_font_montserrat_12, kSignal);
-    ui_.motion_depth_slider = MotionSlider(ui_.motion_panel, 24, false);
-    ui_.motion_speed_slider = MotionSlider(ui_.motion_panel, 500, true);
+    Label(ui_.motion_panel, "MASTER OUT", 666, 398,
+          &lv_font_montserrat_12, kMist);
+    ui_.output_gain_value = Label(ui_.motion_panel, "100%", 906, 398,
+                                  &lv_font_montserrat_12, kSignal);
+    ui_.motion_depth_slider = PanelSlider(
+        ui_.motion_panel, 24, 286, 31, MotionSliderEvent, 0u);
+    ui_.motion_speed_slider = PanelSlider(
+        ui_.motion_panel, 345, 286, 63, MotionSliderEvent, 1u);
+    ui_.output_gain_slider = PanelSlider(
+        ui_.motion_panel, 666, 286, 150, OutputGainSliderEvent, 0u);
     lv_slider_set_value(ui_.motion_depth_slider, 18, LV_ANIM_OFF);
     lv_slider_set_value(ui_.motion_speed_slider, 12, LV_ANIM_OFF);
+    lv_slider_set_value(ui_.output_gain_slider, 100, LV_ANIM_OFF);
     UpdateMotionValueLabels();
+    UpdateOutputGainLabel();
     SetMotionPanelVisible(false);
 }
 
@@ -1023,6 +1100,7 @@ void dashboard_update(const RayDroneModel& model)
         ui_.chord_command_enabled = false;
         ui_.rays_command_enabled = false;
         ui_.motion_command_enabled = false;
+        ui_.output_gain_command_enabled = false;
         ui_.chord_pending = false;
         ui_.chord_failed = false;
         ui_.rays_pending = false;
@@ -1030,10 +1108,13 @@ void dashboard_update(const RayDroneModel& model)
         ui_.motion_pending = false;
         ui_.motion_failed = false;
         ui_.motion_dragging = false;
+        ui_.output_gain_pending = false;
+        ui_.output_gain_failed = false;
+        ui_.output_gain_dragging = false;
         SetChordPanelVisible(false);
         SetMotionPanelVisible(false);
         SetBgColor(ui_.chord_touch, kField);
-        SetBgColor(ui_.motion_touch, kField);
+        SetBgColor(ui_.motion_touch, kSlate);
         SetText(ui_.motion_summary, "R-- / OFF");
         SetTextColor(ui_.motion_summary, kMist);
         SetText(ui_.chord_hint, "SIN DAISY");
@@ -1049,6 +1130,9 @@ void dashboard_update(const RayDroneModel& model)
             SetBgColor(button, kField);
         for(lv_obj_t* button : ui_.motion_destination_buttons)
             SetBgColor(button, kField);
+        lv_obj_set_style_bg_color(ui_.output_gain_slider,
+                                  Color(kMist), LV_PART_INDICATOR);
+        SetTextColor(ui_.output_gain_value, kMist);
         for(lv_obj_t* button : ui_.source_buttons)
             SetBgColor(button, kSlate);
         SetText(ui_.waveform_source, "ESPERANDO FUENTE");
@@ -1075,6 +1159,8 @@ void dashboard_update(const RayDroneModel& model)
     const bool chord_capable = (status.flags & raydrone_usb::ChordControl) != 0;
     const bool rays_capable = (status.flags & raydrone_usb::RaysControl) != 0;
     const bool motion_capable = (status.flags & raydrone_usb::MotionControl) != 0;
+    const bool output_gain_capable
+        = (status.flags & raydrone_usb::OutputVolumeControl) != 0;
     const bool shimmer = (status.flags & raydrone_usb::ShimmerScene) != 0;
     const uint8_t material = status.reserved < 6u ? status.reserved : 0u;
 
@@ -1124,12 +1210,15 @@ void dashboard_update(const RayDroneModel& model)
     ui_.chord_command_enabled = ui_.command_enabled && chord_capable;
     ui_.rays_command_enabled = ui_.command_enabled && rays_capable;
     ui_.motion_command_enabled = ui_.command_enabled && motion_capable;
+    ui_.output_gain_command_enabled
+        = ui_.command_enabled && output_gain_capable;
     ui_.active_chord = status.chord_index;
     ui_.active_ray_target = status.ray_target;
     ui_.active_motion_packed = raydrone_usb::PackMotion(
         static_cast<raydrone_usb::MotionMode>(status.motion_mode),
         static_cast<raydrone_usb::MotionDestination>(status.motion_destination),
         status.motion_depth_step, status.motion_speed_step);
+    ui_.active_output_gain_milli = status.output_gain_milli;
     ui_.touch_enabled = model.link_state == RayDroneLinkState::Live
                         && model.has_waveform
                         && (captured || (live_stream && seconds > 0.55f));
@@ -1219,6 +1308,38 @@ void dashboard_update(const RayDroneModel& model)
             QueueCommand(raydrone_usb::CommandId::SetMotion,
                          ui_.requested_motion_packed);
             ui_.motion_retry_ms = now + 250u;
+            command_queued = true;
+        }
+    }
+
+    if(!ui_.output_gain_command_enabled)
+    {
+        ui_.output_gain_pending = false;
+        ui_.output_gain_failed = false;
+        ui_.output_gain_dragging = false;
+    }
+    else if((ui_.output_gain_pending || ui_.output_gain_failed)
+            && ui_.active_output_gain_milli
+                   == ui_.requested_output_gain_milli)
+    {
+        ui_.output_gain_pending = false;
+        ui_.output_gain_failed = false;
+        ui_.output_gain_confirm_until_ms = now + 700u;
+    }
+    else if(ui_.output_gain_pending)
+    {
+        if(static_cast<int32_t>(now - ui_.output_gain_timeout_ms) >= 0)
+        {
+            ui_.output_gain_pending = false;
+            ui_.output_gain_failed = true;
+        }
+        else if(!command_queued
+                && static_cast<int32_t>(now - ui_.output_gain_retry_ms) >= 0)
+        {
+            QueueCommand(raydrone_usb::CommandId::SetOutputVolume,
+                         ui_.requested_output_gain_milli);
+            ui_.output_gain_retry_ms = now + 250u;
+            command_queued = true;
         }
     }
 
@@ -1236,6 +1357,17 @@ void dashboard_update(const RayDroneModel& model)
         if(lv_slider_get_value(ui_.motion_speed_slider) != speed)
             lv_slider_set_value(ui_.motion_speed_slider, speed, LV_ANIM_OFF);
         UpdateMotionValueLabels();
+    }
+    if(!ui_.output_gain_pending && !ui_.output_gain_failed
+       && !ui_.output_gain_dragging)
+    {
+        ui_.requested_output_gain_milli = ui_.active_output_gain_milli;
+        const int32_t gain_percent = static_cast<int32_t>(
+            (ui_.requested_output_gain_milli + 5u) / 10u);
+        if(lv_slider_get_value(ui_.output_gain_slider) != gain_percent)
+            lv_slider_set_value(ui_.output_gain_slider, gain_percent,
+                                LV_ANIM_OFF);
+        UpdateOutputGainLabel();
     }
 
     const bool chord_confirmed
@@ -1277,7 +1409,8 @@ void dashboard_update(const RayDroneModel& model)
                      : ui_.chord_command_enabled ? kPaper : kMist);
     }
 
-    if(!ui_.rays_command_enabled && !ui_.motion_command_enabled)
+    if(!ui_.rays_command_enabled && !ui_.motion_command_enabled
+       && !ui_.output_gain_command_enabled)
         SetMotionPanelVisible(false);
 
     const bool rays_confirmed
@@ -1286,6 +1419,9 @@ void dashboard_update(const RayDroneModel& model)
     const bool motion_confirmed
         = !ui_.motion_pending && !ui_.motion_failed
           && static_cast<int32_t>(ui_.motion_confirm_until_ms - now) > 0;
+    const bool output_gain_confirmed
+        = !ui_.output_gain_pending && !ui_.output_gain_failed
+          && static_cast<int32_t>(ui_.output_gain_confirm_until_ms - now) > 0;
     const uint8_t shown_rays = ui_.rays_pending
                                    ? ui_.requested_ray_target
                                    : ui_.active_ray_target;
@@ -1298,7 +1434,8 @@ void dashboard_update(const RayDroneModel& model)
     SetText(ui_.motion_summary, text);
     SetBgColor(ui_.motion_touch,
                ui_.rays_command_enabled || ui_.motion_command_enabled
-                   ? kField : kAbyss);
+                       || ui_.output_gain_command_enabled
+                   ? kSlate : kField);
     SetTextColor(ui_.motion_summary,
                  ui_.rays_failed || ui_.motion_failed ? kAlert
                  : ui_.rays_pending || ui_.motion_pending || ui_.motion_dragging
@@ -1307,17 +1444,22 @@ void dashboard_update(const RayDroneModel& model)
                                                       : kSignal);
 
     SetText(ui_.motion_panel_state,
-            ui_.motion_dragging ? "AJUSTANDO MOTION / SUELTA PARA ENVIAR"
+            ui_.output_gain_dragging ? "AJUSTANDO MASTER OUT / SUELTA PARA ENVIAR"
+            : ui_.motion_dragging ? "AJUSTANDO MOTION / SUELTA PARA ENVIAR"
             : ui_.rays_pending ? "ENVIANDO RAYS / ESPERANDO TELEMETRIA"
             : ui_.motion_pending ? "ENVIANDO MOTION / ESPERANDO TELEMETRIA"
+            : ui_.output_gain_pending ? "ENVIANDO VOLUMEN / ESPERANDO TELEMETRIA"
             : ui_.rays_failed ? "RAYS SIN CONFIRMAR / TOCA PARA REINTENTAR"
             : ui_.motion_failed ? "MOTION SIN CONFIRMAR / TOCA PARA REINTENTAR"
-            : rays_confirmed || motion_confirmed
+            : ui_.output_gain_failed ? "VOLUMEN SIN CONFIRMAR / REINTENTA"
+            : rays_confirmed || motion_confirmed || output_gain_confirmed
                 ? "CONFIRMADO POR DAISY"
                 : "DAISY GENERA EL MOVIMIENTO / USB-C SOLO CONFIGURA");
     SetTextColor(ui_.motion_panel_state,
-                 ui_.rays_failed || ui_.motion_failed ? kAlert
+                 ui_.rays_failed || ui_.motion_failed || ui_.output_gain_failed
+                     ? kAlert
                  : ui_.rays_pending || ui_.motion_pending || ui_.motion_dragging
+                       || ui_.output_gain_pending || ui_.output_gain_dragging
                      ? kCapture
                                                           : kMist);
 
@@ -1388,6 +1530,14 @@ void dashboard_update(const RayDroneModel& model)
         Color(motion_control_color), LV_PART_INDICATOR);
     SetTextColor(ui_.motion_depth_value, motion_control_color);
     SetTextColor(ui_.motion_speed_value, motion_control_color);
+    const uint32_t output_gain_control_color
+        = !ui_.output_gain_command_enabled ? kMist
+          : ui_.output_gain_failed ? kAlert
+          : ui_.output_gain_pending || ui_.output_gain_dragging ? kCapture
+                                                                : kSignal;
+    lv_obj_set_style_bg_color(ui_.output_gain_slider,
+        Color(output_gain_control_color), LV_PART_INDICATOR);
+    SetTextColor(ui_.output_gain_value, output_gain_control_color);
     if(waveform_changed)
         lv_obj_invalidate(ui_.waveform);
 
@@ -1499,17 +1649,19 @@ void dashboard_update(const RayDroneModel& model)
     }
 
     if(model.link_state == RayDroneLinkState::Live
-       && (!chord_capable || !rays_capable || !motion_capable))
+       && (!chord_capable || !rays_capable || !motion_capable
+           || !output_gain_capable))
         snprintf(text, sizeof(text),
                  "ACTUALIZA FIRMWARE DAISY / PROTOCOLO DE CONTROL INCOMPLETO");
     else if(model.link_state == RayDroneLinkState::Live)
         snprintf(text, sizeof(text),
-                 "%s / %s / %luK / R%u %s>%s / CPU %u%% / SD %s",
+                 "%s / %s / %luK / R%u %s>%s / OUT %u%% / CPU %u%% / SD %s",
                  source_name, shimmer ? "SHIMMER" : "DRONE",
                  static_cast<unsigned long>(status.audio_sample_rate_hz / 1000u),
                  status.ray_target,
                  MotionModeName(status.motion_mode),
                  MotionDestinationName(status.motion_destination),
+                 status.output_gain_milli / 10u,
                  status.cpu_load_milli / 10u,
                  sd_mounted ? "OK" : "NO");
     else if(model.link_state == RayDroneLinkState::Stale)

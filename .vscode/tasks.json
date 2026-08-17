@@ -267,6 +267,71 @@
 			"group": "build"
 		},
 		{
+			"label": "RayDrone: Flash Daisy",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/DaisyPod_Aurora_repo/raydrone/flash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "RayDrone: Monitor DaisyPod",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/.vscode/monitor_daisypod.ps1"
+			],
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true,
+				"focus": true
+			}
+		},
+		{
+			"label": "RayDrone: Upload P4 Slave Daisy",
+			"type": "shell",
+			"command": "pwsh.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/.vscode/upload_device.ps1",
+				"-Device", "p4",
+				"-Target", "upload",
+				"-ProjectDir", "${workspaceFolder}/P4SlaveDaisy",
+				"-Environment", "esp32p4"
+			],
+			"problemMatcher": [],
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "RayDrone: Actualizar Daisy + P4",
+			"dependsOn": [
+				"RayDrone: Flash Daisy",
+				"RayDrone: Upload P4 Slave Daisy"
+			],
+			"dependsOrder": "sequence",
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
 			"label": "PlatformIO: Monitor P4",
 			"type": "shell",
 			"command": "pwsh.exe",

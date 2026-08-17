@@ -15,10 +15,10 @@ namespace raydrone_usb
 {
 constexpr uint8_t  kMagic0          = 'R';
 constexpr uint8_t  kMagic1          = 'D';
-constexpr uint8_t  kProtocolVersion = 3;
+constexpr uint8_t  kProtocolVersion = 4;
 constexpr size_t   kHeaderSize      = 10;
 constexpr size_t   kCrcSize         = 2;
-constexpr size_t   kStatusPayloadSize = 46;
+constexpr size_t   kStatusPayloadSize = 48;
 constexpr size_t   kStatusPacketSize  = kHeaderSize + kStatusPayloadSize + kCrcSize;
 constexpr size_t   kCommandPayloadSize = 4;
 constexpr size_t   kCommandPacketSize  = kHeaderSize + kCommandPayloadSize + kCrcSize;
@@ -50,6 +50,7 @@ enum class CommandId : uint8_t
     SetChord = 0x06,
     SetRays = 0x07,
     SetMotion = 0x08,
+    SetOutputVolume = 0x09,
 };
 
 enum class MotionMode : uint8_t
@@ -131,6 +132,7 @@ enum StatusFlag : uint16_t
     ChordControl = 1u << 12,
     MotionControl = 1u << 13,
     RaysControl = 1u << 14,
+    OutputVolumeControl = 1u << 15,
 };
 
 struct Status
@@ -156,7 +158,8 @@ struct Status
     uint8_t  motion_destination;
     uint8_t  motion_depth_step;
     uint8_t  motion_speed_step;
-    uint8_t  reserved_v3;
+    uint8_t  reserved_v4;
+    uint16_t output_gain_milli;
 };
 
 struct Command
@@ -252,7 +255,8 @@ inline size_t EncodeStatus(const Status& status,
     payload[42] = status.motion_destination;
     payload[43] = status.motion_depth_step;
     payload[44] = status.motion_speed_step;
-    payload[45] = status.reserved_v3;
+    payload[45] = status.reserved_v4;
+    PutU16(payload + 46, status.output_gain_milli);
 
     PutU16(output + kHeaderSize + kStatusPayloadSize,
            Crc16(output, kHeaderSize + kStatusPayloadSize));
@@ -292,7 +296,8 @@ inline bool DecodeStatus(const uint8_t* packet, size_t length, Status& status)
     status.motion_destination = payload[42];
     status.motion_depth_step  = payload[43];
     status.motion_speed_step  = payload[44];
-    status.reserved_v3        = payload[45];
+    status.reserved_v4        = payload[45];
+    status.output_gain_milli  = GetU16(payload + 46);
     return true;
 }
 
@@ -337,7 +342,8 @@ inline bool DecodeCommand(const uint8_t* packet, size_t length, Command& command
        && id != static_cast<uint8_t>(CommandId::SetSampleRate)
        && id != static_cast<uint8_t>(CommandId::SetChord)
        && id != static_cast<uint8_t>(CommandId::SetRays)
-       && id != static_cast<uint8_t>(CommandId::SetMotion))
+       && id != static_cast<uint8_t>(CommandId::SetMotion)
+       && id != static_cast<uint8_t>(CommandId::SetOutputVolume))
         return false;
     command.id = static_cast<CommandId>(id);
     command.value_milli = GetU16(packet + kHeaderSize + 2);

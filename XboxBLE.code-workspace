@@ -13,6 +13,10 @@
             "path": "BlueSlaveP4"
         },
         {
+            "name": "P4SlaveDaisy (RayDrone)",
+            "path": "P4SlaveDaisy"
+        },
+        {
             "name": "RedMaster ESP32-S3",
             "path": "RedMaster_ESP32S3"
         },

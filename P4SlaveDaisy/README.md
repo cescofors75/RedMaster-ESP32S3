@@ -16,8 +16,8 @@ diez acordes/voicings, **RAYS / MOTION** y los perfiles de audio
 
 - Build `esp32p4`: **correcto** con pioarduino/Arduino-ESP32 3.3.7 y LVGL
   8.3.11.
-- RAM interna: **31.536 bytes / 327.680 bytes (9,6 %)**.
-- Flash de aplicación: **713.046 bytes / 6.553.600 bytes (10,9 %)**.
+- RAM interna: **31.568 bytes / 327.680 bytes (9,6 %)**.
+- Flash de aplicación: **714.130 bytes / 6.553.600 bytes (10,9 %)**.
 - Driver `usb_host_cdc_acm` 2.4.0 incluido localmente para que no dependa de
   archivos ocultos de BlueSlaveP4.
 - Falta la prueba eléctrica extremo a extremo en las dos placas reales.
@@ -36,10 +36,10 @@ flowchart LR
     E --> D
 ```
 
-El paquete de estado v3 de 58 bytes contiene secuencia, flags, muestras grabadas/capacidad, Character,
+El paquete de estado v4 de 60 bytes contiene secuencia, flags, muestras grabadas/capacidad, Character,
 Intensity, Focus, ganancia del limitador, niveles de entrada/salida, voces,
 acorde, material, RAYS, modo/destino/profundidad/velocidad de MOTION,
-sample rate de la fuente, sample rate del motor, carga CPU,
+volumen maestro, sample rate de la fuente, sample rate del motor, carga CPU,
 fuente (`DEFAULT`, `LIVE`, `FREEZE`, memoria o SD) y escena
 (`DRONE`/`SHIMMER`). Tiene magic `RD`, versión, longitud y
 CRC-16/CCITT-FALSE. La envolvente de 96 columnas viaja como cuatro paquetes de
@@ -80,8 +80,9 @@ cd C:\Users\cesco\Documents\Arduino\XboxBLE\DaisyPod_Aurora_repo\raydrone
 .\flash.ps1
 ```
 
-El perfil `build.ps1 -Direct` es un firmware de recuperación fijo a 48 kHz,
-sin USB ni storage. El selector solo existe en el firmware normal.
+RayDrone mantiene un único firmware completo `BOOT_SRAM/QSPI`, con USB-P4,
+selector 48/96 kHz, memoria y microSD. Si falta el bootloader, `flash.ps1` lo
+restaura automáticamente antes de cargar la aplicación.
 
 ## Compilar y cargar P4
 
@@ -127,9 +128,11 @@ C:\Users\cesco\.platformio\penv\Scripts\platformio.exe device monitor -b 115200 
   El botón elegido queda ámbar mientras P4 reintenta; el panel solo se cierra
   cuando Daisy devuelve el nuevo acorde. Si no responde, aparece
   `SIN CONFIRMAR` y permite reintentar.
-- Tocar **CAMPO DE GRANOS** abre RAYS/MOTION. RAYS ofrece 24, 28, 32, 40 y 48
+- Tocar **RAYS / MOTION >** en el header abre el panel. RAYS ofrece 24, 28, 32, 40 y 48
   voces objetivo. MOTION ofrece OFF, SLOW, SMOOTH, S&H, BROWNIAN y QMC sobre
-  FOCUS, SPREAD, DENSITY o SPACE, con sliders AMOUNT/SPEED. La modulación se
+  FOCUS, SPREAD, DENSITY o SPACE, con sliders AMOUNT/SPEED. SPEED muestra la
+  frecuencia real de 0,03 a 2,00 Hz. `MASTER OUT` regula Line Out de 0 a 150 %
+  con rampa y limitador en Daisy. La modulación se
   genera una vez por bloque dentro de Daisy; P4 solo envía configuración y
   espera la confirmación telemétrica.
 - El séptimo botón muestra `48K` en turquesa o `96K ULTRA` en ámbar. Al tocarlo
